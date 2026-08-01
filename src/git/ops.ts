@@ -42,8 +42,14 @@ export async function captureTree(dir: string): Promise<string> {
   try {
     await git(['read-tree', 'HEAD'], dir, env);
     await git(['add', '-A'], dir, env);
-    // flow-code's own bookkeeping must never appear as agent output.
-    await git(['rm', '-r', '--cached', '--ignore-unmatch', '-q', '.flow-code'], dir, env);
+    // flow-code's own run bookkeeping must never appear as agent output —
+    // but only these two dirs are transient; a checked-in workflow.yaml
+    // must still be diffed like any other tracked file.
+    await git(
+      ['rm', '-r', '--cached', '--ignore-unmatch', '-q', '.flow-code/runs', '.flow-code/worktrees'],
+      dir,
+      env,
+    );
     return await git(['write-tree'], dir, env);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
