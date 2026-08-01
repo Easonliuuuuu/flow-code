@@ -1,25 +1,19 @@
-import { isAbsolute, relative, resolve } from 'node:path';
+/**
+ * Layer 3 for the NVIDIA-backed runner: per-call capability check, mirroring
+ * intercept.ts's contract (same PermissionDecision/ActivityEntry shapes) but
+ * keyed to this runner's own tool names — there is no SDK hook to wire into.
+ */
 import type { CapabilitySet } from '../capabilities.js';
-import type { RunStateStore } from '../runstate/store.js';
-import {
-  ALWAYS_ALLOWED_TOOLS,
-  ALWAYS_DENIED_TOOLS,
-  EDIT_TOOLS,
-  EXEC_TOOLS,
-  READ_TOOLS,
-} from './compile.js';
+import { outsideWorkingDir, type PermissionDecision } from './intercept.js';
 import { classifyCommand } from './gitCommands.js';
-
-export interface PermissionDecision {
-  behavior: 'allow' | 'deny';
-  message?: string;
-}
+import { EDIT_TOOL_NAMES, EXEC_TOOL_NAMES, READ_TOOL_NAMES } from './nvidiaTools.js';
+import type { RunStateStore } from '../runstate/store.js';
 
 interface InternalDecision extends PermissionDecision {
   missingCapability?: string;
 }
 
-export interface InterceptorOptions {
+export interface NvidiaInterceptorOptions {
   nodeId: string;
   instanceId?: string;
   capabilities: CapabilitySet;
@@ -27,31 +21,9 @@ export interface InterceptorOptions {
   store: RunStateStore;
 }
 
-export interface Interceptor {
-  /**
-   * Layer 3: inspect the actual tool input before execution. Every call —
-   * allowed or denied — is appended to the activity log from here, which is
-   * why the log costs nothing extra and exists without any UI.
-   *
-   * Wired to the SDK's PreToolUse hook, which fires for every tool call
-   * (auto-allowed read tools never reach the permission prompt path).
-   */
-  check(
-    toolName: string,
-    input: Record<string, unknown>,
-    opts?: { blockedPath?: string; toolUseID?: string },
-  ): PermissionDecision;
-  /**
-   * Backstop for the SDK permission flow (canUseTool): applies the same
-   * policy but only records *denials* — the PreToolUse hook already logged
-   * the attempt as allowed (e.g. a Bash call later flagged with an
-   * out-of-scope blockedPath).
-   */
-  promptCheck(
-    toolName: string,
-    input: Record<string, unknown>,
-    opts?: { blockedPath?: string; toolUseID?: string },
-  ): PermissionDecision;
+export interface NvidiaInterceptor {
+  /** Inspect a tool call before it executes; every call is logged from here. */
+  check(toolName: string, input: Record<string, unknown>, toolUseId: string): PermissionDecision;
   /** Complete an allowed call's log entry once the tool finished. */
   complete(
     toolUseId: string,
@@ -59,48 +31,28 @@ export interface Interceptor {
   ): void;
 }
 
+const READ_SET = new Set<string>(READ_TOOL_NAMES);
+const EDIT_SET = new Set<string>(EDIT_TOOL_NAMES);
+const EXEC_SET = new Set<string>(EXEC_TOOL_NAMES);
+
 function summarize(toolName: string, input: Record<string, unknown>): string {
   if (typeof input['command'] === 'string') return input['command'];
-  if (typeof input['file_path'] === 'string') return `${toolName} ${input['file_path']}`;
-  if (typeof input['notebook_path'] === 'string') return `${toolName} ${input['notebook_path']}`;
   if (typeof input['path'] === 'string') return `${toolName} ${input['path']}`;
   if (typeof input['pattern'] === 'string') return `${toolName} ${input['pattern']}`;
   const json = JSON.stringify(input);
   return json.length > 200 ? `${json.slice(0, 200)}…` : json;
 }
 
-export function outsideWorkingDir(workingDir: string, candidate: string): boolean {
-  const resolved = isAbsolute(candidate) ? candidate : resolve(workingDir, candidate);
-  const rel = relative(resolve(workingDir), resolved);
-  return rel === '..' || rel.startsWith('../') || isAbsolute(rel);
+function pathArg(input: Record<string, unknown>): string | undefined {
+  return typeof input['path'] === 'string' ? input['path'] : undefined;
 }
 
-const READ_SET = new Set<string>(READ_TOOLS);
-const EDIT_SET = new Set<string>(EDIT_TOOLS);
-const EXEC_SET = new Set<string>(EXEC_TOOLS);
-const DENIED_SET = new Set<string>(ALWAYS_DENIED_TOOLS);
-const ALLOWED_SET = new Set<string>(ALWAYS_ALLOWED_TOOLS);
-
-export function createInterceptor(opts: InterceptorOptions): Interceptor {
+export function createNvidiaInterceptor(opts: NvidiaInterceptorOptions): NvidiaInterceptor {
   const { nodeId, instanceId, capabilities: caps, workingDir, store } = opts;
   const startTimes = new Map<string, number>();
   const bashAvailable = caps.has('exec') || caps.has('git-read') || caps.has('git-write');
 
-  function decide(
-    toolName: string,
-    input: Record<string, unknown>,
-    callOpts?: { blockedPath?: string },
-  ): InternalDecision {
-    if (ALLOWED_SET.has(toolName)) return { behavior: 'allow' };
-
-    if (DENIED_SET.has(toolName)) {
-      return {
-        behavior: 'deny',
-        missingCapability: 'network',
-        message: `flow-code: ${toolName} is unavailable — no node type has network or subagent access.`,
-      };
-    }
-
+  function decide(toolName: string, input: Record<string, unknown>): InternalDecision {
     if (READ_SET.has(toolName) || EDIT_SET.has(toolName)) {
       const needed = EDIT_SET.has(toolName) ? 'edit' : 'read';
       if (!caps.has(needed)) {
@@ -110,11 +62,7 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
           message: `flow-code: this node type does not have the \`${needed}\` capability.`,
         };
       }
-      const target =
-        (typeof input['file_path'] === 'string' && input['file_path']) ||
-        (typeof input['notebook_path'] === 'string' && input['notebook_path']) ||
-        (typeof input['path'] === 'string' && input['path']) ||
-        undefined;
+      const target = pathArg(input);
       if (target !== undefined && outsideWorkingDir(workingDir, target)) {
         return {
           behavior: 'deny',
@@ -133,19 +81,6 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
           message: 'flow-code: this node type cannot run shell commands.',
         };
       }
-      if (toolName !== 'Bash') return { behavior: 'allow' };
-
-      if (
-        callOpts?.blockedPath !== undefined &&
-        outsideWorkingDir(workingDir, callOpts.blockedPath)
-      ) {
-        return {
-          behavior: 'deny',
-          missingCapability: 'working-directory',
-          message: `flow-code: ${callOpts.blockedPath} is outside this node's working directory (${workingDir}).`,
-        };
-      }
-
       const command = typeof input['command'] === 'string' ? input['command'] : '';
       for (const segment of classifyCommand(command)) {
         if (segment.kind === 'git-write' && !caps.has('git-write')) {
@@ -184,7 +119,7 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
     toolName: string,
     input: Record<string, unknown>,
     decision: InternalDecision,
-    toolUseId: string | undefined,
+    toolUseId: string,
   ): void {
     store.appendActivity({
       ts: new Date().toISOString(),
@@ -196,33 +131,21 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
       ...(decision.missingCapability !== undefined
         ? { missingCapability: decision.missingCapability }
         : {}),
-      ...(toolUseId !== undefined ? { toolUseId } : {}),
+      toolUseId,
     });
-    if (decision.behavior === 'allow' && toolUseId !== undefined) {
-      startTimes.set(toolUseId, Date.now());
-    }
+    if (decision.behavior === 'allow') startTimes.set(toolUseId, Date.now());
   }
 
   return {
-    check(toolName, input, callOpts) {
-      const decision = decide(toolName, input, callOpts);
-      record(toolName, input, decision, callOpts?.toolUseID);
+    check(toolName, input, toolUseId) {
+      const decision = decide(toolName, input);
+      record(toolName, input, decision, toolUseId);
       return { behavior: decision.behavior, ...(decision.message ? { message: decision.message } : {}) };
     },
-
-    promptCheck(toolName, input, callOpts) {
-      const decision = decide(toolName, input, callOpts);
-      if (decision.behavior === 'deny') {
-        record(toolName, input, decision, callOpts?.toolUseID);
-      }
-      return { behavior: decision.behavior, ...(decision.message ? { message: decision.message } : {}) };
-    },
-
     complete(toolUseId, result) {
       const started = startTimes.get(toolUseId);
       startTimes.delete(toolUseId);
-      const durationMs =
-        result.durationMs ?? (started !== undefined ? Date.now() - started : 0);
+      const durationMs = result.durationMs ?? (started !== undefined ? Date.now() - started : 0);
       store.completeActivity(toolUseId, {
         durationMs,
         ...(result.exitStatus !== undefined ? { exitStatus: result.exitStatus } : {}),
