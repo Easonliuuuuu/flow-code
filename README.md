@@ -15,6 +15,13 @@ node dist/cli.js run    # run the workflow graph
 
 Once installed globally or linked (`npm link`), the same commands are available as `flow-code init` / `flow-code run`. Run `flow-code help` for the full command list (`init`, `run`, `node-types`, `doctor`).
 
+## Credentials
+
+Agent-driven nodes are routed by node type: Discuss runs on the Claude Agent SDK; Implement, Validate, Review, Git-ops, and Worktree-Agent run on NVIDIA's NIM API. `flow-code run` checks for both before starting anything, but only requires the one(s) your workflow actually needs:
+
+- **Claude** (required if your workflow has a Discuss node): set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, or be logged in via the `claude` CLI.
+- **NVIDIA** (required if your workflow has any other agent-driven node): set `NVIDIA_API_KEY` — get a free key at [build.nvidia.com](https://build.nvidia.com).
+
 ## Configuring a workflow
 
 Workflows are defined per-project in `.flow-code/workflow.yaml`. The full schema — node types, capabilities, edges, and run settings — is documented in [`openspec/specs/workflow-graph/spec.md`](openspec/specs/workflow-graph/spec.md), which is the source of truth for the config format.
