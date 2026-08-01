@@ -42,7 +42,7 @@ Stage and commit all changes using the conventional commits format.
    - `ci` — CI/CD pipeline changes
    - `build` — build system, Dockerfile, packaging
 
-   **Scope** (optional, in parentheses) — the subsystem affected. Use the module name or domain area. Examples: `engine`, `ui`, `worktree`, `deps`, `ci`. Omit if changes span too many areas with no clear owner.
+   **Scope** (in parentheses) — the bare name (no path, no slash) of the folder or file most responsible for the change, e.g. `ops.ts`, `engine`, `ci.yml`. Use a single file's name when the change is concentrated there; use the containing folder's name when several files in it changed together. Omit only when changes span unrelated top-level areas with no shared folder.
 
    **Summary** — imperative mood, lowercase, no period, ≤72 chars total for the first line. Describe what the change *does*, not what files changed.
 
@@ -66,8 +66,8 @@ Stage and commit all changes using the conventional commits format.
    fix(engine): stop worktree cleanup from racing the reconciler
 
    Changes:
-   - engine: await worktree removal before releasing the run-state lock
-   - reconcile: skip worktrees still referenced by an in-flight run
+   - engine.ts: await worktree removal before releasing the run-state lock
+   - reconcile.ts: skip worktrees still referenced by an in-flight run
 
    Root cause: findOrphanedWorktrees could see a worktree mid-teardown and
    remove it a second time, which git worktree treats as an error and
@@ -76,11 +76,11 @@ Stage and commit all changes using the conventional commits format.
    Testing: vitest 76/76 passed, including worktree.test.ts and reconcile.test.ts
    ```
    ```
-   ci: run lint, typecheck, and test on pull requests and pushes to main
+   ci(ci.yml): run lint, typecheck, and test on pull requests and pushes to main
 
    Changes:
-   - workflow: add .github/workflows/ci.yml targeting Node 20.x (engines floor)
-   - workflow: run npm ci, lint, typecheck, test in sequence
+   - ci.yml: add workflow targeting Node 20.x (engines floor)
+   - ci.yml: run npm ci, lint, typecheck, test in sequence
 
    Motivation: nothing currently catches a broken build/lint/test before it
    lands on main.
@@ -88,7 +88,7 @@ Stage and commit all changes using the conventional commits format.
    Testing: workflow runs green on the PR that introduces it
    ```
    ```
-   chore(deps): bump vitest to 3.2.7
+   chore(package.json): bump vitest to 3.2.7
    ```
 
 3. **Stage changes**
