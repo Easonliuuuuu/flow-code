@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { preflight, PreflightError } from '../src/engine/preflight.js';
@@ -89,5 +89,21 @@ describe('run baseline', () => {
     expect(files).toContain('new.txt');
     // Real index untouched: new.txt still untracked.
     expect(repoGit(repo, 'status', '--porcelain')).toContain('?? new.txt');
+  });
+
+  it('a committed .flow-code/workflow.yaml is not reported as deleted, but run bookkeeping is excluded', async () => {
+    const repo = makeTempGitRepo();
+    mkdirSync(join(repo, '.flow-code', 'runs'), { recursive: true });
+    writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), 'nodes: []\n');
+    repoGit(repo, 'add', '-A');
+    repoGit(repo, 'commit', '-q', '-m', 'add workflow.yaml');
+
+    const baseline = await recordBaseline(repo, false);
+
+    // Run bookkeeping written after the baseline (as if a run just happened).
+    writeFileSync(join(repo, '.flow-code', 'runs', 'run-1.json'), '{}\n');
+
+    const diff = await diffAgainstTree(repo, baseline.tree);
+    expect(diff).toBe('');
   });
 });
