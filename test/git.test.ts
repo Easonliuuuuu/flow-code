@@ -36,6 +36,7 @@ describe('preflight', () => {
       preflight(workflowFromYaml(MINIMAL), repo, {
         allowDirty: false,
         credentialsResolver: () => true,
+        nvidiaCredentialsResolver: () => true,
       }),
     ).rejects.toMatchObject({ kind: 'dirty-tree' });
   });
@@ -45,11 +46,39 @@ describe('preflight', () => {
     await preflight(workflowFromYaml(MINIMAL), repo, {
       allowDirty: false,
       credentialsResolver: () => true,
+      nvidiaCredentialsResolver: () => true,
     });
     writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
     await preflight(workflowFromYaml(MINIMAL), repo, {
       allowDirty: true,
       credentialsResolver: () => true,
+      nvidiaCredentialsResolver: () => true,
+    });
+  });
+
+  it('fails on missing NVIDIA credentials when the workflow needs the NVIDIA runner', async () => {
+    const repo = makeTempGitRepo();
+    await expect(
+      preflight(workflowFromYaml(MINIMAL), repo, {
+        allowDirty: false,
+        credentialsResolver: () => true,
+        nvidiaCredentialsResolver: () => false,
+      }),
+    ).rejects.toMatchObject({ kind: 'nvidia-credentials' });
+  });
+
+  it('does not require NVIDIA credentials for a workflow with no non-Discuss agent-driven node', async () => {
+    const repo = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config: { commands: ["true"] }
+`;
+    await preflight(workflowFromYaml(yaml), repo, {
+      allowDirty: false,
+      credentialsResolver: () => true,
+      nvidiaCredentialsResolver: () => false,
     });
   });
 });

@@ -4,7 +4,11 @@ import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
 import type { Workflow } from '../workflow/load.js';
 
-export type PreflightFailureKind = 'credentials' | 'worktree-support' | 'dirty-tree';
+export type PreflightFailureKind =
+  | 'credentials'
+  | 'nvidia-credentials'
+  | 'worktree-support'
+  | 'dirty-tree';
 
 export class PreflightError extends Error {
   constructor(
@@ -22,10 +26,21 @@ export function defaultCredentialsResolver(): boolean {
   return existsSync(join(homedir(), '.claude', '.credentials.json'));
 }
 
+export function defaultNvidiaCredentialsResolver(): boolean {
+  return Boolean(process.env['NVIDIA_API_KEY']);
+}
+
+/** Every agent-driven node type other than Discuss routes to the NVIDIA-backed runner. */
+export function workflowNeedsNvidia(workflow: Workflow): boolean {
+  return workflow.nodes.some((n) => n.type.agentDriven && n.type.id !== 'discuss');
+}
+
 export interface PreflightOptions {
   allowDirty: boolean;
   /** Injectable for tests. */
   credentialsResolver?: () => boolean;
+  /** Injectable for tests. */
+  nvidiaCredentialsResolver?: () => boolean;
 }
 
 /**
@@ -44,6 +59,16 @@ export async function preflight(
       'credentials',
       'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI.',
     );
+  }
+
+  if (workflowNeedsNvidia(workflow)) {
+    const hasNvidiaCredentials = (opts.nvidiaCredentialsResolver ?? defaultNvidiaCredentialsResolver)();
+    if (!hasNvidiaCredentials) {
+      throw new PreflightError(
+        'nvidia-credentials',
+        'No NVIDIA API key found. This workflow has an agent-driven node other than Discuss, which routes to the NVIDIA-backed runner — set the NVIDIA_API_KEY environment variable.',
+      );
+    }
   }
 
   const needsWorktrees = workflow.nodes.some((n) => n.type.id === 'worktree-agent');
