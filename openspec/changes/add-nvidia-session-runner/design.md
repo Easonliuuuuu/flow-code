@@ -1,0 +1,56 @@
+## Context
+
+Every agent-driven node type in flow-code executes through `SessionRunner` (`src/engine/types.ts`), an interface already documented as "the injectable boundary to the Claude Agent SDK, so the engine and executors are testable (and could later run against other runners)." Today exactly one implementation exists, `SdkSessionRunner` (`src/executors/sdkRunner.ts`), and `cli.ts` constructs it once and hands it to the `Engine` for the whole run.
+
+`SdkSessionRunner` isn't a thin API client — it wraps `@anthropic-ai/claude-agent-sdk`'s `query()`, which bundles its own agentic loop (built-in `Read`/`Edit`/`Bash`/`Glob`/… tools) and its own permission-hook system (`PreToolUse`, `canUseTool`). flow-code's capability enforcement — the thing that makes an Approval-Gate's diff trustworthy and makes a Review node structurally unable to edit what it's reviewing — is implemented as a harness *on top of* that hook system: `src/harness/compile.ts` turns a node's `CapabilitySet` into a Claude-SDK `disallowedTools` list (referencing literal tool names like `Read`, `Bash`), and `src/harness/intercept.ts` is the `PreToolUse` callback that does the real per-call check (path containment via `outsideWorkingDir`, git-write detection via `classifyCommand`), logging every call — allowed or denied — as an `ActivityEntry` via `store.appendActivity()`.
+
+NVIDIA's NIM API is OpenAI-compatible chat completions: no built-in tools, no hook system, just messages in and (optionally) tool-call requests out. There is nothing to plug flow-code's harness into. This design adds a second runner that has to bring its own tool loop *and* its own enforcement layer, built to the same contract (`ActivityEntry`, `CapabilitySet`, denial-is-an-event-not-a-crash) but with no code sharing from `compile.ts`/`intercept.ts` beyond the parts that were already provider-agnostic (`Capability`/`CapabilitySet` types, `classifyCommand`).
+
+## Goals / Non-Goals
+
+**Goals:**
+- Let Implement, Validate, Review, and Git-ops nodes run against NVIDIA's NIM API instead of the Claude Agent SDK, with capability enforcement equivalent in strength to the existing harness (same three layers: stated boundary, tools not offered when forbidden, per-call check before execution).
+- Preserve today's activity log and UI: `ActivityEntry` rows, the "N blocked actions" indicator, and node output contracts (`diff`, `changedFiles`, verdict/findings, etc.) must be identical in shape regardless of which runner executed the node — the graph and Approval-Gate must not need to know or care.
+- Preflight fails before any node starts if `NVIDIA_API_KEY` is required (workflow contains a non-`discuss`, non-`test` agent-driven node) and unset — consistent with the existing preflight contract (credentials / worktree-support / dirty-tree all fail-fast today).
+- Zero changes to workflow YAML shape, node type schemas, the DAG engine, or run-state.
+
+**Non-Goals (this change):**
+- Discuss on NVIDIA. `NvidiaSessionRunner.openInteractive()` is not implemented; Discuss keeps routing to `SdkSessionRunner`.
+- Worktree-Agent instances on NVIDIA. Untested interaction between the composite router and per-instance worktree working directories — left as an open question below rather than decided here.
+- Token-level streaming parity with the Claude Agent SDK's live output. `onText` fires per completed assistant turn/tool-call round, not per token.
+- Any other OpenAI-compatible provider. This change is scoped to NVIDIA's NIM endpoint specifically; a general "bring your own OpenAI-compatible provider" config surface is a bigger change with its own design questions (base URL config, per-provider model catalogs) not addressed here.
+
+## Decisions
+
+**Routing: a `CompositeSessionRunner`, not a per-node-type branch inside `cli.ts`.** It implements `SessionRunner` itself (`run()`/`openInteractive()`) and picks the real runner from `req.nodeId`'s node type — `discuss` → `SdkSessionRunner`, everything else → `NvidiaSessionRunner`. `openInteractive()` on the NVIDIA side throws `Error('NvidiaSessionRunner does not support interactive sessions')`, which the composite never actually surfaces in practice since only `discuss` calls `openInteractive` today, but keeps the contract honest rather than routing by call-shape. Alternative considered: a single runner class with an internal `if (isDiscuss)` branch — rejected because it would make `SdkSessionRunner` and `NvidiaSessionRunner` no longer independently substitutable/testable, undoing the point of the existing interface boundary.
+
+**Tool loop: a small, explicit loop, not a general agent framework.** `NvidiaSessionRunner.run()`:
+1. Builds a system prompt: `rolePrompt` + a capability-boundary paragraph (same intent as `compile.ts`'s `boundaryPrompt`, reworded for a model with no built-in tools).
+2. Offers only the OpenAI-style tool schemas that the node's `CapabilitySet` allows (`read_file`/`list_dir`/`grep` for `read`, `write_file` for `edit`, `run_shell` for `exec`/`git-read`/`git-write` — mirrors `compile.ts`'s `READ_TOOLS`/`EDIT_TOOLS`/`EXEC_TOOLS` grouping, but as tools *not offered* rather than tools offered-then-blocked, since there's no hook layer to deny at call time before the fact — the offer *is* the first enforcement layer here).
+3. On each response: if it contains tool calls, each is checked against a capability/path/git-classification gate (see next decision) before executing, the result (or denial message) is appended as a tool-result message, and the loop continues. If it contains only text, that's the final turn.
+4. A hard cap on loop iterations (proposed: 40) fails the node with a clear error rather than looping forever against a model that never stops calling tools.
+
+**Enforcement: reuse the contract, not the code.** A new `nvidiaIntercept.ts`-equivalent (exact filename TBD in tasks) implements the same shape as `Interceptor.check()` — inputs (tool name, input, working dir, capability set) to a `PermissionDecision`, logged via `store.appendActivity()` using the existing `ActivityEntry` type — but keyed to the new tool names and OpenAI-style call shape instead of Claude's. It reuses, unmodified: `outsideWorkingDir`'s path-containment logic (ported, not imported, since it's currently private to `intercept.ts` — worth exporting instead of duplicating, see tasks) and `classifyCommand` from `src/harness/gitCommands.ts` for classifying `run_shell` commands as git-read/git-write/non-git, exactly as `intercept.ts` does for `Bash`. The env-scoped `pushurl` defense-in-depth block (`compile.ts`'s `env` output) is reused as-is — it's a child-process env var, not Claude-SDK-specific.
+
+**Credentials: env var only, no fallback source.** `preflight.ts` gains a check reading `process.env['NVIDIA_API_KEY']` directly (matching the existing `ANTHROPIC_API_KEY` pattern in `defaultCredentialsResolver`), required only when the workflow contains a node type that routes to NVIDIA. No fallback to `~/.config/opencode/opencode.jsonc` or any other tool's config — considered and rejected: it would make flow-code's credential resolution depend on another application's config file format and location, which breaks silently if that file moves, changes shape, or isn't present (opencode not installed).
+
+**Default model: `meta/llama-3.3-70b-instruct`.** Chosen for free-tier availability on NVIDIA's NIM catalog and solid tool-calling support. Exposed the same way Claude models are today — `nodeModel(ctx, config.model)` (`src/executors/helpers.ts`) already resolves node-level → run-level `settings.model` → runner default; `NvidiaSessionRunner` uses the same helper, so no schema change is needed, just a different fallback constant.
+
+**Preflight failure kind.** `PreflightError`'s `kind` union (`'credentials' | 'worktree-support' | 'dirty-tree'`) gains `'nvidia-credentials'`, with a message naming `NVIDIA_API_KEY` explicitly — consistent with the existing pattern of one specific, actionable message per failure kind rather than a generic "preflight failed."
+
+## Risks / Trade-offs
+
+- **[Risk]** Reimplementing capability enforcement outside `intercept.ts` risks the two paths drifting apart in strictness (e.g. a path-traversal edge case fixed in one but not the other) → **Mitigation:** export `outsideWorkingDir` from a shared location instead of copy-pasting it (tracked in tasks.md); add the equivalent of `intercept.test.ts`'s cases against the new checker so both paths are tested against the same scenarios.
+- **[Risk]** `meta/llama-3.3-70b-instruct`'s tool-calling reliability (argument formatting, multi-call turns) is less proven in this codebase than Claude's, and NIM's free tier has rate limits that could make Implement/Validate/Review nodes flaky in ways the existing retry-free design doesn't handle → **Mitigation:** surface tool-call parse failures as a denied/errored `ActivityEntry` rather than a silent skip, so failures are visible in the activity log exactly like a capability denial; no retry logic added in this change (matches existing no-retry behavior for the Claude path).
+- **[Risk]** Shell-command inspection via `classifyCommand` has the same honest limit here as it does today (guardrail, not a sandbox — `eval`, subshells, and written-then-executed scripts can defeat string inspection) → **Mitigation:** none beyond what already exists; the `pushurl` env block remains the defense-in-depth layer for both runners.
+- **[Risk]** Two independent tool-calling implementations (Claude SDK's built-in one, and this one) is more surface area to keep behaviorally consistent (e.g. what counts as "outside the working directory") as the codebase evolves → **Mitigation:** accepted for this change; flagged explicitly so a future change consolidating them (e.g. if flow-code adds a third provider) has this design as prior art.
+
+## Migration Plan
+
+Additive change — no existing runs, workflow files, or run-state format are affected. `CompositeSessionRunner` becomes the `sessions` value in `cli.ts`; a workflow with no non-`discuss` agent-driven nodes (unusual, but not invalid) never touches `NvidiaSessionRunner` or requires `NVIDIA_API_KEY` at all. No flag or rollout needed — behavior for an all-Claude setup is unchanged as long as `NVIDIA_API_KEY` isn't required by the graph; the only new failure mode is preflight now also checks for it when it is.
+
+## Open Questions
+
+- **Worktree-Agent on NVIDIA**: each instance gets its own working directory already; nothing in principle blocks routing Worktree-Agent's per-instance sessions to `NvidiaSessionRunner` the same way Implement is routed. Left open because it hasn't been exercised — resolve in a follow-up change once the core MVP is validated end-to-end.
+- **Tool-call turn cap value**: 40 is a starting guess, not measured against real NIM behavior. May need tuning once real runs are observed.
+- **Live output granularity**: buffering `onText` per tool-call round (rather than per token) means the UI's live-output panel will feel less responsive for NVIDIA-routed nodes than for Claude-routed ones during a long single turn. Acceptable for v1; revisit if NIM's streaming chat-completions mode (if available) is worth wiring up for parity.
