@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Engine } from './engine/engine.js';
 import { preflight, PreflightError } from './engine/preflight.js';
-import { SdkSessionRunner } from './executors/index.js';
+import { CompositeSessionRunner, NvidiaSessionRunner, SdkSessionRunner } from './executors/index.js';
 import { builtinExecutors } from './executors/index.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { listNodeTypes } from './registry/index.js';
@@ -148,7 +148,7 @@ async function cmdRun(args: string[]): Promise<void> {
     repoRoot,
     baseline,
     ports,
-    sessions: new SdkSessionRunner(),
+    sessions: new CompositeSessionRunner(workflow, new SdkSessionRunner(), new NvidiaSessionRunner()),
     executors: builtinExecutors,
   });
 
