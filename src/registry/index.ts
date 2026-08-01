@@ -1,0 +1,310 @@
+import { z } from 'zod';
+import type { NodeTypeDefinition, NodeTypeId } from './types.js';
+
+export type { NodeTypeDefinition, NodeTypeId } from './types.js';
+export { NODE_TYPE_IDS } from './types.js';
+
+// ---------------------------------------------------------------------------
+// Config schemas
+// ---------------------------------------------------------------------------
+
+const discussConfig = z.strictObject({
+  topic: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+});
+
+const implementConfig = z.strictObject({
+  instructions: z.string().min(1),
+  model: z.string().min(1).optional(),
+});
+
+const testConfig = z.strictObject({
+  commands: z.array(z.string().min(1)).min(1),
+});
+
+const validateConfig = z.strictObject({
+  instructions: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+});
+
+const reviewConfig = z.strictObject({
+  instructions: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+});
+
+/**
+ * Git-ops config: commit-only by default. Pushing is opt-in and requires an
+ * explicit remote and branch — a push node with either missing fails at load
+ * time, not at the moment of pushing.
+ */
+const gitOpsConfig = z.strictObject({
+  commitMessage: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  push: z
+    .strictObject({
+      remote: z.string().min(1),
+      branch: z.string().min(1),
+    })
+    .optional(),
+});
+
+const worktreeAgentConfig = z.discriminatedUnion('mode', [
+  z.strictObject({
+    mode: z.literal('compare'),
+    task: z.string().min(1),
+    instances: z
+      .array(
+        z.strictObject({
+          id: z.string().min(1).optional(),
+          instructions: z.string().min(1).optional(),
+          model: z.string().min(1).optional(),
+        }),
+      )
+      .min(2),
+  }),
+  z.strictObject({
+    mode: z.literal('parallelize'),
+    model: z.string().min(1).optional(),
+    instances: z
+      .array(
+        z.strictObject({
+          id: z.string().min(1).optional(),
+          task: z.string().min(1),
+        }),
+      )
+      .min(1),
+  }),
+]);
+
+const approvalGateConfig = z.strictObject({
+  title: z.string().min(1).optional(),
+});
+
+// ---------------------------------------------------------------------------
+// Output schemas
+// ---------------------------------------------------------------------------
+
+export const discussOutput = z.object({
+  conclusion: z.string(),
+  constraints: z.array(z.string()),
+});
+
+export const implementOutput = z.object({
+  changedFiles: z.array(z.string()),
+  diff: z.string(),
+  summary: z.string().optional(),
+});
+
+export const testOutput = z.object({
+  passed: z.boolean(),
+  commands: z.array(
+    z.object({
+      command: z.string(),
+      exitStatus: z.number().nullable(),
+      output: z.string(),
+    }),
+  ),
+});
+
+export const validateOutput = z.object({
+  verdict: z.enum(['pass', 'fail']),
+  notes: z.string(),
+});
+
+export const reviewOutput = z.object({
+  verdict: z.enum(['pass', 'fail']),
+  findings: z.array(
+    z.object({
+      location: z.string(),
+      description: z.string(),
+      severity: z.enum(['info', 'minor', 'major']).optional(),
+    }),
+  ),
+});
+
+export const gitOpsOutput = z.object({
+  committed: z.boolean(),
+  commit: z.string().optional(),
+  pushed: z.boolean(),
+  remote: z.string().optional(),
+  branch: z.string().optional(),
+});
+
+export const worktreeAgentOutput = z.object({
+  mode: z.enum(['compare', 'parallelize']),
+  branches: z.array(
+    z.object({
+      instanceId: z.string(),
+      branch: z.string(),
+      status: z.enum(['done', 'error']),
+      summary: z.string(),
+      diffSummary: z.string(),
+    }),
+  ),
+  selected: z.array(z.string()),
+  convergedDir: z.string(),
+});
+
+export const approvalGateOutput = z.object({
+  decision: z.enum(['approved', 'rejected']),
+  decidedAt: z.string(),
+});
+
+export type DiscussOutput = z.infer<typeof discussOutput>;
+export type ImplementOutput = z.infer<typeof implementOutput>;
+export type TestOutput = z.infer<typeof testOutput>;
+export type ValidateOutput = z.infer<typeof validateOutput>;
+export type ReviewOutput = z.infer<typeof reviewOutput>;
+export type GitOpsOutput = z.infer<typeof gitOpsOutput>;
+export type WorktreeAgentOutput = z.infer<typeof worktreeAgentOutput>;
+export type ApprovalGateOutput = z.infer<typeof approvalGateOutput>;
+
+export type DiscussConfig = z.infer<typeof discussConfig>;
+export type ImplementConfig = z.infer<typeof implementConfig>;
+export type TestConfig = z.infer<typeof testConfig>;
+export type ValidateConfig = z.infer<typeof validateConfig>;
+export type ReviewConfig = z.infer<typeof reviewConfig>;
+export type GitOpsConfig = z.infer<typeof gitOpsConfig>;
+export type WorktreeAgentConfig = z.infer<typeof worktreeAgentConfig>;
+export type ApprovalGateConfig = z.infer<typeof approvalGateConfig>;
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+const definitions: NodeTypeDefinition[] = [
+  {
+    id: 'discuss',
+    displayName: 'Discuss',
+    description: 'Interactive discussion with the user to settle intent and constraints.',
+    capabilities: ['read'],
+    agentDriven: true,
+    rolePrompt:
+      'You are the discussion partner at the start of a coding workflow. ' +
+      'Help the user clarify what should be built and which constraints apply. ' +
+      'You may read the repository to inform the discussion, but you must not change anything.',
+    configSchema: discussConfig,
+    outputSchema: discussOutput,
+    configSummary: 'topic? (string), model? (string)',
+    outputSummary: 'conclusion (string), constraints (string[])',
+  },
+  {
+    id: 'implement',
+    displayName: 'Implement',
+    description: 'Agent session that writes code for the configured task.',
+    capabilities: ['read', 'edit', 'exec'],
+    agentDriven: true,
+    rolePrompt:
+      'You are the implementation step of a coding workflow. ' +
+      'Carry out the configured task by reading and editing files and running commands. ' +
+      'Do not perform any git operation that mutates history or remotes; a later, dedicated step handles git.',
+    configSchema: implementConfig,
+    outputSchema: implementOutput,
+    configSummary: 'instructions (string, required), model? (string)',
+    outputSummary: 'changedFiles (string[]), diff (string), summary? (string)',
+  },
+  {
+    id: 'test',
+    displayName: 'Test',
+    description:
+      'Deterministic command runner: executes configured shell commands with no agent session and no API cost.',
+    capabilities: ['read', 'exec'],
+    agentDriven: false,
+    rolePrompt: '',
+    configSchema: testConfig,
+    outputSchema: testOutput,
+    configSummary: 'commands (string[], required, min 1)',
+    outputSummary: 'passed (boolean), commands ({command, exitStatus, output}[])',
+  },
+  {
+    id: 'validate',
+    displayName: 'Validate',
+    description:
+      'Agent-driven conformance check: does the work satisfy the task intent? Cannot edit, so it cannot fix its way to passing.',
+    capabilities: ['read', 'exec'],
+    agentDriven: true,
+    rolePrompt:
+      'You are the validation step of a coding workflow. ' +
+      'Check whether the work done so far satisfies the task intent described in your context. ' +
+      'You may read files and run read-only commands, but you cannot and must not modify anything — report what you find.',
+    configSchema: validateConfig,
+    outputSchema: validateOutput,
+    configSummary: 'instructions? (string), model? (string)',
+    outputSummary: "verdict ('pass'|'fail'), notes (string)",
+  },
+  {
+    id: 'review',
+    displayName: 'Review',
+    description: 'Agent-driven quality critique: findings only, no edit, no exec.',
+    capabilities: ['read'],
+    agentDriven: true,
+    rolePrompt:
+      'You are the code review step of a coding workflow. ' +
+      'Critique the pending changes for correctness, clarity, and risk. ' +
+      'You can only read; you cannot edit files or run commands. Report findings with locations.',
+    configSchema: reviewConfig,
+    outputSchema: reviewOutput,
+    configSummary: 'instructions? (string), model? (string)',
+    outputSummary: "verdict ('pass'|'fail'), findings ({location, description, severity?}[])",
+  },
+  {
+    id: 'git-ops',
+    displayName: 'Git-ops',
+    description:
+      'Commits (and optionally pushes) what exists. Cannot edit files: it records changes, it does not author them.',
+    capabilities: ['read', 'git-read', 'git-write'],
+    agentDriven: true,
+    rolePrompt:
+      'You are the git operations step of a coding workflow. ' +
+      'Commit the pending changes exactly as they exist, with a clear commit message. ' +
+      'Only push if your instructions explicitly say to, and only to the stated remote and branch. ' +
+      'You cannot edit files — only git commands are available to you.',
+    configSchema: gitOpsConfig,
+    outputSchema: gitOpsOutput,
+    configSummary: 'commitMessage? (string), push? ({remote, branch} — both required to push)',
+    outputSummary: 'committed (boolean), commit? (sha), pushed (boolean), remote?, branch?',
+  },
+  {
+    id: 'worktree-agent',
+    displayName: 'Worktree-Agent',
+    description:
+      'Fans out N agent instances, each in an isolated git worktree/branch; converges by user selection.',
+    capabilities: ['read', 'edit', 'exec'],
+    agentDriven: true,
+    rolePrompt:
+      'You are one of several parallel implementation agents, each working in an isolated git worktree. ' +
+      'Carry out your assigned task within your own working directory. ' +
+      'Do not perform any git operation that mutates history or remotes.',
+    configSchema: worktreeAgentConfig,
+    outputSchema: worktreeAgentOutput,
+    configSummary:
+      "mode ('compare': task + instances[{instructions?, model?}] | 'parallelize': instances[{task}])",
+    outputSummary:
+      'mode, branches ({instanceId, branch, status, summary, diffSummary}[]), selected (string[]), convergedDir (string)',
+  },
+  {
+    id: 'approval-gate',
+    displayName: 'Approval-Gate',
+    description:
+      'No agent session: computes the pending diff against the run baseline and waits for explicit user approval.',
+    capabilities: [],
+    agentDriven: false,
+    rolePrompt: '',
+    configSchema: approvalGateConfig,
+    outputSchema: approvalGateOutput,
+    configSummary: 'title? (string)',
+    outputSummary: "decision ('approved'|'rejected'), decidedAt (ISO timestamp)",
+  },
+];
+
+export const nodeTypeRegistry: ReadonlyMap<NodeTypeId, NodeTypeDefinition> = new Map(
+  definitions.map((d) => [d.id, d]),
+);
+
+export function getNodeType(id: string): NodeTypeDefinition | undefined {
+  return nodeTypeRegistry.get(id as NodeTypeId);
+}
+
+export function listNodeTypes(): NodeTypeDefinition[] {
+  return [...nodeTypeRegistry.values()];
+}
