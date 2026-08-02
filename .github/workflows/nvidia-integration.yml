@@ -1,0 +1,43 @@
+name: NVIDIA Integration
+
+# Separate from ci.yml on purpose: this job makes real calls to NVIDIA's NIM
+# API (cost + latency + external-service flakiness), so it must never block
+# the fast, always-required lint/typecheck/test gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  # `secrets` isn't a valid `if:` context (GitHub Actions rejects the
+  # expression outright — confirmed by trying it), so presence has to be
+  # checked in a step and passed to the next job via an output instead.
+  check-secret:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        run: echo "has_key=${{ secrets.NVIDIA_API_KEY != '' }}" >> "$GITHUB_OUTPUT"
+
+  integration:
+    needs: check-secret
+    runs-on: ubuntu-latest
+    # Skips cleanly (not "fails") when the secret isn't configured — e.g. a
+    # fork PR, or before NVIDIA_API_KEY is added to this repo's secrets.
+    if: needs.check-secret.outputs.has_key == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:integration
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
