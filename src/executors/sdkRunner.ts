@@ -10,10 +10,11 @@ import {
 import { compileToolPolicy } from '../harness/compile.js';
 import { createInterceptor, type Interceptor } from '../harness/intercept.js';
 import type { RunStateStore } from '../runstate/store.js';
-import type {
-  AgentSessionRequest,
-  InteractiveAgentSession,
-  SessionRunner,
+import {
+  RunInterruptedError,
+  type AgentSessionRequest,
+  type InteractiveAgentSession,
+  type SessionRunner,
 } from '../engine/types.js';
 
 function assistantText(message: SDKMessage): string {
@@ -37,11 +38,29 @@ function extractExitStatus(toolResponse: unknown): number | null | undefined {
   return undefined;
 }
 
-function buildOptions(req: AgentSessionRequest, interceptor: Interceptor): Options {
+/**
+ * The SDK wants an owned AbortController, not a signal — proxy our shared
+ * run-wide signal into a fresh one so aborting it kills this session's
+ * underlying process.
+ */
+function controllerFor(signal: AbortSignal | undefined): AbortController | undefined {
+  if (!signal) return undefined;
+  const controller = new AbortController();
+  if (signal.aborted) controller.abort();
+  else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  return controller;
+}
+
+function buildOptions(
+  req: AgentSessionRequest,
+  interceptor: Interceptor,
+  abortController: AbortController | undefined,
+): Options {
   const policy = compileToolPolicy(req.capabilities, req.workingDir);
 
   return {
     cwd: req.workingDir,
+    ...(abortController ? { abortController } : {}),
     ...(req.model !== undefined ? { model: req.model } : {}),
     systemPrompt: `${req.rolePrompt}\n\n${policy.boundaryPrompt}`,
     disallowedTools: policy.disallowedTools,
@@ -150,6 +169,7 @@ function userMessage(text: string): SDKUserMessage {
  */
 export class SdkSessionRunner implements SessionRunner {
   async run(req: AgentSessionRequest, store: RunStateStore): Promise<{ finalText: string }> {
+    if (req.signal?.aborted) throw new RunInterruptedError();
     const interceptor = createInterceptor({
       nodeId: req.nodeId,
       ...(req.instanceId !== undefined ? { instanceId: req.instanceId } : {}),
@@ -158,23 +178,34 @@ export class SdkSessionRunner implements SessionRunner {
       store,
     });
 
-    const q = query({ prompt: req.prompt, options: buildOptions(req, interceptor) });
+    const q = query({
+      prompt: req.prompt,
+      options: buildOptions(req, interceptor, controllerFor(req.signal)),
+    });
 
     let finalText = '';
-    for await (const message of q) {
-      const text = assistantText(message);
-      if (text.length > 0) {
-        finalText = text;
-        req.onText?.(text);
-      }
-      if (message.type === 'result') {
-        if (message.subtype === 'success' && message.result.length > 0) {
-          finalText = message.result;
-        } else if (message.subtype !== 'success') {
-          throw new Error(`agent session failed: ${message.subtype}`);
+    try {
+      for await (const message of q) {
+        const text = assistantText(message);
+        if (text.length > 0) {
+          finalText = text;
+          req.onText?.(text);
+        }
+        if (message.type === 'result') {
+          if (message.subtype === 'success' && message.result.length > 0) {
+            finalText = message.result;
+          } else if (message.subtype !== 'success') {
+            throw new Error(`agent session failed: ${message.subtype}`);
+          }
         }
       }
+    } catch (err) {
+      if (req.signal?.aborted) throw new RunInterruptedError();
+      throw err;
     }
+    // The stream can also end quietly (no throw, no final 'result') when
+    // aborted mid-turn — don't report that as a successful completion.
+    if (req.signal?.aborted) throw new RunInterruptedError();
     return { finalText };
   }
 
@@ -191,13 +222,21 @@ export class SdkSessionRunner implements SessionRunner {
     });
 
     const inputQueue = new PushQueue<SDKUserMessage>();
-    const q = query({ prompt: inputQueue, options: buildOptions(req, interceptor) });
+    const q = query({
+      prompt: inputQueue,
+      options: buildOptions(req, interceptor, controllerFor(req.signal)),
+    });
 
     let turnText = '';
     const pendingTurns: Array<{
       resolve: (text: string) => void;
       reject: (err: unknown) => void;
     }> = [];
+
+    const settleAll = (err: unknown): void => {
+      const reason = req.signal?.aborted ? new RunInterruptedError() : err;
+      for (const turn of pendingTurns.splice(0)) turn.reject(reason);
+    };
 
     const pump = (async () => {
       try {
@@ -213,13 +252,19 @@ export class SdkSessionRunner implements SessionRunner {
             pendingTurns.shift()?.resolve(finished);
           }
         }
+        // Stream ended without a result for a still-pending turn (e.g.
+        // aborted mid-turn): don't leave it hanging forever.
+        if (pendingTurns.length > 0) {
+          settleAll(new Error('agent session ended before responding'));
+        }
       } catch (err) {
-        pendingTurns.shift()?.reject(err);
+        settleAll(err);
       }
     })();
 
     return {
       send(userText: string): Promise<string> {
+        if (req.signal?.aborted) return Promise.reject(new RunInterruptedError());
         return new Promise<string>((resolve, reject) => {
           pendingTurns.push({ resolve, reject });
           inputQueue.push(userMessage(userText));

@@ -28,6 +28,15 @@ export interface AgentSessionRequest {
   workingDir: string;
   model?: string;
   onText?: (chunk: string) => void;
+  /** Aborted when the run is interrupted (e.g. ctrl+c); cancels the underlying session/tool calls. */
+  signal?: AbortSignal;
+}
+
+/** Thrown (or used to reject a pending port) when a run is interrupted mid-flight. */
+export class RunInterruptedError extends Error {
+  constructor(message = 'run interrupted') {
+    super(message);
+  }
 }
 
 export interface InteractiveAgentSession {
@@ -99,6 +108,8 @@ export interface ExecuteContext {
   sessions: SessionRunner;
   /** Acquire a slot under the run-wide agent-session concurrency cap. */
   acquireSessionSlot(): Promise<() => void>;
+  /** Aborted when the run is interrupted (e.g. ctrl+c). */
+  signal: AbortSignal;
 }
 
 /** The contract every node type implements. */

@@ -28,6 +28,7 @@ async function runNodeSession(
         workingDir: ctx.workingDir,
         ...(model !== undefined ? { model } : {}),
         onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
+        signal: ctx.signal,
       },
       ctx.store,
     );

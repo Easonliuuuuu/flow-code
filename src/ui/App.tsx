@@ -7,12 +7,15 @@ import { gridToLines, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
 import { disableMouse, enableMouse, parseMouseEvents } from './mouse.js';
 import type { UiInteractionPorts } from './ports.js';
+import { wrapText } from './textwrap.js';
 
 export interface AppProps {
   workflow: Workflow;
   store: RunStateStore;
   ports: UiInteractionPorts;
   onExit: () => void;
+  /** ctrl+c: interrupt the run rather than just closing the UI over it. */
+  onInterrupt: () => void;
 }
 
 function formatActivityRow(entry: ActivityEntry): string {
@@ -30,7 +33,7 @@ function tail<T>(items: T[], n: number): T[] {
   return items.slice(Math.max(0, items.length - n));
 }
 
-export function App({ workflow, store, ports, onExit }: AppProps): React.ReactElement {
+export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -136,6 +139,14 @@ export function App({ workflow, store, ports, onExit }: AppProps): React.ReactEl
   }, [stdin, stdout, layout, offset, workflow.order]);
 
   useInput((input, key) => {
+    // ctrl+c always interrupts, regardless of mode — takes over from Ink's
+    // default exitOnCtrlC so the engine actually stops instead of the UI
+    // just closing over a still-running session.
+    if (key.ctrl && input === 'c') {
+      onInterrupt();
+      return;
+    }
+
     // Discussion input mode captures the keyboard.
     if (discussActive && discussState) {
       if (key.return) {
@@ -254,14 +265,26 @@ export function App({ workflow, store, ports, onExit }: AppProps): React.ReactEl
             Discussion — {discussState.nodeId}
             {discussState.topic ? `: ${discussState.topic}` : ''}
           </Text>
-          {tail(discussState.transcript, panelHeight - 5).map((entry, i) => (
-            <Text key={i} wrap="truncate-end">
-              <Text color={entry.role === 'user' ? 'cyan' : 'green'}>
-                {entry.role === 'user' ? 'you' : 'agent'}:{' '}
+          {(() => {
+            const transcriptWidth = Math.max(10, columns - 6);
+            const rows = discussState.transcript.flatMap((entry, entryIdx) => {
+              const prefix = entry.role === 'user' ? 'you: ' : 'agent: ';
+              const wrapped = wrapText(entry.text, Math.max(4, transcriptWidth - prefix.length));
+              const color = entry.role === 'user' ? 'cyan' : 'green';
+              return wrapped.map((line, lineIdx) => ({
+                key: `${entryIdx}-${lineIdx}`,
+                prefix: lineIdx === 0 ? prefix : ' '.repeat(prefix.length),
+                color,
+                text: line,
+              }));
+            });
+            return tail(rows, panelHeight - 5).map((row) => (
+              <Text key={row.key} wrap="truncate-end">
+                <Text color={row.color}>{row.prefix}</Text>
+                {row.text}
               </Text>
-              {entry.text.split('\n')[0]}
-            </Text>
-          ))}
+            ));
+          })()}
           <Text>
             {discussState.awaitingUser ? (
               <>

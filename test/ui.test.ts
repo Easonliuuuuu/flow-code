@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { gridToLines, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
 import { parseMouseEvents } from '../src/ui/mouse.js';
+import { RunInterruptedError } from '../src/engine/types.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
+import { wrapText } from '../src/ui/textwrap.js';
 import { storeFor, workflowFromYaml } from './helpers.js';
 
 const WF = workflowFromYaml(`
@@ -111,6 +113,31 @@ describe('mouse parsing (SGR)', () => {
   });
 });
 
+describe('wrapText', () => {
+  it('greedily wraps words to the given width', () => {
+    expect(wrapText('the quick brown fox jumps', 10)).toEqual(['the quick', 'brown fox', 'jumps']);
+  });
+
+  it('preserves existing newlines as paragraph breaks', () => {
+    expect(wrapText('line one\nline two', 20)).toEqual(['line one', 'line two']);
+  });
+
+  it('preserves blank lines', () => {
+    expect(wrapText('a\n\nb', 20)).toEqual(['a', '', 'b']);
+  });
+
+  it('hard-breaks a single token longer than the width', () => {
+    expect(wrapText('abcdefghij', 4)).toEqual(['abcd', 'efgh', 'ij']);
+  });
+
+  it('does not truncate long multi-paragraph text, unlike a first-line-only view', () => {
+    const text = 'This is the full first line of a long agent reply.\nAnd a second paragraph follows.';
+    const wrapped = wrapText(text, 20);
+    expect(wrapped.length).toBeGreaterThan(2);
+    expect(wrapped.join(' ')).toContain('second paragraph');
+  });
+});
+
 describe('UI interaction ports', () => {
   it('resolves an approval request when the UI decides', async () => {
     const ports = new UiInteractionPorts();
@@ -140,5 +167,54 @@ describe('UI interaction ports', () => {
     ports.discuss.end('talk');
     expect(ports.discussState!.active).toBe(false);
     expect(ports.discussState!.transcript.map((t) => t.role)).toEqual(['assistant', 'user']);
+  });
+
+  it('rejects a pending approval when the run is interrupted', async () => {
+    const controller = new AbortController();
+    const ports = new UiInteractionPorts(controller.signal);
+    const decision = ports.approval.request({
+      nodeId: 'gate',
+      title: 't',
+      diffs: [{ diff: '' }],
+      upstreamSummaries: [],
+    });
+    expect(ports.pendingApproval).not.toBeNull();
+    controller.abort();
+    await expect(decision).rejects.toBeInstanceOf(RunInterruptedError);
+    expect(ports.pendingApproval).toBeNull();
+  });
+
+  it('rejects a pending convergence selection when the run is interrupted', async () => {
+    const controller = new AbortController();
+    const ports = new UiInteractionPorts(controller.signal);
+    const decision = ports.convergence.select({
+      nodeId: 'wt',
+      mode: 'compare',
+      branches: [],
+    });
+    controller.abort();
+    await expect(decision).rejects.toBeInstanceOf(RunInterruptedError);
+    expect(ports.pendingConvergence).toBeNull();
+  });
+
+  it('rejects a pending discussion wait when the run is interrupted', async () => {
+    const controller = new AbortController();
+    const ports = new UiInteractionPorts(controller.signal);
+    ports.discuss.begin('talk', undefined);
+    const next = ports.discuss.nextUserMessage('talk');
+    expect(ports.discussState!.awaitingUser).toBe(true);
+    controller.abort();
+    await expect(next).rejects.toBeInstanceOf(RunInterruptedError);
+    // A late/stray submit after interrupt is a harmless no-op.
+    expect(() => ports.submitUserMessage('too late')).not.toThrow();
+  });
+
+  it('rejects immediately if the run is already interrupted before the wait begins', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const ports = new UiInteractionPorts(controller.signal);
+    await expect(
+      ports.approval.request({ nodeId: 'gate', title: 't', diffs: [], upstreamSummaries: [] }),
+    ).rejects.toBeInstanceOf(RunInterruptedError);
   });
 });

@@ -47,6 +47,8 @@ export interface EngineOptions {
   ports: InteractionPorts;
   sessions: SessionRunner;
   executors: Record<NodeTypeId, NodeExecutor>;
+  /** Aborted to interrupt the run (e.g. ctrl+c); defaults to a signal that never fires. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -60,6 +62,7 @@ export class Engine {
   private readonly store: RunStateStore;
   private readonly opts: EngineOptions;
   private readonly sessionSlots: Semaphore;
+  private readonly signal: AbortSignal;
   private mainTreeLockHolder: string | null = null;
   private readonly running = new Map<string, Promise<void>>();
 
@@ -68,6 +71,7 @@ export class Engine {
     this.wf = opts.workflow;
     this.store = opts.store;
     this.sessionSlots = new Semaphore(opts.workflow.settings.concurrency);
+    this.signal = opts.signal ?? new AbortController().signal;
   }
 
   private nodeById(id: string): WorkflowNode {
@@ -160,6 +164,7 @@ export class Engine {
       ports: this.opts.ports,
       sessions: this.opts.sessions,
       acquireSessionSlot: () => this.sessionSlots.acquire(),
+      signal: this.signal,
     };
 
     const executor = this.opts.executors[node.type.id];
@@ -198,6 +203,9 @@ export class Engine {
   }
 
   private startEligible(): void {
+    // Interrupted: let in-flight nodes unwind (they'll reject on the shared
+    // signal) but never begin new work.
+    if (this.signal.aborted) return;
     for (const id of this.wf.order) {
       const node = this.nodeById(id);
       if (this.store.node(id).status !== 'idle') continue;
@@ -227,9 +235,12 @@ export class Engine {
           if (!this.store.allTerminal()) {
             // Defensive: nothing running and nothing startable — mark the
             // stragglers so the run terminates rather than spinning.
+            const reason = this.signal.aborted
+              ? 'run interrupted'
+              : 'unreachable: upstream never completed';
             for (const id of this.wf.order) {
               if (this.store.node(id).status === 'idle') {
-                this.store.setStatus(id, 'skipped', 'unreachable: upstream never completed');
+                this.store.setStatus(id, 'skipped', reason);
               }
             }
           }

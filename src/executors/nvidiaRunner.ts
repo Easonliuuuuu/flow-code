@@ -2,7 +2,12 @@ import { compileToolPolicy } from '../harness/compile.js';
 import { createNvidiaInterceptor } from '../harness/nvidiaIntercept.js';
 import { nvidiaBoundaryPrompt, toolsForCapabilities } from '../harness/nvidiaTools.js';
 import type { RunStateStore } from '../runstate/store.js';
-import type { AgentSessionRequest, InteractiveAgentSession, SessionRunner } from '../engine/types.js';
+import {
+  RunInterruptedError,
+  type AgentSessionRequest,
+  type InteractiveAgentSession,
+  type SessionRunner,
+} from '../engine/types.js';
 import {
   callNvidiaChat,
   DEFAULT_NVIDIA_MODEL,
@@ -27,6 +32,7 @@ async function executeTool(
   args: Record<string, unknown>,
   workingDir: string,
   shellEnv: Record<string, string>,
+  signal: AbortSignal | undefined,
 ): Promise<{ text: string; exitStatus?: number | null }> {
   switch (name) {
     case 'read_file':
@@ -42,7 +48,7 @@ async function executeTool(
     case 'edit_file':
       return { text: editFileTool(workingDir, args) };
     case 'run_shell': {
-      const result = await runShellTool(workingDir, args, shellEnv);
+      const result = await runShellTool(workingDir, args, shellEnv, signal);
       return { text: result.output, exitStatus: result.exitStatus };
     }
     default:
@@ -73,7 +79,14 @@ async function runToolLoop(req: AgentSessionRequest, store: RunStateStore): Prom
   ];
 
   for (let iteration = 0; iteration < MAX_TOOL_LOOP_ITERATIONS; iteration++) {
-    const message = await callNvidiaChat({ model, messages, tools, apiKey });
+    if (req.signal?.aborted) throw new RunInterruptedError();
+    const message = await callNvidiaChat({
+      model,
+      messages,
+      tools,
+      apiKey,
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
     messages.push(message);
 
     if (message.tool_calls === undefined || message.tool_calls.length === 0) {
@@ -100,7 +113,13 @@ async function runToolLoop(req: AgentSessionRequest, store: RunStateStore): Prom
       } else {
         const start = Date.now();
         try {
-          const { text, exitStatus } = await executeTool(call.function.name, args, req.workingDir, shellEnv);
+          const { text, exitStatus } = await executeTool(
+            call.function.name,
+            args,
+            req.workingDir,
+            shellEnv,
+            req.signal,
+          );
           resultText = text;
           interceptor.complete(call.id, {
             durationMs: Date.now() - start,

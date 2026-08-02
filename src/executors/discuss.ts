@@ -26,6 +26,7 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
           ? { model: nodeModel(ctx, config.model)! }
           : {}),
         onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
+        signal: ctx.signal,
       },
       ctx.store,
     );

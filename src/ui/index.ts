@@ -12,6 +12,7 @@ export function runUi(opts: {
   workflow: Workflow;
   store: RunStateStore;
   ports: UiInteractionPorts;
+  onInterrupt: () => void;
 }): Promise<void> {
   return new Promise((resolve) => {
     const instance = render(
@@ -23,8 +24,15 @@ export function runUi(opts: {
           instance.unmount();
           resolve();
         },
+        // App owns ctrl+c (exitOnCtrlC below is off) so we can interrupt the
+        // engine, not just unmount the UI over a still-running session.
+        onInterrupt: () => {
+          instance.unmount();
+          opts.onInterrupt();
+          resolve();
+        },
       }),
-      { exitOnCtrlC: true },
+      { exitOnCtrlC: false },
     );
     void instance.waitUntilExit().then(() => resolve());
   });

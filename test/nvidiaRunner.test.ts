@@ -6,7 +6,7 @@ import { capabilitySet } from '../src/capabilities.js';
 import { CompositeSessionRunner } from '../src/executors/compositeRunner.js';
 import type { NvidiaMessage } from '../src/executors/nvidiaClient.js';
 import { NvidiaSessionRunner } from '../src/executors/nvidiaRunner.js';
-import type { AgentSessionRequest, SessionRunner } from '../src/engine/types.js';
+import { RunInterruptedError, type AgentSessionRequest, type SessionRunner } from '../src/engine/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { workflowFromYaml } from './helpers.js';
 
@@ -154,6 +154,31 @@ describe('NvidiaSessionRunner', () => {
     const runner = new NvidiaSessionRunner();
     const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
     await expect(runner.openInteractive(baseRequest(), store)).rejects.toThrow(/does not support/);
+  });
+
+  it('throws RunInterruptedError immediately if already interrupted, without calling the API', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    controller.abort();
+    const runner = new NvidiaSessionRunner();
+    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
+    await expect(
+      runner.run(baseRequest({ signal: controller.signal }), store),
+    ).rejects.toBeInstanceOf(RunInterruptedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('forwards the abort signal to the underlying API call', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(chatCompletion({ role: 'assistant', content: 'all done' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+    const runner = new NvidiaSessionRunner();
+    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
+    await runner.run(baseRequest({ signal: controller.signal }), store);
+    expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal);
   });
 
   it('throws a clear error when NVIDIA_API_KEY is unset', async () => {

@@ -9,9 +9,9 @@ interface CommandResult {
   output: string;
 }
 
-function runCommand(command: string, cwd: string): Promise<CommandResult> {
+function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<CommandResult> {
   return new Promise((resolve) => {
-    const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('sh', ['-c', command], { cwd, stdio: ['ignore', 'pipe', 'pipe'], signal });
     let output = '';
     const collect = (chunk: Buffer) => {
       output += chunk.toString();
@@ -21,7 +21,11 @@ function runCommand(command: string, cwd: string): Promise<CommandResult> {
     child.stderr.on('data', collect);
     child.on('close', (code) => resolve({ command, exitStatus: code, output }));
     child.on('error', (err) =>
-      resolve({ command, exitStatus: null, output: `failed to spawn: ${err.message}` }),
+      resolve({
+        command,
+        exitStatus: null,
+        output: err.name === 'AbortError' ? 'interrupted' : `failed to spawn: ${err.message}`,
+      }),
     );
   });
 }
@@ -46,7 +50,7 @@ export const executeTest: NodeExecutor = async function* (ctx) {
       toolUseId,
     });
     const started = Date.now();
-    const result = await runCommand(command, ctx.workingDir);
+    const result = await runCommand(command, ctx.workingDir, ctx.signal);
     ctx.store.completeActivity(toolUseId, {
       durationMs: Date.now() - started,
       exitStatus: result.exitStatus,
@@ -61,7 +65,9 @@ export const executeTest: NodeExecutor = async function* (ctx) {
       yield {
         type: 'status',
         status: 'error',
-        detail: `command failed with exit ${result.exitStatus}: ${command}`,
+        detail: ctx.signal.aborted
+          ? 'interrupted'
+          : `command failed with exit ${result.exitStatus}: ${command}`,
       };
       return;
     }

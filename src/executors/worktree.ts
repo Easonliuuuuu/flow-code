@@ -95,6 +95,7 @@ export const executeWorktreeAgent: NodeExecutor = async function* (ctx) {
           workingDir: dir,
           ...(model !== undefined ? { model } : {}),
           onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, `[${instanceId}] ${t}\n`),
+          signal: ctx.signal,
         },
         ctx.store,
       );

@@ -32,6 +32,7 @@ export async function callNvidiaChat(opts: {
   messages: NvidiaMessage[];
   tools: NvidiaToolDef[];
   apiKey: string;
+  signal?: AbortSignal;
 }): Promise<NvidiaMessage> {
   const res = await fetch(`${NVIDIA_BASE_URL}/chat/completions`, {
     method: 'POST',
@@ -46,6 +47,7 @@ export async function callNvidiaChat(opts: {
       // tool call at once; the loop only ever needs one per turn anyway.
       ...(opts.tools.length > 0 ? { tools: opts.tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
     }),
+    ...(opts.signal ? { signal: opts.signal } : {}),
   });
 
   if (!res.ok) {
