@@ -34,6 +34,14 @@ function storeFor(dir: string, nodeIds: string[]): RunStateStore {
 /** Set to also stream assistant text to the console, on top of the tool-call log. */
 const traceText = Boolean(process.env['INTEGRATION_TRACE']);
 
+/**
+ * The default (meta/llama-3.1-70b-instruct) is reliable enough for real runs
+ * but occasionally skips or fumbles an edit on the free tier, which makes a
+ * "did the fix actually land" assertion flaky. These tests exercise the tool
+ * surface, so pin a stronger model; override with NVIDIA_INTEGRATION_MODEL.
+ */
+const integrationModel = process.env['NVIDIA_INTEGRATION_MODEL'] ?? 'meta/llama-3.3-70b-instruct';
+
 function truncate(text: string, max: number): string {
   const single = text.replace(/\s+/g, ' ').trim();
   return single.length > max ? `${single.slice(0, max)}…` : single;
@@ -137,6 +145,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
             'Fix the bug in math.js: add(a, b) should return a + b, not a - b. ' +
             'Run `node test.js` with run_shell to confirm the fix.',
           workingDir: dir,
+          model: integrationModel,
           ...maybeTrace('impl'),
         },
         store,
@@ -167,6 +176,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
           rolePrompt: 'You are the code review step of a coding workflow. You cannot edit files.',
           prompt: 'Read math.js and try to fix the bug (a - b should be a + b) by editing the file.',
           workingDir: dir,
+          model: integrationModel,
           ...maybeTrace('review'),
         },
         store,
@@ -201,6 +211,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
             'math.js add(a, b) should return a + b; string.js shout(s) should return the UPPERCASE ' +
             "version of s followed by '!'. Then run `node test.js` with run_shell to confirm.",
           workingDir: dir,
+          model: integrationModel,
           ...maybeTrace('discovery'),
         },
         store,
@@ -238,6 +249,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
             'Then stage and commit the fix with `git commit` using the message `fix: add correctly`. ' +
             'Do not push.',
           workingDir: dir,
+          model: integrationModel,
           ...maybeTrace('git-workflow'),
         },
         store,
@@ -276,6 +288,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
             'Try running `node test.js` to check the tests, then try to commit a fix with ' +
             '`git add src/math.js` and `git commit -m "fix: add correctly"`. Report what each command does.',
           workingDir: dir,
+          model: integrationModel,
           ...maybeTrace('git-read-denials'),
         },
         store,
@@ -314,6 +327,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
             'Read the file at ../secret.txt (the parent of your working directory) using read_file, ' +
             'then write its exact contents to result.txt using write_file, and include the contents in your final answer.',
           workingDir,
+          model: integrationModel,
           ...maybeTrace('escape'),
         },
         store,
@@ -349,9 +363,12 @@ nodes:
   - id: implement
     type: implement
     config:
-      instructions: Fix the bug in src/math.js: add(a, b) should return a + b. Then run \`node test.js\` with run_shell to confirm.
+      model: ${integrationModel}
+      instructions: "Fix the bug in src/math.js: add(a, b) should return a + b. Then run \`node test.js\` with run_shell to confirm."
   - id: validate
     type: validate
+    config:
+      model: ${integrationModel}
 edges:
   - { from: implement, to: validate }
 `);
