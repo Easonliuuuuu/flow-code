@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CAPABILITIES } from '../src/capabilities.js';
 import { listNodeTypes, nodeTypeRegistry } from '../src/registry/index.js';
 import { loadWorkflowFromString, WorkflowValidationError } from '../src/workflow/load.js';
-import { DEFAULT_SETTINGS } from '../src/workflow/schema.js';
+import { DEFAULT_LOOPBACK_MAX_ATTEMPTS, DEFAULT_SETTINGS } from '../src/workflow/schema.js';
 
 const VALID = `
 nodes:
@@ -163,6 +163,127 @@ nodes:
     type: git-ops
 `);
     expect(wf.nodes[0]!.config).toEqual({});
+  });
+});
+
+const LOOPING = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: ship
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: ship }
+  - { from: check, to: impl, loopback: true }
+`;
+
+describe('loop-back edges', () => {
+  it('loads a graph with a loop-back and orders it over forward edges', () => {
+    const wf = loadWorkflowFromString(LOOPING);
+    expect(wf.order).toEqual(['impl', 'check', 'ship']);
+  });
+
+  it('keeps loop-backs out of dependency readiness', () => {
+    const wf = loadWorkflowFromString(LOOPING);
+    // `impl` must not wait on `check` just because a loop-back returns there.
+    expect(wf.graph.directDependencies('impl')).toEqual([]);
+    expect(wf.graph.directDependencies('check')).toEqual(['impl']);
+  });
+
+  it('applies the documented default bound when none is given', () => {
+    const wf = loadWorkflowFromString(LOOPING);
+    expect(wf.graph.loopbacksFrom('check')).toEqual([
+      { from: 'check', to: 'impl', maxAttempts: DEFAULT_LOOPBACK_MAX_ATTEMPTS },
+    ]);
+  });
+
+  it('accepts an explicit attempt bound', () => {
+    const wf = loadWorkflowFromString(
+      LOOPING.replace('loopback: true', 'loopback: { maxAttempts: 5 }'),
+    );
+    expect(wf.graph.loopbacksFrom('check')[0]!.maxAttempts).toBe(5);
+  });
+
+  it('rejects an attempt bound that is not a positive integer, naming the edge', () => {
+    const problems = problemsOf(LOOPING.replace('loopback: true', 'loopback: { maxAttempts: 0 }'));
+    expect(problems.join('\n')).toContain('check -> impl');
+    expect(problems.join('\n')).toContain('maxAttempts');
+  });
+
+  it('rejects a loop-back that does not point at an ancestor', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: validate
+  - id: c
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: a, to: b }
+  - { from: a, to: c }
+  - { from: b, to: c, loopback: true }
+`);
+    expect(problems.join('\n')).toContain('b -> c');
+    expect(problems.join('\n')).toContain('upstream');
+  });
+
+  it('rejects a loop-back pointing at its own source', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: a
+    type: validate
+edges:
+  - { from: a, to: a, loopback: true }
+`);
+    expect(problems.join('\n')).toContain('own source');
+  });
+
+  it('still rejects a cycle formed by forward edges', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: a, to: b }
+  - { from: b, to: a }
+`);
+    expect(problems.join('\n')).toContain('cycle');
+  });
+
+  it('computes the reset scope as the nodes on a path between target and source', () => {
+    const wf = loadWorkflowFromString(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: mid
+    type: test
+    config: { commands: ["true"] }
+  - id: aside
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+edges:
+  - { from: impl, to: mid }
+  - { from: mid, to: check }
+  - { from: impl, to: aside }
+  - { from: check, to: impl, loopback: true }
+`);
+    // `aside` hangs off impl but does not lead to check, so it is untouched.
+    expect([...wf.graph.nodesBetween('impl', 'check')].sort()).toEqual(['check', 'impl', 'mid']);
   });
 });
 

@@ -130,3 +130,89 @@ describe('resuming a run', () => {
     expect(findLatestInterruptedRun(repo)?.runId).toBe(interrupted.runId);
   });
 });
+
+describe('attempt tracking', () => {
+  it('reports a first attempt for a node that has never been reset', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    expect(store.attemptOf('n1')).toBe(1);
+    expect(store.node('n1').priorAttempts).toBeUndefined();
+  });
+
+  it('reset clears results and increments the attempt, keeping the outcome', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'running');
+    store.setOutput('n1', { verdict: 'fail' });
+    store.appendLiveOutput('n1', 'streamed text');
+    store.setStatus('n1', 'error', 'Validate verdict: fail');
+
+    store.resetNode('n1');
+
+    const node = store.node('n1');
+    expect(node.status).toBe('idle');
+    expect(node.output).toBeUndefined();
+    expect(node.statusDetail).toBeUndefined();
+    expect(store.liveOutputFor('n1')).toBe('');
+    expect(store.attemptOf('n1')).toBe(2);
+    expect(node.priorAttempts).toHaveLength(1);
+    expect(node.priorAttempts![0]!.status).toBe('error');
+    expect(node.priorAttempts![0]!.detail).toBe('Validate verdict: fail');
+  });
+
+  it('retains the activity log across a reset', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.appendActivity({
+      ts: new Date().toISOString(),
+      nodeId: 'n1',
+      tool: 'Bash',
+      summary: 'npm test',
+      decision: 'allowed',
+    });
+    store.setStatus('n1', 'error', 'boom');
+    store.resetNode('n1');
+    // The log is the record of what actually ran, across every attempt.
+    expect(store.activityFor('n1')).toHaveLength(1);
+  });
+
+  it('accumulates one record per attempt', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'error', 'first');
+    store.resetNode('n1');
+    store.setStatus('n1', 'error', 'second');
+    store.resetNode('n1');
+    expect(store.attemptOf('n1')).toBe(3);
+    expect(store.node('n1').priorAttempts!.map((a) => a.detail)).toEqual(['first', 'second']);
+  });
+
+  it('persists and reloads attempt counters', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.attachPersister(new FileRunStatePersister(repo));
+    store.setStatus('n1', 'error', 'boom');
+    store.resetNode('n1');
+    const reloaded = readRunState(runFilePath(repo, store.runId))!;
+    expect(reloaded.nodes['n1']!.attempt).toBe(2);
+    expect(reloaded.nodes['n1']!.priorAttempts).toHaveLength(1);
+  });
+
+  it('reads run-state written before attempt tracking as a first attempt', () => {
+    const repo = makeTempGitRepo();
+    // No `attempt` field, as an older run-state file would have.
+    const prior = {
+      runId: 'old-run',
+      createdAt: new Date().toISOString(),
+      repoRoot: repo,
+      pid: 1,
+      baseline: null,
+      nodes: { n1: { status: 'error' as const, denials: 0 } },
+      worktrees: [],
+      activity: [],
+      interrupted: true,
+    };
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'], resumeFrom: prior });
+    expect(store.attemptOf('n1')).toBe(1);
+  });
+});
