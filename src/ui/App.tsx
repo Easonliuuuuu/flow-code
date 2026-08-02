@@ -6,8 +6,24 @@ import type { Workflow } from '../workflow/load.js';
 import { gridToLines, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
+import {
+  applyPanelMove,
+  applyPanelResize,
+  dockedRect,
+  hitTestPanel,
+  pinAfterScroll,
+  tailWindow,
+  type PanelRect,
+} from './panel.js';
 import type { UiInteractionPorts } from './ports.js';
 import { wrapText } from './textwrap.js';
+
+interface PanelDrag {
+  mode: 'move' | 'resize';
+  startX: number;
+  startY: number;
+  origin: PanelRect;
+}
 
 export interface AppProps {
   workflow: Workflow;
@@ -48,7 +64,15 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
   const [diffScroll, setDiffScroll] = useState(0);
+  // null = following the live tail; a number pins the transcript to that
+  // absolute row so new messages don't disturb a mid-scroll read.
+  const [discussPin, setDiscussPin] = useState<number | null>(null);
+  // null = docked (full width, pinned to the bottom, auto height). Set once the
+  // panel is dragged or resized, and persists — including across different
+  // panel content (Discuss/Approval/etc.) — until reset with ctrl+p.
+  const [panelRect, setPanelRect] = useState<PanelRect | null>(null);
   const dragRef = useRef<{ id: string; lastX: number; lastY: number } | null>(null);
+  const panelDragRef = useRef<PanelDrag | null>(null);
 
   useEffect(() => store.subscribe(setRunState), [store]);
   useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
@@ -62,8 +86,14 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   const discussActive = discussState?.active ?? false;
 
   const panelOpen = expanded || pendingApproval !== null || pendingConvergence !== null || discussActive;
-  const panelHeight = panelOpen ? Math.max(10, Math.floor(rows * 0.45)) : 2;
-  const canvasHeight = Math.max(5, rows - panelHeight - 2);
+  const floating = panelRect !== null;
+  const defaultDockedHeight = Math.max(10, Math.floor(rows * 0.45));
+  // A docked, open panel reserves flow space below the canvas; a floating one
+  // overlays it instead, so the canvas reclaims that space (same as closed).
+  const reservedHeight = panelOpen && !floating ? defaultDockedHeight : 2;
+  const canvasHeight = Math.max(5, rows - reservedHeight - 2);
+  const activeRect = floating ? panelRect! : dockedRect({ columns, rows }, defaultDockedHeight);
+  const panelHeight = activeRect.h;
 
   const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
   const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
@@ -95,6 +125,38 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     }
   }, [pendingConvergence]);
 
+  // Wrapped transcript rows for the Discuss panel, and the scrollback window
+  // into them (see tailWindow's doc comment for the follow/pin model).
+  const discussTranscriptWidth = Math.max(10, activeRect.w - 6);
+  const discussRows = useMemo(() => {
+    if (!discussState) return [];
+    return discussState.transcript.flatMap((entry, entryIdx) => {
+      const prefix = entry.role === 'user' ? 'you: ' : 'agent: ';
+      const wrapped = wrapText(entry.text, Math.max(4, discussTranscriptWidth - prefix.length));
+      const color = entry.role === 'user' ? 'cyan' : 'green';
+      return wrapped.map((line, lineIdx) => ({
+        key: `${entryIdx}-${lineIdx}`,
+        prefix: lineIdx === 0 ? prefix : ' '.repeat(prefix.length),
+        color,
+        text: line,
+      }));
+    });
+  }, [discussState, discussTranscriptWidth]);
+  const discussWindow = tailWindow(discussRows.length, Math.max(1, panelHeight - 5), discussPin);
+  // Mirrors the current window into a ref so the mouse-drag effect (which
+  // stays subscribed across transcript updates, rather than re-registering
+  // mouse escape codes on every streamed token) can read it without being a
+  // dependency of that effect.
+  const discussWindowRef = useRef(discussWindow);
+  useEffect(() => {
+    discussWindowRef.current = discussWindow;
+  });
+
+  // A fresh discussion (or re-entering one) starts following the live tail.
+  useEffect(() => {
+    setDiscussPin(null);
+  }, [discussState?.nodeId, discussActive]);
+
   // Mouse: enhancement layer only. Terminals without mouse reporting simply
   // never emit these sequences; everything stays keyboard-operable.
   useEffect(() => {
@@ -103,15 +165,39 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     const onData = (data: Buffer | string) => {
       const events = parseMouseEvents(data.toString());
       for (const event of events) {
-        const canvasX = event.x + offset.ox;
-        const canvasY = event.y - 1 + offset.oy;
+        const overPanel =
+          panelOpen &&
+          event.x >= activeRect.x &&
+          event.x < activeRect.x + activeRect.w &&
+          event.y >= activeRect.y &&
+          event.y < activeRect.y + activeRect.h;
+
         if (event.kind === 'press' && event.button === 0) {
+          const zone = panelOpen ? hitTestPanel(activeRect, event.x, event.y) : null;
+          if (zone) {
+            panelDragRef.current = { mode: zone, startX: event.x, startY: event.y, origin: activeRect };
+            continue;
+          }
+          if (overPanel) continue; // clicks inside panel content (not its border) aren't a canvas drag
+          const canvasX = event.x + offset.ox;
+          const canvasY = event.y - 1 + offset.oy;
           const id = hitTest(layout, canvasX, canvasY);
           if (id) {
             setFocusIdx(Math.max(0, workflow.order.indexOf(id)));
             dragRef.current = { id, lastX: canvasX, lastY: canvasY };
           }
+        } else if (event.kind === 'drag' && panelDragRef.current) {
+          const drag = panelDragRef.current;
+          const dx = event.x - drag.startX;
+          const dy = event.y - drag.startY;
+          setPanelRect(
+            drag.mode === 'resize'
+              ? applyPanelResize(drag.origin, dx, dy, { columns, rows })
+              : applyPanelMove(drag.origin, dx, dy, { columns, rows }),
+          );
         } else if (event.kind === 'drag' && dragRef.current) {
+          const canvasX = event.x + offset.ox;
+          const canvasY = event.y - 1 + offset.oy;
           const drag = dragRef.current;
           const dx = canvasX - drag.lastX;
           const dy = canvasY - drag.lastY;
@@ -128,8 +214,11 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           }
         } else if (event.kind === 'release') {
           dragRef.current = null;
+          panelDragRef.current = null;
         } else if (event.kind === 'scroll') {
-          if (pendingApproval) {
+          if (overPanel && discussActive) {
+            setDiscussPin(pinAfterScroll(discussWindowRef.current, event.direction === 'down' ? -3 : 3));
+          } else if (pendingApproval) {
             setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
           } else {
             setOffset((o) => ({
@@ -145,7 +234,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       stdin.off('data', onData);
       disableMouse(stdout);
     };
-  }, [stdin, stdout, layout, offset, workflow.order, pendingApproval]);
+  }, [stdin, stdout, layout, offset, workflow.order, pendingApproval, panelOpen, activeRect, discussActive, columns, rows]);
 
   useInput((input, key) => {
     // ctrl+c always interrupts, regardless of mode — takes over from Ink's
@@ -164,11 +253,28 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       return;
     }
 
+    // Reset the panel to docked (full width, bottom, default height) —
+    // works in every mode, including while Discuss has the keyboard, since
+    // ctrl-combos never collide with typed text.
+    if (key.ctrl && input === 'p') {
+      setPanelRect(null);
+      return;
+    }
+
     // Discussion input mode captures the keyboard.
     if (discussActive && discussState) {
+      if (key.pageUp) {
+        setDiscussPin(pinAfterScroll(discussWindow, Math.max(1, panelHeight - 6)));
+        return;
+      }
+      if (key.pageDown) {
+        setDiscussPin(pinAfterScroll(discussWindow, -Math.max(1, panelHeight - 6)));
+        return;
+      }
       if (key.return) {
         const text = inputBuffer.trim();
         setInputBuffer('');
+        setDiscussPin(null);
         if (text === '/done' || text === '/exit') ports.submitUserMessage(null);
         else if (text.length > 0) ports.submitUserMessage(text);
         return;
@@ -261,8 +367,21 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     ([status, count]) => `${STATUS_GLYPHS[status as keyof typeof STATUS_GLYPHS]} ${count}`,
   );
 
+  // Docked panels stay in normal flow (as before); a floating one is drawn
+  // absolutely-positioned on top of the canvas, at whatever rect the user
+  // last dragged/resized it to. Spread onto whichever panel variant is open.
+  const panelBoxProps = floating
+    ? ({
+        position: 'absolute',
+        left: activeRect.x,
+        top: activeRect.y,
+        width: activeRect.w,
+        height: activeRect.h,
+      } as const)
+    : { height: panelHeight };
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" width={columns} height={rows}>
       <Text>
         <Text bold color="cyan">
           flow-code
@@ -270,6 +389,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
         <Text dimColor> run {runState.runId.slice(0, 8)} · </Text>
         <Text>{headerParts.join('  ')}</Text>
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
+        {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
       </Text>
       <Box flexDirection="column" height={canvasHeight}>
         {canvasLines.map((line, i) => (
@@ -277,31 +397,27 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
         ))}
       </Box>
       {discussActive && discussState ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} height={panelHeight}>
+        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
           <Text bold color="yellow">
             Discussion — {discussState.nodeId}
             {discussState.topic ? `: ${discussState.topic}` : ''}
-          </Text>
-          {(() => {
-            const transcriptWidth = Math.max(10, columns - 6);
-            const rows = discussState.transcript.flatMap((entry, entryIdx) => {
-              const prefix = entry.role === 'user' ? 'you: ' : 'agent: ';
-              const wrapped = wrapText(entry.text, Math.max(4, transcriptWidth - prefix.length));
-              const color = entry.role === 'user' ? 'cyan' : 'green';
-              return wrapped.map((line, lineIdx) => ({
-                key: `${entryIdx}-${lineIdx}`,
-                prefix: lineIdx === 0 ? prefix : ' '.repeat(prefix.length),
-                color,
-                text: line,
-              }));
-            });
-            return tail(rows, panelHeight - 5).map((row) => (
-              <Text key={row.key} wrap="truncate-end">
-                <Text color={row.color}>{row.prefix}</Text>
-                {row.text}
+            {!discussWindow.following ? (
+              <Text dimColor>
+                {' '}
+                ({discussWindow.start} above
+                {discussRows.length - discussWindow.end > 0
+                  ? `, ${discussRows.length - discussWindow.end} below`
+                  : ''}
+                )
               </Text>
-            ));
-          })()}
+            ) : null}
+          </Text>
+          {discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (
+            <Text key={row.key} wrap="truncate-end">
+              <Text color={row.color}>{row.prefix}</Text>
+              {row.text}
+            </Text>
+          ))}
           <Text>
             {discussState.awaitingUser ? (
               <>
@@ -313,10 +429,10 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
               <Text dimColor>… agent is thinking</Text>
             )}
           </Text>
-          <Text dimColor>enter: send · type /done to finish the discussion</Text>
+          <Text dimColor>enter: send · /done: finish · PgUp/PgDn: scroll · drag border: move/resize</Text>
         </Box>
       ) : pendingConvergence ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} height={panelHeight}>
+        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
           <Text bold color="yellow">
             Convergence — {pendingConvergence.req.nodeId} ({pendingConvergence.req.mode}
             {pendingConvergence.req.mode === 'compare' ? ': pick exactly one' : ': pick one or more'}
@@ -335,7 +451,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           <Text dimColor>↑/↓: move · space: select · enter: confirm</Text>
         </Box>
       ) : pendingApproval ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} height={panelHeight}>
+        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
           <Text bold color="yellow">
             Approval — {pendingApproval.req.title}
           </Text>
@@ -373,7 +489,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           <Text dimColor>[a] approve · [r] reject · j/k: scroll diff</Text>
         </Box>
       ) : expanded && focusedNode ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} height={panelHeight}>
+        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
           {(() => {
             const state = runState.nodes[focusedNode.id]!;
             const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
