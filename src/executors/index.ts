@@ -22,4 +22,3 @@ export { NvidiaSessionRunner } from './nvidiaRunner.js';
 export { OpenAiSessionRunner } from './openaiRunner.js';
 export { OpenRouterSessionRunner } from './openrouterRunner.js';
 export { OpenAiCompatSessionRunner } from './openaiCompatRunner.js';
-export { CompositeSessionRunner } from './compositeRunner.js';

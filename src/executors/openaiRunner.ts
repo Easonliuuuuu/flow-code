@@ -11,7 +11,9 @@ export class OpenAiSessionRunner extends OpenAiCompatSessionRunner {
       label: 'OpenAI',
       baseUrl: OPENAI_BASE_URL,
       defaultModel: DEFAULT_OPENAI_MODEL,
-      apiKeyEnvVars: ['OPENAI_API_KEY'],
+      // OPENAI_API_KEY_2 is optional: an extra key (on a separate account) to
+      // rotate onto if the primary is still rate-limited after retrying.
+      apiKeyEnvVars: ['OPENAI_API_KEY', 'OPENAI_API_KEY_2'],
     });
   }
 }

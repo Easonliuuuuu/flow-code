@@ -9,7 +9,7 @@ A terminal-native, node-graph interface for running and observing agentic coding
 ```bash
 npm install
 npm run build
-node dist/cli.js init   # scaffold .flow-code/workflow.yaml in a git repo
+node dist/cli.js init   # scaffold .flow-code/workflow.yaml and pick a provider/model
 node dist/cli.js run    # run the workflow graph
 ```
 
@@ -17,16 +17,16 @@ Once installed globally or linked (`npm link`), the same commands are available 
 
 ## Credentials
 
-Agent-driven nodes are routed by node type: Implement, Validate, Review, Git-ops, and Worktree-Agent always run on NVIDIA's NIM API; Discuss runs on whichever provider you choose. `flow-code run` checks for credentials before starting anything, but only requires the one(s) your workflow actually needs:
+One provider backs every agent-driven node in the project — Discuss, Implement, Validate, Review, Git-ops, and Worktree-Agent all run against whichever provider you pick. `flow-code init` is where you pick it: an interactive, arrow-key menu walks you through choosing one of
 
-- **Discuss provider** (required if your workflow has a Discuss node) — one of:
-  - **Claude** (default): set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, or be logged in via the `claude` CLI.
-  - **NVIDIA**: set `NVIDIA_API_KEY` — get a free key at [build.nvidia.com](https://build.nvidia.com).
-  - **OpenAI**: set `OPENAI_API_KEY`.
-  - **OpenRouter**: set `OPENROUTER_API_KEY`.
-- **NVIDIA** (required if your workflow has any other agent-driven node): set `NVIDIA_API_KEY`.
+- **Claude (Anthropic)**: uses `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`, or a `claude` CLI login — no key entry needed in the wizard.
+- **NVIDIA NIM**: `NVIDIA_API_KEY` — get a free key at [build.nvidia.com](https://build.nvidia.com).
+- **OpenAI**: `OPENAI_API_KEY`.
+- **OpenRouter**: `OPENROUTER_API_KEY`.
 
-If none of the above env vars are already set and your workflow has a Discuss node, `flow-code run` prompts you (in a TTY) to pick a provider and paste an API key, with the option to save it to `.flow-code/credentials.json` (gitignored, `chmod 600`) for future runs in the repo. Non-interactive runs (CI, piped stdin) fall back to Claude's own credential resolution unchanged.
+and then a model — fetched live from the provider's model list (for Claude, a short curated list, since there's no reliable key to query with at that point), with a "custom" option to type any model id. Each provider also supports an optional second key to rotate onto under sustained rate limits.
+
+The choice is saved to `.flow-code/credentials.json` (gitignored, `chmod 600`) and reused by every future `flow-code run` in the repo — `run` itself is fully headless and never prompts. Re-run `flow-code init --reconfigure` to change the provider or model later. If nothing is configured (`init` was never run) but the right env var is already set, `run` picks that up too — useful for CI. If neither is true and the workflow has any agent-driven node, `run` fails fast with a message pointing at `flow-code init`.
 
 ## Configuring a workflow
 

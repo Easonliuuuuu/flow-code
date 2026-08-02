@@ -3,12 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { capabilitySet } from '../src/capabilities.js';
-import { CompositeSessionRunner } from '../src/executors/compositeRunner.js';
 import type { NvidiaMessage } from '../src/executors/nvidiaClient.js';
 import { NvidiaSessionRunner } from '../src/executors/nvidiaRunner.js';
-import { RunInterruptedError, type AgentSessionRequest, type SessionRunner } from '../src/engine/types.js';
+import { RunInterruptedError, type AgentSessionRequest } from '../src/engine/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
-import { workflowFromYaml } from './helpers.js';
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'flow-code-nvidia-runner-test-'));
@@ -236,62 +234,5 @@ describe('NvidiaSessionRunner', () => {
     const runner = new NvidiaSessionRunner();
     const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
     await expect(runner.run(baseRequest(), store)).rejects.toThrow(/NVIDIA_API_KEY/);
-  });
-});
-
-describe('CompositeSessionRunner', () => {
-  it('routes discuss to the Claude runner and other agent-driven nodes to the NVIDIA runner', async () => {
-    const workflow = workflowFromYaml(`
-nodes:
-  - id: d
-    type: discuss
-  - id: impl
-    type: implement
-    config: { instructions: x }
-`);
-    const calls: string[] = [];
-    const claude: SessionRunner = {
-      run: async () => {
-        calls.push('claude.run');
-        return { finalText: 'claude' };
-      },
-      openInteractive: async () => {
-        calls.push('claude.openInteractive');
-        return { send: async () => '', end: async () => {} };
-      },
-    };
-    const nvidia: SessionRunner = {
-      run: async () => {
-        calls.push('nvidia.run');
-        return { finalText: 'nvidia' };
-      },
-      openInteractive: async () => {
-        throw new Error('should not be called');
-      },
-    };
-    const composite = new CompositeSessionRunner(workflow, claude, nvidia);
-    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['d', 'impl'] });
-
-    await composite.openInteractive(baseRequest({ nodeId: 'd' }), store);
-    const implResult = await composite.run(baseRequest({ nodeId: 'impl' }), store);
-
-    expect(calls).toEqual(['claude.openInteractive', 'nvidia.run']);
-    expect(implResult.finalText).toBe('nvidia');
-  });
-
-  it('throws for an unknown node id', async () => {
-    const workflow = workflowFromYaml(`
-nodes:
-  - id: impl
-    type: implement
-    config: { instructions: x }
-`);
-    const composite = new CompositeSessionRunner(
-      workflow,
-      { run: async () => ({ finalText: '' }), openInteractive: async () => ({ send: async () => '', end: async () => {} }) },
-      { run: async () => ({ finalText: '' }), openInteractive: async () => ({ send: async () => '', end: async () => {} }) },
-    );
-    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
-    await expect(composite.run(baseRequest({ nodeId: 'ghost' }), store)).rejects.toThrow(/unknown node id/);
   });
 });

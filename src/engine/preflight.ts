@@ -3,13 +3,9 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
 import type { Workflow } from '../workflow/load.js';
-import { discussProviderInfo, type DiscussProviderId } from './providers.js';
+import { providerInfo, type ProviderId } from './providers.js';
 
-export type PreflightFailureKind =
-  | 'credentials'
-  | 'nvidia-credentials'
-  | 'worktree-support'
-  | 'dirty-tree';
+export type PreflightFailureKind = 'credentials' | 'worktree-support' | 'dirty-tree';
 
 export class PreflightError extends Error {
   constructor(
@@ -27,30 +23,19 @@ export function defaultCredentialsResolver(): boolean {
   return existsSync(join(homedir(), '.claude', '.credentials.json'));
 }
 
-export function defaultNvidiaCredentialsResolver(): boolean {
-  return Boolean(process.env['NVIDIA_API_KEY']);
-}
-
-/** Checks the env var for whichever provider Discuss is configured to use. */
-export function defaultDiscussCredentialsResolver(provider: DiscussProviderId): boolean {
+/** Checks the env var for whichever provider is configured to back the project. */
+export function defaultProviderCredentialsResolver(provider: ProviderId): boolean {
   if (provider === 'claude') return defaultCredentialsResolver();
-  const envVar = discussProviderInfo(provider).apiKeyEnvVar!;
+  const envVar = providerInfo(provider).apiKeyEnvVar!;
   return Boolean(process.env[envVar]);
-}
-
-/** Every agent-driven node type other than Discuss routes to the NVIDIA-backed runner. */
-export function workflowNeedsNvidia(workflow: Workflow): boolean {
-  return workflow.nodes.some((n) => n.type.agentDriven && n.type.id !== 'discuss');
 }
 
 export interface PreflightOptions {
   allowDirty: boolean;
-  /** Which provider Discuss is configured to use; defaults to 'claude' (back-compat). */
-  discussProvider?: DiscussProviderId;
+  /** Which provider backs every agent-driven node in the project; defaults to 'claude' (back-compat). */
+  provider?: ProviderId;
   /** Injectable for tests. */
-  credentialsResolver?: (provider: DiscussProviderId) => boolean;
-  /** Injectable for tests. */
-  nvidiaCredentialsResolver?: () => boolean;
+  credentialsResolver?: (provider: ProviderId) => boolean;
 }
 
 /**
@@ -63,26 +48,16 @@ export async function preflight(
   repoRoot: string,
   opts: PreflightOptions,
 ): Promise<void> {
-  const hasDiscussNode = workflow.nodes.some((n) => n.type.id === 'discuss');
-  if (hasDiscussNode) {
-    const discussProvider = opts.discussProvider ?? 'claude';
-    const hasCredentials = (opts.credentialsResolver ?? defaultDiscussCredentialsResolver)(discussProvider);
+  const hasAgentNode = workflow.nodes.some((n) => n.type.agentDriven);
+  if (hasAgentNode) {
+    const provider = opts.provider ?? 'claude';
+    const hasCredentials = (opts.credentialsResolver ?? defaultProviderCredentialsResolver)(provider);
     if (!hasCredentials) {
       throw new PreflightError(
         'credentials',
-        discussProvider === 'claude'
-          ? 'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI.'
-          : `No ${discussProviderInfo(discussProvider).label} API key found. Set the ${discussProviderInfo(discussProvider).apiKeyEnvVar} environment variable, or re-run to be prompted for one.`,
-      );
-    }
-  }
-
-  if (workflowNeedsNvidia(workflow)) {
-    const hasNvidiaCredentials = (opts.nvidiaCredentialsResolver ?? defaultNvidiaCredentialsResolver)();
-    if (!hasNvidiaCredentials) {
-      throw new PreflightError(
-        'nvidia-credentials',
-        'No NVIDIA API key found. This workflow has an agent-driven node other than Discuss, which routes to the NVIDIA-backed runner — set the NVIDIA_API_KEY environment variable.',
+        provider === 'claude'
+          ? 'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI, then run `flow-code init`.'
+          : `No ${providerInfo(provider).label} API key found. Run \`flow-code init\` to configure one, or set ${providerInfo(provider).apiKeyEnvVar}.`,
       );
     }
   }

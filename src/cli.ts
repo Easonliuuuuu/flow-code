@@ -1,21 +1,23 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { Engine } from './engine/engine.js';
-import { discussCredentialsPath, loadDiscussCredentials, saveDiscussCredentials } from './engine/discussCredentials.js';
-import { preflight, PreflightError, defaultCredentialsResolver, workflowNeedsNvidia } from './engine/preflight.js';
-import { DISCUSS_PROVIDERS, discussProviderInfo, type DiscussProviderId } from './engine/providers.js';
+import { loadCredentials } from './engine/credentials.js';
+import { preflight, PreflightError, defaultCredentialsResolver } from './engine/preflight.js';
+import { PROVIDERS, providerInfo, type ProviderId } from './engine/providers.js';
 import type { SessionRunner } from './engine/types.js';
 import {
-  CompositeSessionRunner,
   NvidiaSessionRunner,
   OpenAiSessionRunner,
   OpenRouterSessionRunner,
   SdkSessionRunner,
 } from './executors/index.js';
 import { builtinExecutors } from './executors/index.js';
+import { ensureGitExclude } from './git/exclude.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
+import { runProviderWizard } from './init/providerWizard.js';
+import { confirm } from './init/prompts.js';
 import { listNodeTypes } from './registry/index.js';
 import {
   FileRunStatePersister,
@@ -42,181 +44,47 @@ function fail(message: string): never {
   process.exit(1);
 }
 
-/** Keep run-state and worktrees out of untracked-change detection and diffs. */
-function ensureGitExclude(repoRoot: string): void {
-  const excludePath = join(repoRoot, '.git', 'info', 'exclude');
-  const wanted = ['.flow-code/runs/', '.flow-code/worktrees/', '.flow-code/credentials.json'];
-  let current = '';
-  try {
-    current = readFileSync(excludePath, 'utf8');
-  } catch {
-    // no exclude file yet
-  }
-  const missing = wanted.filter((line) => !current.includes(line));
-  if (missing.length > 0) {
-    mkdirSync(dirname(excludePath), { recursive: true });
-    appendFileSync(excludePath, `\n# added by flow-code\n${missing.join('\n')}\n`);
-  }
-}
-
-async function confirm(question: string): Promise<boolean> {
-  if (!process.stdin.isTTY) return false;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
-  rl.close();
-  return answer === 'y' || answer === 'yes';
-}
-
-/** Reads one line from stdin without echoing it, masking each keystroke with `*`. Caller must check isTTY first. */
-async function promptSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    process.stdout.write(question);
-    const stdin = process.stdin;
-    const wasRaw = stdin.isRaw ?? false;
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    stdin.setRawMode?.(true);
-
-    let value = '';
-    const cleanup = (): void => {
-      stdin.removeListener('data', onData);
-      stdin.setRawMode?.(wasRaw);
-      stdin.pause();
-    };
-    const onData = (chunk: string): void => {
-      for (const char of chunk) {
-        if (char === '\n' || char === '\r') {
-          cleanup();
-          process.stdout.write('\n');
-          resolve(value);
-          return;
-        }
-        if (char === '\u0003') {
-          // ctrl+c
-          cleanup();
-          process.stdout.write('\n');
-          process.exit(130);
-        }
-        if (char === '\u007f' || char === '\b') {
-          if (value.length > 0) {
-            value = value.slice(0, -1);
-            process.stdout.write('\b \b');
-          }
-          continue;
-        }
-        value += char;
-        process.stdout.write('*');
-      }
-    };
-    stdin.on('data', onData);
-  });
-}
-
 /**
- * Determines which provider Discuss should run against for this run, and
- * makes sure its API key ends up in the environment. Order of preference:
- * a previously saved per-repo choice, then an already-set env var for any
- * provider, then (interactively, TTY only) a prompt to pick one and paste a
- * key — with an offer to save it for next time. Headless (no TTY, e.g. CI)
- * and workflows without a Discuss node both fall back to 'claude' untouched,
- * preserving the pre-existing default behavior.
+ * Determines which provider backs every agent-driven node in this run, and
+ * makes sure its API key ends up in the environment. Order of preference: a
+ * previously saved per-repo choice (from `flow-code init`), then an
+ * already-set env var for any provider, then the Claude Agent SDK's own
+ * credential resolution. Never prompts — `flow-code init` is where that
+ * happens now; a workflow with agent-driven nodes and nothing configured
+ * fails fast with a pointer to it. A workflow with no agent-driven nodes at
+ * all returns undefined, since no provider is ever actually needed.
  */
-async function resolveDiscussProvider(
+export async function resolveProvider(
   repoRoot: string,
-  workflow: { nodes: Array<{ type: { id: string } }> },
-): Promise<DiscussProviderId> {
-  if (!workflow.nodes.some((n) => n.type.id === 'discuss')) return 'claude';
-
-  const saved = loadDiscussCredentials(repoRoot);
+  workflow: Workflow,
+): Promise<{ provider: ProviderId; model?: string } | undefined> {
+  const saved = loadCredentials(repoRoot);
   if (saved) {
-    const envVar = discussProviderInfo(saved.provider).apiKeyEnvVar;
+    const envVar = providerInfo(saved.provider).apiKeyEnvVar;
     if (envVar && saved.apiKey && !process.env[envVar]) {
       process.env[envVar] = saved.apiKey;
     }
-    return saved.provider;
+    if (envVar && saved.apiKey2 && !process.env[`${envVar}_2`]) {
+      process.env[`${envVar}_2`] = saved.apiKey2;
+    }
+    return { provider: saved.provider, model: saved.model };
   }
 
-  for (const info of DISCUSS_PROVIDERS) {
-    if (info.apiKeyEnvVar && process.env[info.apiKeyEnvVar]) return info.id;
+  for (const info of PROVIDERS) {
+    if (info.apiKeyEnvVar && process.env[info.apiKeyEnvVar]) return { provider: info.id };
   }
-  if (defaultCredentialsResolver()) return 'claude';
+  if (defaultCredentialsResolver()) return { provider: 'claude' };
 
-  if (!process.stdin.isTTY) return 'claude';
-
-  console.log('\nflow-code: Discuss needs a model provider — pick one (or set the env var and re-run):');
-  DISCUSS_PROVIDERS.forEach((p, i) => {
-    console.log(`  ${i + 1}) ${p.label}${p.apiKeyEnvVar ? ` (${p.apiKeyEnvVar})` : ' (existing claude login)'}`);
-  });
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  let choice: (typeof DISCUSS_PROVIDERS)[number] | undefined;
-  while (!choice) {
-    const answer = (await rl.question(`Select a provider [1-${DISCUSS_PROVIDERS.length}, default 1]: `)).trim();
-    const idx = answer === '' ? 0 : Number(answer) - 1;
-    choice = DISCUSS_PROVIDERS[idx];
-    if (!choice) console.log('  invalid choice — try again.');
+  if (workflow.nodes.some((n) => n.type.agentDriven)) {
+    fail(
+      'no provider configured — run `flow-code init` to choose one, or set ' +
+        'ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.',
+    );
   }
-  rl.close();
-
-  if (!choice.apiKeyEnvVar) return choice.id;
-  if (process.env[choice.apiKeyEnvVar]) return choice.id;
-
-  const apiKey = await promptSecret(`${choice.label} API key: `);
-  process.env[choice.apiKeyEnvVar] = apiKey;
-
-  if (await confirm(`Save this key for future runs in this repo (${discussCredentialsPath(repoRoot)})?`)) {
-    saveDiscussCredentials(repoRoot, { provider: choice.id, apiKey });
-    ensureGitExclude(repoRoot);
-  }
-
-  return choice.id;
+  return undefined;
 }
 
-/**
- * Every agent-driven node besides Discuss is hardcoded to the NVIDIA-backed
- * runner (see preflight.ts#workflowNeedsNvidia), so a workflow needs
- * NVIDIA_API_KEY regardless of which provider Discuss itself ends up using.
- * Mirrors resolveDiscussProvider: prefer an already-set env var or a
- * previously saved key, otherwise prompt (TTY only) and offer to save.
- */
-async function resolveNvidiaCredentials(
-  repoRoot: string,
-  workflow: Workflow,
-  discussProvider: DiscussProviderId,
-): Promise<void> {
-  if (!workflowNeedsNvidia(workflow)) return;
-  if (process.env['NVIDIA_API_KEY']) return;
-
-  const saved = loadDiscussCredentials(repoRoot);
-  if (saved?.nvidiaApiKey) {
-    process.env['NVIDIA_API_KEY'] = saved.nvidiaApiKey;
-    if (saved.nvidiaApiKey2) process.env['NVIDIA_API_KEY_2'] = saved.nvidiaApiKey2;
-    return;
-  }
-
-  if (!process.stdin.isTTY) return; // preflight surfaces a clear failure below
-
-  console.log('\nflow-code: every agent-driven node besides Discuss runs on NVIDIA NIM — an API key is needed.');
-  const apiKey = await promptSecret('NVIDIA API key: ');
-  process.env['NVIDIA_API_KEY'] = apiKey;
-
-  let apiKey2: string | undefined;
-  if (await confirm('Add a second NVIDIA key (a different account) to rotate onto under rate limits?')) {
-    apiKey2 = await promptSecret('Second NVIDIA API key: ');
-    process.env['NVIDIA_API_KEY_2'] = apiKey2;
-  }
-
-  if (await confirm(`Save this key for future runs in this repo (${discussCredentialsPath(repoRoot)})?`)) {
-    saveDiscussCredentials(repoRoot, {
-      provider: discussProvider,
-      ...(saved?.apiKey !== undefined ? { apiKey: saved.apiKey } : {}),
-      nvidiaApiKey: apiKey,
-      ...(apiKey2 !== undefined ? { nvidiaApiKey2: apiKey2 } : {}),
-    });
-    ensureGitExclude(repoRoot);
-  }
-}
-
-function buildDiscussRunner(provider: DiscussProviderId): SessionRunner {
+export function buildRunner(provider: ProviderId): SessionRunner {
   switch (provider) {
     case 'claude':
       return new SdkSessionRunner();
@@ -229,19 +97,44 @@ function buildDiscussRunner(provider: DiscussProviderId): SessionRunner {
   }
 }
 
-async function cmdInit(): Promise<void> {
+async function cmdInit(args: string[]): Promise<void> {
   const repoRoot = await repoRootFromCwd();
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
-  if (existsSync(path)) {
+  if (!existsSync(path)) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, DEFAULT_WORKFLOW_YAML);
+    ensureGitExclude(repoRoot);
+    console.log(`flow-code: created ${WORKFLOW_RELATIVE_PATH}`);
+    console.log('  Default graph: discuss → implement → test → validate → review → gate → git-ops');
+  } else {
     console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
+  }
+
+  const reconfigure = args.includes('--reconfigure');
+  const existing = loadCredentials(repoRoot);
+  if (existing && !reconfigure) {
+    console.log(
+      `flow-code: provider already configured (${providerInfo(existing.provider).label}, model ${existing.model}).`,
+    );
+    console.log('  Re-run `flow-code init --reconfigure` to change it. Start a run with: flow-code run');
     return;
   }
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, DEFAULT_WORKFLOW_YAML);
-  ensureGitExclude(repoRoot);
-  console.log(`flow-code: created ${WORKFLOW_RELATIVE_PATH}`);
-  console.log('  Default graph: discuss → implement → test → validate → review → gate → git-ops');
-  console.log('  Edit it, then start a run with: flow-code run');
+
+  if (!process.stdin.isTTY) {
+    console.log('flow-code: no TTY detected — skipping interactive provider setup.');
+    console.log(
+      '  Set ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
+    );
+    return;
+  }
+
+  const result = await runProviderWizard(repoRoot);
+  if (!result) {
+    console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
+    return;
+  }
+  console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
+  console.log('  Start a run with: flow-code run');
 }
 
 function cmdNodeTypes(): void {
@@ -305,8 +198,10 @@ async function cmdRun(args: string[]): Promise<void> {
     throw err;
   }
 
-  const discussProvider = await resolveDiscussProvider(repoRoot, workflow);
-  await resolveNvidiaCredentials(repoRoot, workflow, discussProvider);
+  const resolved = await resolveProvider(repoRoot, workflow);
+  if (resolved?.model && !workflow.settings.model) {
+    workflow.settings.model = resolved.model;
+  }
 
   let resumeState: RunState | undefined;
   if (resuming) {
@@ -350,7 +245,10 @@ async function cmdRun(args: string[]): Promise<void> {
   try {
     // A resumed tree is expected to carry the interrupted work's uncommitted
     // changes — the normal dirty-tree refusal doesn't apply here.
-    await preflight(workflow, repoRoot, { allowDirty: allowDirty || resuming, discussProvider });
+    await preflight(workflow, repoRoot, {
+      allowDirty: allowDirty || resuming,
+      ...(resolved ? { provider: resolved.provider } : {}),
+    });
   } catch (err) {
     if (err instanceof PreflightError) fail(err.message);
     throw err;
@@ -409,7 +307,7 @@ async function cmdRun(args: string[]): Promise<void> {
     repoRoot,
     baseline,
     ports,
-    sessions: new CompositeSessionRunner(workflow, buildDiscussRunner(discussProvider), new NvidiaSessionRunner()),
+    sessions: resolved ? buildRunner(resolved.provider) : new SdkSessionRunner(),
     executors: builtinExecutors,
     signal: abortController.signal,
   });
@@ -479,7 +377,10 @@ async function cmdRun(args: string[]): Promise<void> {
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
 
 Usage:
-  flow-code init              Scaffold .flow-code/workflow.yaml with the default graph
+  flow-code init [--reconfigure]
+                              Scaffold .flow-code/workflow.yaml with the default graph and
+                              walk through picking the provider/model for the project
+                              (--reconfigure re-runs the picker even if already configured)
   flow-code run [--allow-dirty]
                               Run the workflow (refuses a dirty tree unless overridden)
   flow-code run --resume [runId]
@@ -495,7 +396,7 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'init':
-      return cmdInit();
+      return cmdInit(args);
     case 'run':
       return cmdRun(args);
     case 'node-types':
@@ -513,7 +414,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error(`flow-code: ${err instanceof Error ? err.message : err}`);
-  process.exit(1);
-});
+// Only run when invoked directly (the published bin), not when imported —
+// e.g. by tests importing resolveProvider/buildRunner for direct coverage.
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  main().catch((err) => {
+    console.error(`flow-code: ${err instanceof Error ? err.message : err}`);
+    process.exit(1);
+  });
+}
