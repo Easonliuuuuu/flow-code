@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Engine } from './engine/engine.js';
@@ -416,7 +416,11 @@ async function main(): Promise<void> {
 
 // Only run when invoked directly (the published bin), not when imported —
 // e.g. by tests importing resolveProvider/buildRunner for direct coverage.
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Compared via realpath since the published bin is a symlink (e.g. nvm's
+// bin dir): process.argv[1] is the symlink path, but import.meta.url is
+// resolved to the symlink target, so a direct string comparison never
+// matches and the CLI silently no-ops.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((err) => {
     console.error(`flow-code: ${err instanceof Error ? err.message : err}`);
     process.exit(1);
