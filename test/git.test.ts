@@ -38,7 +38,6 @@ describe('preflight', () => {
       preflight(workflowFromYaml(MINIMAL), repo, {
         allowDirty: false,
         credentialsResolver: () => true,
-        nvidiaCredentialsResolver: () => true,
       }),
     ).rejects.toMatchObject({ kind: 'dirty-tree' });
   });
@@ -48,28 +47,15 @@ describe('preflight', () => {
     await preflight(workflowFromYaml(MINIMAL), repo, {
       allowDirty: false,
       credentialsResolver: () => true,
-      nvidiaCredentialsResolver: () => true,
     });
     writeFileSync(join(repo, 'dirty.txt'), 'uncommitted\n');
     await preflight(workflowFromYaml(MINIMAL), repo, {
       allowDirty: true,
       credentialsResolver: () => true,
-      nvidiaCredentialsResolver: () => true,
     });
   });
 
-  it('fails on missing NVIDIA credentials when the workflow needs the NVIDIA runner', async () => {
-    const repo = makeTempGitRepo();
-    await expect(
-      preflight(workflowFromYaml(MINIMAL), repo, {
-        allowDirty: false,
-        credentialsResolver: () => true,
-        nvidiaCredentialsResolver: () => false,
-      }),
-    ).rejects.toMatchObject({ kind: 'nvidia-credentials' });
-  });
-
-  it('does not require NVIDIA credentials for a workflow with no non-Discuss agent-driven node', async () => {
+  it('does not require credentials for a workflow with no agent-driven node at all', async () => {
     const repo = makeTempGitRepo();
     const yaml = `
 nodes:
@@ -77,14 +63,14 @@ nodes:
     type: test
     config: { commands: ["true"] }
 `;
+    // Would fail if the check ran at all — proves it's skipped, not just satisfied.
     await preflight(workflowFromYaml(yaml), repo, {
       allowDirty: false,
-      credentialsResolver: () => true,
-      nvidiaCredentialsResolver: () => false,
+      credentialsResolver: () => false,
     });
   });
 
-  it('does not require discuss credentials for a workflow with no discuss node', async () => {
+  it('requires credentials for a workflow with only a non-discuss agent-driven node', async () => {
     const repo = makeTempGitRepo();
     const yaml = `
 nodes:
@@ -92,20 +78,20 @@ nodes:
     type: implement
     config: { instructions: x }
 `;
-    await preflight(workflowFromYaml(yaml), repo, {
-      allowDirty: false,
-      credentialsResolver: () => false,
-      nvidiaCredentialsResolver: () => true,
-    });
+    await expect(
+      preflight(workflowFromYaml(yaml), repo, {
+        allowDirty: false,
+        credentialsResolver: () => false,
+      }),
+    ).rejects.toMatchObject({ kind: 'credentials' });
   });
 
-  it('checks the configured discuss provider, not always claude', async () => {
+  it('checks the configured provider, not always claude', async () => {
     const repo = makeTempGitRepo();
     await expect(
       preflight(workflowFromYaml(MINIMAL), repo, {
         allowDirty: false,
-        discussProvider: 'openai',
-        nvidiaCredentialsResolver: () => true,
+        provider: 'openai',
       }),
     ).rejects.toMatchObject({ kind: 'credentials' });
 
@@ -113,8 +99,7 @@ nodes:
     try {
       await preflight(workflowFromYaml(MINIMAL), repo, {
         allowDirty: false,
-        discussProvider: 'openai',
-        nvidiaCredentialsResolver: () => true,
+        provider: 'openai',
       });
     } finally {
       vi.unstubAllEnvs();

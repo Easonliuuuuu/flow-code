@@ -1,8 +1,8 @@
-/** Providers Discuss can run against. Claude is the default/back-compat choice. */
-export type DiscussProviderId = 'claude' | 'nvidia' | 'openai' | 'openrouter';
+/** Providers flow-code can run every agent-driven node against. */
+export type ProviderId = 'claude' | 'nvidia' | 'openai' | 'openrouter';
 
-export interface DiscussProviderInfo {
-  id: DiscussProviderId;
+export interface ProviderInfo {
+  id: ProviderId;
   label: string;
   /**
    * Env var checked for credentials. Claude has none here — it falls back to
@@ -12,19 +12,19 @@ export interface DiscussProviderInfo {
   apiKeyEnvVar?: string;
 }
 
-export const DISCUSS_PROVIDERS: DiscussProviderInfo[] = [
+export const PROVIDERS: ProviderInfo[] = [
   { id: 'claude', label: 'Claude (Anthropic)' },
   { id: 'nvidia', label: 'NVIDIA NIM', apiKeyEnvVar: 'NVIDIA_API_KEY' },
   { id: 'openai', label: 'OpenAI', apiKeyEnvVar: 'OPENAI_API_KEY' },
   { id: 'openrouter', label: 'OpenRouter', apiKeyEnvVar: 'OPENROUTER_API_KEY' },
 ];
 
-export function discussProviderInfo(id: DiscussProviderId): DiscussProviderInfo {
-  const info = DISCUSS_PROVIDERS.find((p) => p.id === id);
-  if (!info) throw new Error(`unknown discuss provider "${id}"`);
+export function providerInfo(id: ProviderId): ProviderInfo {
+  const info = PROVIDERS.find((p) => p.id === id);
+  if (!info) throw new Error(`unknown provider "${id}"`);
   return info;
 }
 
-export function isDiscussProviderId(value: string): value is DiscussProviderId {
-  return DISCUSS_PROVIDERS.some((p) => p.id === value);
+export function isProviderId(value: string): value is ProviderId {
+  return PROVIDERS.some((p) => p.id === value);
 }

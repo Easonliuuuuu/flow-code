@@ -11,7 +11,9 @@ export class OpenRouterSessionRunner extends OpenAiCompatSessionRunner {
       label: 'OpenRouter',
       baseUrl: OPENROUTER_BASE_URL,
       defaultModel: DEFAULT_OPENROUTER_MODEL,
-      apiKeyEnvVars: ['OPENROUTER_API_KEY'],
+      // OPENROUTER_API_KEY_2 is optional: an extra key (on a separate account) to
+      // rotate onto if the primary is still rate-limited after retrying.
+      apiKeyEnvVars: ['OPENROUTER_API_KEY', 'OPENROUTER_API_KEY_2'],
     });
   }
 }
