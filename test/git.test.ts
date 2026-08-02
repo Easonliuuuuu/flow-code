@@ -1,12 +1,14 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { preflight, PreflightError } from '../src/engine/preflight.js';
 import { captureTree, diffAgainstTree, recordBaseline } from '../src/git/ops.js';
 import { makeTempGitRepo, repoGit, workflowFromYaml } from './helpers.js';
 
 const MINIMAL = `
 nodes:
+  - id: chat
+    type: discuss
   - id: impl
     type: implement
     config: { instructions: x }
@@ -80,6 +82,43 @@ nodes:
       credentialsResolver: () => true,
       nvidiaCredentialsResolver: () => false,
     });
+  });
+
+  it('does not require discuss credentials for a workflow with no discuss node', async () => {
+    const repo = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+`;
+    await preflight(workflowFromYaml(yaml), repo, {
+      allowDirty: false,
+      credentialsResolver: () => false,
+      nvidiaCredentialsResolver: () => true,
+    });
+  });
+
+  it('checks the configured discuss provider, not always claude', async () => {
+    const repo = makeTempGitRepo();
+    await expect(
+      preflight(workflowFromYaml(MINIMAL), repo, {
+        allowDirty: false,
+        discussProvider: 'openai',
+        nvidiaCredentialsResolver: () => true,
+      }),
+    ).rejects.toMatchObject({ kind: 'credentials' });
+
+    vi.stubEnv('OPENAI_API_KEY', 'test-key');
+    try {
+      await preflight(workflowFromYaml(MINIMAL), repo, {
+        allowDirty: false,
+        discussProvider: 'openai',
+        nvidiaCredentialsResolver: () => true,
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
 

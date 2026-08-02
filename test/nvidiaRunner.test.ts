@@ -150,10 +150,50 @@ describe('NvidiaSessionRunner', () => {
     );
   });
 
-  it('rejects openInteractive — Discuss never routes here', async () => {
+  it('openInteractive supports a multi-turn conversation, accumulating history across sends', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatCompletion({ role: 'assistant', content: 'hi there' })))
+      .mockResolvedValueOnce(jsonResponse(chatCompletion({ role: 'assistant', content: 'got it' })));
+    vi.stubGlobal('fetch', fetchMock);
     const runner = new NvidiaSessionRunner();
-    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
-    await expect(runner.openInteractive(baseRequest(), store)).rejects.toThrow(/does not support/);
+    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['chat'] });
+    const session = await runner.openInteractive(baseRequest({ nodeId: 'chat' }), store);
+
+    expect(await session.send('open a discussion')).toBe('hi there');
+    expect(await session.send('sounds good')).toBe('got it');
+    await session.end();
+
+    const secondCallMessages = JSON.parse(fetchMock.mock.calls[1]![1].body as string).messages;
+    // system + first user + first assistant reply + second user
+    expect(secondCallMessages).toHaveLength(4);
+    expect(secondCallMessages[secondCallMessages.length - 1]).toMatchObject({
+      role: 'user',
+      content: 'sounds good',
+    });
+  });
+
+  it('openInteractive replays the prior transcript into history when resuming', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse(chatCompletion({ role: 'assistant', content: 'continuing' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const runner = new NvidiaSessionRunner();
+    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['chat'] });
+    store.appendDiscussMessage('chat', { role: 'assistant', text: 'earlier question' });
+    store.appendDiscussMessage('chat', { role: 'user', text: 'earlier answer' });
+
+    const session = await runner.openInteractive(
+      baseRequest({ nodeId: 'chat', resumeSessionId: 'whatever' }),
+      store,
+    );
+    await session.send('one more thing');
+
+    const sentMessages = JSON.parse(fetchMock.mock.calls[0]![1].body as string).messages;
+    // system + 2 replayed transcript entries + new user message
+    expect(sentMessages).toHaveLength(4);
+    expect(sentMessages[1]).toMatchObject({ role: 'assistant', content: 'earlier question' });
+    expect(sentMessages[2]).toMatchObject({ role: 'user', content: 'earlier answer' });
   });
 
   it('throws RunInterruptedError immediately if already interrupted, without calling the API', async () => {

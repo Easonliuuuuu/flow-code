@@ -17,10 +17,16 @@ Once installed globally or linked (`npm link`), the same commands are available 
 
 ## Credentials
 
-Agent-driven nodes are routed by node type: Discuss runs on the Claude Agent SDK; Implement, Validate, Review, Git-ops, and Worktree-Agent run on NVIDIA's NIM API. `flow-code run` checks for both before starting anything, but only requires the one(s) your workflow actually needs:
+Agent-driven nodes are routed by node type: Implement, Validate, Review, Git-ops, and Worktree-Agent always run on NVIDIA's NIM API; Discuss runs on whichever provider you choose. `flow-code run` checks for credentials before starting anything, but only requires the one(s) your workflow actually needs:
 
-- **Claude** (required if your workflow has a Discuss node): set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, or be logged in via the `claude` CLI.
-- **NVIDIA** (required if your workflow has any other agent-driven node): set `NVIDIA_API_KEY` — get a free key at [build.nvidia.com](https://build.nvidia.com).
+- **Discuss provider** (required if your workflow has a Discuss node) — one of:
+  - **Claude** (default): set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`, or be logged in via the `claude` CLI.
+  - **NVIDIA**: set `NVIDIA_API_KEY` — get a free key at [build.nvidia.com](https://build.nvidia.com).
+  - **OpenAI**: set `OPENAI_API_KEY`.
+  - **OpenRouter**: set `OPENROUTER_API_KEY`.
+- **NVIDIA** (required if your workflow has any other agent-driven node): set `NVIDIA_API_KEY`.
+
+If none of the above env vars are already set and your workflow has a Discuss node, `flow-code run` prompts you (in a TTY) to pick a provider and paste an API key, with the option to save it to `.flow-code/credentials.json` (gitignored, `chmod 600`) for future runs in the repo. Non-interactive runs (CI, piped stdin) fall back to Claude's own credential resolution unchanged.
 
 ## Configuring a workflow
 
