@@ -8,6 +8,15 @@ export interface StoredDiscussCredentials {
   provider: DiscussProviderId;
   /** Absent for 'claude' — it relies on the Claude Agent SDK's own credential resolution. */
   apiKey?: string;
+  /**
+   * Every agent-driven node besides Discuss is hardcoded to the NVIDIA
+   * runner, so this is cached here too even when `provider` is something
+   * else — one file, one first-run prompt, instead of a second credentials
+   * store just for NVIDIA.
+   */
+  nvidiaApiKey?: string;
+  /** Optional second key (a separate account) to rotate onto under sustained rate-limiting. */
+  nvidiaApiKey2?: string;
 }
 
 export function discussCredentialsPath(repoRoot: string): string {
@@ -19,10 +28,22 @@ export function loadDiscussCredentials(repoRoot: string): StoredDiscussCredentia
   const path = discussCredentialsPath(repoRoot);
   if (!existsSync(path)) return undefined;
   try {
-    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { provider?: unknown; apiKey?: unknown };
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as {
+      provider?: unknown;
+      apiKey?: unknown;
+      nvidiaApiKey?: unknown;
+      nvidiaApiKey2?: unknown;
+    };
     if (typeof parsed.provider !== 'string' || !isDiscussProviderId(parsed.provider)) return undefined;
     const apiKey = typeof parsed.apiKey === 'string' ? parsed.apiKey : undefined;
-    return { provider: parsed.provider, ...(apiKey !== undefined ? { apiKey } : {}) };
+    const nvidiaApiKey = typeof parsed.nvidiaApiKey === 'string' ? parsed.nvidiaApiKey : undefined;
+    const nvidiaApiKey2 = typeof parsed.nvidiaApiKey2 === 'string' ? parsed.nvidiaApiKey2 : undefined;
+    return {
+      provider: parsed.provider,
+      ...(apiKey !== undefined ? { apiKey } : {}),
+      ...(nvidiaApiKey !== undefined ? { nvidiaApiKey } : {}),
+      ...(nvidiaApiKey2 !== undefined ? { nvidiaApiKey2 } : {}),
+    };
   } catch {
     return undefined;
   }

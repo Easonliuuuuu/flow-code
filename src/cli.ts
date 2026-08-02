@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Engine } from './engine/engine.js';
 import { discussCredentialsPath, loadDiscussCredentials, saveDiscussCredentials } from './engine/discussCredentials.js';
-import { preflight, PreflightError, defaultCredentialsResolver } from './engine/preflight.js';
+import { preflight, PreflightError, defaultCredentialsResolver, workflowNeedsNvidia } from './engine/preflight.js';
 import { DISCUSS_PROVIDERS, discussProviderInfo, type DiscussProviderId } from './engine/providers.js';
 import type { SessionRunner } from './engine/types.js';
 import {
@@ -26,7 +26,7 @@ import { RunStateStore } from './runstate/store.js';
 import type { RunState } from './runstate/types.js';
 import { runUi, UiInteractionPorts } from './ui/index.js';
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
-import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError } from './workflow/load.js';
+import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError, type Workflow } from './workflow/load.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from './worktrees/reconcile.js';
 
 async function repoRootFromCwd(): Promise<string> {
@@ -171,6 +171,51 @@ async function resolveDiscussProvider(
   return choice.id;
 }
 
+/**
+ * Every agent-driven node besides Discuss is hardcoded to the NVIDIA-backed
+ * runner (see preflight.ts#workflowNeedsNvidia), so a workflow needs
+ * NVIDIA_API_KEY regardless of which provider Discuss itself ends up using.
+ * Mirrors resolveDiscussProvider: prefer an already-set env var or a
+ * previously saved key, otherwise prompt (TTY only) and offer to save.
+ */
+async function resolveNvidiaCredentials(
+  repoRoot: string,
+  workflow: Workflow,
+  discussProvider: DiscussProviderId,
+): Promise<void> {
+  if (!workflowNeedsNvidia(workflow)) return;
+  if (process.env['NVIDIA_API_KEY']) return;
+
+  const saved = loadDiscussCredentials(repoRoot);
+  if (saved?.nvidiaApiKey) {
+    process.env['NVIDIA_API_KEY'] = saved.nvidiaApiKey;
+    if (saved.nvidiaApiKey2) process.env['NVIDIA_API_KEY_2'] = saved.nvidiaApiKey2;
+    return;
+  }
+
+  if (!process.stdin.isTTY) return; // preflight surfaces a clear failure below
+
+  console.log('\nflow-code: every agent-driven node besides Discuss runs on NVIDIA NIM — an API key is needed.');
+  const apiKey = await promptSecret('NVIDIA API key: ');
+  process.env['NVIDIA_API_KEY'] = apiKey;
+
+  let apiKey2: string | undefined;
+  if (await confirm('Add a second NVIDIA key (a different account) to rotate onto under rate limits?')) {
+    apiKey2 = await promptSecret('Second NVIDIA API key: ');
+    process.env['NVIDIA_API_KEY_2'] = apiKey2;
+  }
+
+  if (await confirm(`Save this key for future runs in this repo (${discussCredentialsPath(repoRoot)})?`)) {
+    saveDiscussCredentials(repoRoot, {
+      provider: discussProvider,
+      ...(saved?.apiKey !== undefined ? { apiKey: saved.apiKey } : {}),
+      nvidiaApiKey: apiKey,
+      ...(apiKey2 !== undefined ? { nvidiaApiKey2: apiKey2 } : {}),
+    });
+    ensureGitExclude(repoRoot);
+  }
+}
+
 function buildDiscussRunner(provider: DiscussProviderId): SessionRunner {
   switch (provider) {
     case 'claude':
@@ -261,6 +306,7 @@ async function cmdRun(args: string[]): Promise<void> {
   }
 
   const discussProvider = await resolveDiscussProvider(repoRoot, workflow);
+  await resolveNvidiaCredentials(repoRoot, workflow, discussProvider);
 
   let resumeState: RunState | undefined;
   if (resuming) {

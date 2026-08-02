@@ -52,4 +52,18 @@ describe('discuss credentials persistence', () => {
     expect(loadDiscussCredentials(repo)).toEqual({ provider: 'claude' });
     expect(readFileSync(discussCredentialsPath(repo), 'utf8')).not.toContain('apiKey');
   });
+
+  it('round-trips the cached NVIDIA key(s) alongside a different discuss provider', () => {
+    const repo = tempRepo();
+    saveDiscussCredentials(repo, {
+      provider: 'claude',
+      nvidiaApiKey: 'nvapi-primary',
+      nvidiaApiKey2: 'nvapi-secondary',
+    });
+    expect(loadDiscussCredentials(repo)).toEqual({
+      provider: 'claude',
+      nvidiaApiKey: 'nvapi-primary',
+      nvidiaApiKey2: 'nvapi-secondary',
+    });
+  });
 });
