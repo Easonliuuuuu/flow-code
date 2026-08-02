@@ -1,0 +1,110 @@
+import { execFile } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+const execFileAsync = promisify(execFile);
+export async function git(args, cwd, env) {
+    const { stdout } = await execFileAsync('git', args, {
+        cwd,
+        env: { ...process.env, ...env },
+        maxBuffer: 64 * 1024 * 1024,
+    });
+    return stdout.trimEnd();
+}
+export async function headCommit(dir) {
+    return git(['rev-parse', 'HEAD'], dir);
+}
+export async function isDirty(dir) {
+    const out = await git(['status', '--porcelain'], dir);
+    return out.length > 0;
+}
+/**
+ * Snapshot the current working tree (tracked + untracked, respecting
+ * excludes) as a tree object, without touching the real index or the tree
+ * itself. Uses a temporary index file; blobs land in the object database so
+ * later diffs can show content.
+ */
+export async function captureTree(dir) {
+    const tmp = mkdtempSync(join(tmpdir(), 'flow-code-index-'));
+    const indexFile = join(tmp, 'index');
+    const env = { GIT_INDEX_FILE: indexFile };
+    try {
+        await git(['read-tree', 'HEAD'], dir, env);
+        await git(['add', '-A'], dir, env);
+        // flow-code's own run bookkeeping must never appear as agent output —
+        // but only these two dirs are transient; a checked-in workflow.yaml
+        // must still be diffed like any other tracked file.
+        await git(['rm', '-r', '--cached', '--ignore-unmatch', '-q', '.flow-code/runs', '.flow-code/worktrees'], dir, env);
+        return await git(['write-tree'], dir, env);
+    }
+    finally {
+        rmSync(tmp, { recursive: true, force: true });
+    }
+}
+/**
+ * Record the run baseline before any node starts. On a clean tree the
+ * baseline tree is HEAD's tree; under the dirty override it snapshots the
+ * working tree so pre-existing changes never appear as agent output.
+ */
+export async function recordBaseline(dir, dirtyOverride) {
+    const commit = await headCommit(dir);
+    const tree = dirtyOverride ? await captureTree(dir) : await git(['rev-parse', 'HEAD^{tree}'], dir);
+    return { commit, tree, dirtyOverride };
+}
+/** Diff the current working tree of `dir` against a baseline tree. */
+export async function diffAgainstTree(dir, tree) {
+    const current = await captureTree(dir);
+    return git(['diff', tree, current], dir);
+}
+export async function diffStatAgainstTree(dir, tree) {
+    const current = await captureTree(dir);
+    return git(['diff', '--stat', tree, current], dir);
+}
+export async function changedFilesAgainstTree(dir, tree) {
+    const current = await captureTree(dir);
+    const out = await git(['diff', '--name-only', tree, current], dir);
+    return out.length === 0 ? [] : out.split('\n');
+}
+export async function diffTrees(dir, treeA, treeB) {
+    return git(['diff', treeA, treeB], dir);
+}
+export async function diffNamesBetweenTrees(dir, treeA, treeB) {
+    const out = await git(['diff', '--name-only', treeA, treeB], dir);
+    return out.length === 0 ? [] : out.split('\n');
+}
+export async function diffStatBetweenTrees(dir, treeA, treeB) {
+    return git(['diff', '--stat', treeA, treeB], dir);
+}
+export async function worktreeSupported(dir) {
+    try {
+        await git(['worktree', 'list'], dir);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+export async function addWorktree(repoRoot, dir, branch, startPoint) {
+    await git(['worktree', 'add', '-b', branch, dir, startPoint], repoRoot);
+}
+export async function removeWorktree(repoRoot, dir) {
+    await git(['worktree', 'remove', '--force', dir], repoRoot);
+}
+export async function listWorktreeDirs(repoRoot) {
+    const out = await git(['worktree', 'list', '--porcelain'], repoRoot);
+    return out
+        .split('\n')
+        .filter((l) => l.startsWith('worktree '))
+        .map((l) => l.slice('worktree '.length));
+}
+/** Commit everything in a worktree as flow-code itself (not agent-driven). */
+export async function commitAll(dir, message) {
+    await git(['add', '-A'], dir);
+    const staged = await git(['diff', '--cached', '--name-only'], dir);
+    if (staged.length === 0)
+        return null;
+    await git(['-c', 'user.name=flow-code', '-c', 'user.email=flow-code@localhost', 'commit', '-m', message], dir);
+    return headCommit(dir);
+}
+//# sourceMappingURL=ops.js.map
