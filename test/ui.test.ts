@@ -5,6 +5,7 @@ import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import {
   applyPanelMove,
   applyPanelResize,
+  dockedLayout,
   dockedRect,
   hitTestPanel,
   MIN_PANEL_HEIGHT,
@@ -239,17 +240,20 @@ describe('panel geometry (docked/floating status panel)', () => {
     expect(dockedRect(bounds, 999)).toEqual({ x: 0, y: 0, w: 100, h: 40 });
   });
 
-  it('hitTestPanel recognizes the four border edges as "move"', () => {
+  it('hitTestPanel recognizes the border edges and the title row as "move"', () => {
     const rect = { x: 10, y: 10, w: 20, h: 10 };
     expect(hitTestPanel(rect, 10, 15)).toBe('move'); // left edge
     expect(hitTestPanel(rect, 29, 15)).toBe('move'); // right edge
     expect(hitTestPanel(rect, 15, 10)).toBe('move'); // top edge
     expect(hitTestPanel(rect, 15, 19)).toBe('move'); // bottom edge (not the corner)
+    expect(hitTestPanel(rect, 15, 11)).toBe('move'); // title row, just inside the top border
   });
 
-  it('hitTestPanel recognizes the bottom-right corner as "resize"', () => {
+  it('hitTestPanel gives the bottom-right grip a grabbable block, not one cell', () => {
     const rect = { x: 10, y: 10, w: 20, h: 10 };
-    expect(hitTestPanel(rect, 29, 19)).toBe('resize');
+    expect(hitTestPanel(rect, 29, 19)).toBe('resize'); // corner
+    expect(hitTestPanel(rect, 27, 18)).toBe('resize'); // the grip glyph's cell
+    expect(hitTestPanel(rect, 26, 18)).toBeNull(); // just left of the block: still content
   });
 
   it('hitTestPanel returns null for the interior and outside the rect', () => {
@@ -257,6 +261,21 @@ describe('panel geometry (docked/floating status panel)', () => {
     expect(hitTestPanel(rect, 15, 15)).toBeNull();
     expect(hitTestPanel(rect, 5, 5)).toBeNull();
     expect(hitTestPanel(rect, 100, 100)).toBeNull();
+  });
+
+  it('dockedLayout leaves the canvas exactly the rows above the panel', () => {
+    // The drawn panel must land on the rect the mouse is hit-tested against;
+    // any slack between canvas and panel makes every border drag miss.
+    const { rect, canvasHeight } = dockedLayout(bounds, 1);
+    expect(canvasHeight).toBe(rect.y - 1);
+    expect(rect.y + rect.h).toBe(bounds.rows);
+  });
+
+  it('dockedLayout always leaves at least one canvas row on a short terminal', () => {
+    const { rect, canvasHeight } = dockedLayout({ columns: 80, rows: 6 }, 1);
+    expect(canvasHeight).toBe(1);
+    expect(rect.y).toBe(2);
+    expect(rect.h).toBe(4);
   });
 
   it('applyPanelMove translates the rect and clamps to the screen', () => {
@@ -384,6 +403,25 @@ describe('UI interaction ports', () => {
     ports.discuss.end('talk');
     expect(ports.discussState!.active).toBe(false);
     expect(ports.discussState!.transcript.map((t) => t.role)).toEqual(['assistant', 'user']);
+  });
+
+  it('replaces discussState on every change so React sees new messages', async () => {
+    // Regression: the transcript was pushed to in place, so the App's memo
+    // kept rendering the state it first saw — messages stopped appearing.
+    const ports = new UiInteractionPorts();
+    ports.discuss.begin('talk', 'topic');
+    const seen = [ports.discussState];
+    ports.discuss.postAssistant('talk', 'hi');
+    seen.push(ports.discussState);
+    const next = ports.discuss.nextUserMessage('talk');
+    seen.push(ports.discussState);
+    ports.submitUserMessage('there');
+    seen.push(ports.discussState);
+    await next;
+    ports.discuss.end('talk');
+    seen.push(ports.discussState);
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(new Set(seen.map((s) => s!.transcript)).size).toBe(3); // begin, +assistant, +user
   });
 
   it('rejects a pending approval when the run is interrupted', async () => {

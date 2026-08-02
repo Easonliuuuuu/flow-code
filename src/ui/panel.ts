@@ -30,22 +30,59 @@ export function dockedRect(bounds: Bounds, height: number): PanelRect {
   return { x: 0, y: Math.max(0, bounds.rows - h), w: bounds.columns, h };
 }
 
-export type PanelHitZone = 'move' | 'resize' | null;
+/** Fraction of the terminal a docked panel takes up by default. */
+export const DOCKED_HEIGHT_RATIO = 0.45;
 
 /**
- * Which part of the panel's border a press at (x, y) landed on, if any.
- * The bottom-right corner resizes; any other border edge moves. The
+ * Splits the terminal between the canvas and a docked panel, below `headerRows`
+ * of header. The panel is bottom-anchored, so the canvas must take up exactly
+ * the rows between the header and the panel's top edge — any slack there shifts
+ * the panel away from this rect and breaks border hit-testing.
+ */
+export function dockedLayout(
+  bounds: Bounds,
+  headerRows: number,
+): { rect: PanelRect; canvasHeight: number } {
+  // Always leave at least one canvas row, however short the terminal is.
+  const maxHeight = Math.max(1, bounds.rows - headerRows - 1);
+  const height = Math.min(
+    Math.max(MIN_PANEL_HEIGHT, Math.floor(bounds.rows * DOCKED_HEIGHT_RATIO)),
+    maxHeight,
+  );
+  const rect = dockedRect(bounds, height);
+  return { rect, canvasHeight: rect.y - headerRows };
+}
+
+export type PanelHitZone = 'move' | 'resize' | null;
+
+/** The grip glyph drawn in the panel's bottom-right corner, marking the {@link RESIZE_GRIP_W}×{@link RESIZE_GRIP_H} grab zone. */
+export const RESIZE_GRIP = '⇲';
+/** The handle glyph drawn at the left of the title row, marking it draggable. */
+export const MOVE_HANDLE = '⠿';
+/**
+ * Size of the bottom-right grab zone. A single corner cell is far too small a
+ * mouse target, so the zone covers the border corner plus the last content
+ * cell inside it — which is exactly where the grip glyph is drawn.
+ */
+export const RESIZE_GRIP_W = 3;
+export const RESIZE_GRIP_H = 2;
+
+/**
+ * Which part of the panel a press at (x, y) landed on, if any.
+ * The bottom-right grip resizes; any border edge — plus the title row just
+ * inside the top border, which acts as a title bar — moves. The rest of the
  * interior (and anywhere outside the rect) is not draggable, so panel
  * content — text, scroll clicks — isn't hijacked into a drag.
  */
 export function hitTestPanel(rect: PanelRect, x: number, y: number): PanelHitZone {
   if (x < rect.x || x >= rect.x + rect.w || y < rect.y || y >= rect.y + rect.h) return null;
+  if (x >= rect.x + rect.w - RESIZE_GRIP_W && y >= rect.y + rect.h - RESIZE_GRIP_H) return 'resize';
   const onLeft = x === rect.x;
   const onRight = x === rect.x + rect.w - 1;
   const onTop = y === rect.y;
   const onBottom = y === rect.y + rect.h - 1;
-  if (onBottom && onRight) return 'resize';
-  if (onTop || onBottom || onLeft || onRight) return 'move';
+  const onTitleBar = y === rect.y + 1;
+  if (onTop || onBottom || onLeft || onRight || onTitleBar) return 'move';
   return null;
 }
 

@@ -9,9 +9,11 @@ import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } fr
 import {
   applyPanelMove,
   applyPanelResize,
-  dockedRect,
+  dockedLayout,
   hitTestPanel,
   pinAfterScroll,
+  MOVE_HANDLE,
+  RESIZE_GRIP,
   tailWindow,
   type PanelRect,
 } from './panel.js';
@@ -24,6 +26,10 @@ interface PanelDrag {
   startY: number;
   origin: PanelRect;
 }
+
+/** The header line above the canvas, and the hint line below it when no panel is docked. */
+const HEADER_ROWS = 1;
+const FOOTER_ROWS = 1;
 
 export interface AppProps {
   workflow: Workflow;
@@ -49,6 +55,34 @@ function tail<T>(items: T[], n: number): T[] {
   return items.slice(Math.max(0, items.length - n));
 }
 
+/**
+ * Title row of a panel. The whole row is a move zone (see hitTestPanel), so it
+ * leads with a drag handle to say so.
+ */
+function PanelTitle({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <Box flexShrink={0}>
+      <Text dimColor>{MOVE_HANDLE} </Text>
+      {children}
+    </Box>
+  );
+}
+
+/**
+ * Bottom row of a panel: key hints on the left, and the resize grip sitting in
+ * the very corner it grabs.
+ */
+function PanelFooter({ hint }: { hint: string }): React.ReactElement {
+  return (
+    <Box flexShrink={0} justifyContent="space-between">
+      <Text dimColor wrap="truncate-end">
+        {hint}
+      </Text>
+      <Text dimColor>{RESIZE_GRIP}</Text>
+    </Box>
+  );
+}
+
 export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -71,6 +105,9 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   // panel is dragged or resized, and persists — including across different
   // panel content (Discuss/Approval/etc.) — until reset with ctrl+p.
   const [panelRect, setPanelRect] = useState<PanelRect | null>(null);
+  // Mirrors panelDragRef into render state purely so the border can light up
+  // while dragging — feedback that the grab actually landed on the handle.
+  const [panelDragMode, setPanelDragMode] = useState<'move' | 'resize' | null>(null);
   const dragRef = useRef<{ id: string; lastX: number; lastY: number } | null>(null);
   const panelDragRef = useRef<PanelDrag | null>(null);
 
@@ -87,12 +124,16 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
 
   const panelOpen = expanded || pendingApproval !== null || pendingConvergence !== null || discussActive;
   const floating = panelRect !== null;
-  const defaultDockedHeight = Math.max(10, Math.floor(rows * 0.45));
+  const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
   // A docked, open panel reserves flow space below the canvas; a floating one
   // overlays it instead, so the canvas reclaims that space (same as closed).
-  const reservedHeight = panelOpen && !floating ? defaultDockedHeight : 2;
-  const canvasHeight = Math.max(5, rows - reservedHeight - 2);
-  const activeRect = floating ? panelRect! : dockedRect({ columns, rows }, defaultDockedHeight);
+  // When docked the canvas height must come from dockedLayout, or the panel
+  // stops lining up with the rect the mouse is hit-tested against.
+  const canvasHeight =
+    panelOpen && !floating
+      ? docked.canvasHeight
+      : Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
+  const activeRect = floating ? panelRect! : docked.rect;
   const panelHeight = activeRect.h;
 
   const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
@@ -128,6 +169,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   // Wrapped transcript rows for the Discuss panel, and the scrollback window
   // into them (see tailWindow's doc comment for the follow/pin model).
   const discussTranscriptWidth = Math.max(10, activeRect.w - 6);
+  // Panel width minus borders, padding, the "> " prompt and the caret cell.
+  const discussInputWidth = Math.max(4, activeRect.w - 7);
   const discussRows = useMemo(() => {
     if (!discussState) return [];
     return discussState.transcript.flatMap((entry, entryIdx) => {
@@ -143,13 +186,34 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     });
   }, [discussState, discussTranscriptWidth]);
   const discussWindow = tailWindow(discussRows.length, Math.max(1, panelHeight - 5), discussPin);
-  // Mirrors the current window into a ref so the mouse-drag effect (which
-  // stays subscribed across transcript updates, rather than re-registering
-  // mouse escape codes on every streamed token) can read it without being a
-  // dependency of that effect.
-  const discussWindowRef = useRef(discussWindow);
+
+  // Everything the mouse handler reads, mirrored into a ref. The handler is
+  // registered once (see below) so it can't take these as effect deps: doing
+  // so re-ran the effect on every render, writing mouse mode-set escapes into
+  // the middle of Ink's frames on every streamed token.
+  const mouseStateRef = useRef({
+    layout,
+    offset,
+    activeRect,
+    panelOpen,
+    discussActive,
+    discussWindow,
+    pendingApproval,
+    columns,
+    rows,
+  });
   useEffect(() => {
-    discussWindowRef.current = discussWindow;
+    mouseStateRef.current = {
+      layout,
+      offset,
+      activeRect,
+      panelOpen,
+      discussActive,
+      discussWindow,
+      pendingApproval,
+      columns,
+      rows,
+    };
   });
 
   // A fresh discussion (or re-entering one) starts following the live tail.
@@ -165,6 +229,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     const onData = (data: Buffer | string) => {
       const events = parseMouseEvents(data.toString());
       for (const event of events) {
+        const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows } =
+          mouseStateRef.current;
         const overPanel =
           panelOpen &&
           event.x >= activeRect.x &&
@@ -176,11 +242,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           const zone = panelOpen ? hitTestPanel(activeRect, event.x, event.y) : null;
           if (zone) {
             panelDragRef.current = { mode: zone, startX: event.x, startY: event.y, origin: activeRect };
+            setPanelDragMode(zone);
             continue;
           }
           if (overPanel) continue; // clicks inside panel content (not its border) aren't a canvas drag
           const canvasX = event.x + offset.ox;
-          const canvasY = event.y - 1 + offset.oy;
+          const canvasY = event.y - HEADER_ROWS + offset.oy;
           const id = hitTest(layout, canvasX, canvasY);
           if (id) {
             setFocusIdx(Math.max(0, workflow.order.indexOf(id)));
@@ -197,7 +264,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           );
         } else if (event.kind === 'drag' && dragRef.current) {
           const canvasX = event.x + offset.ox;
-          const canvasY = event.y - 1 + offset.oy;
+          const canvasY = event.y - HEADER_ROWS + offset.oy;
           const drag = dragRef.current;
           const dx = canvasX - drag.lastX;
           const dy = canvasY - drag.lastY;
@@ -215,9 +282,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
         } else if (event.kind === 'release') {
           dragRef.current = null;
           panelDragRef.current = null;
+          setPanelDragMode(null);
         } else if (event.kind === 'scroll') {
           if (overPanel && discussActive) {
-            setDiscussPin(pinAfterScroll(discussWindowRef.current, event.direction === 'down' ? -3 : 3));
+            setDiscussPin(
+              pinAfterScroll(mouseStateRef.current.discussWindow, event.direction === 'down' ? -3 : 3),
+            );
           } else if (pendingApproval) {
             setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
           } else {
@@ -234,7 +304,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       stdin.off('data', onData);
       disableMouse(stdout);
     };
-  }, [stdin, stdout, layout, offset, workflow.order, pendingApproval, panelOpen, activeRect, discussActive, columns, rows]);
+  }, [stdin, stdout, workflow.order]);
 
   useInput((input, key) => {
     // ctrl+c always interrupts, regardless of mode — takes over from Ink's
@@ -370,15 +440,22 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   // Docked panels stay in normal flow (as before); a floating one is drawn
   // absolutely-positioned on top of the canvas, at whatever rect the user
   // last dragged/resized it to. Spread onto whichever panel variant is open.
-  const panelBoxProps = floating
-    ? ({
-        position: 'absolute',
-        left: activeRect.x,
-        top: activeRect.y,
-        width: activeRect.w,
-        height: activeRect.h,
-      } as const)
-    : { height: panelHeight };
+  const panelBoxProps = {
+    flexDirection: 'column',
+    borderStyle: 'round',
+    // Lights up the whole frame while it's being dragged.
+    borderColor: panelDragMode ? 'cyan' : undefined,
+    paddingX: 1,
+    ...(floating
+      ? ({
+          position: 'absolute',
+          left: activeRect.x,
+          top: activeRect.y,
+          width: activeRect.w,
+          height: activeRect.h,
+        } as const)
+      : { height: panelHeight }),
+  } as const;
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
@@ -397,64 +474,79 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
         ))}
       </Box>
       {discussActive && discussState ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
-          <Text bold color="yellow">
-            Discussion — {discussState.nodeId}
-            {discussState.topic ? `: ${discussState.topic}` : ''}
-            {!discussWindow.following ? (
-              <Text dimColor>
-                {' '}
-                ({discussWindow.start} above
-                {discussRows.length - discussWindow.end > 0
-                  ? `, ${discussRows.length - discussWindow.end} below`
-                  : ''}
-                )
-              </Text>
-            ) : null}
-          </Text>
-          {discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (
-            <Text key={row.key} wrap="truncate-end">
-              <Text color={row.color}>{row.prefix}</Text>
-              {row.text}
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Discussion — {discussState.nodeId}
+              {discussState.topic ? `: ${discussState.topic}` : ''}
+              {!discussWindow.following ? (
+                <Text dimColor>
+                  {' '}
+                  ({discussWindow.start} above
+                  {discussRows.length - discussWindow.end > 0
+                    ? `, ${discussRows.length - discussWindow.end} below`
+                    : ''}
+                  )
+                </Text>
+              ) : null}
             </Text>
-          ))}
-          <Text>
+          </PanelTitle>
+          {/* Grows to fill the panel so the transcript stays anchored to the
+              input line and the footer keeps its grip in the corner. */}
+          <Box flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
+            {discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (
+              <Text key={row.key} wrap="truncate-end">
+                <Text color={row.color}>{row.prefix}</Text>
+                {row.text}
+              </Text>
+            ))}
+          </Box>
+          <Text wrap="truncate-end">
             {discussState.awaitingUser ? (
               <>
                 <Text color="cyan">{'> '}</Text>
-                {inputBuffer}
+                {/* Show the tail of a long line so the caret stays on screen. */}
+                {inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth))}
                 <Text inverse> </Text>
               </>
             ) : (
               <Text dimColor>… agent is thinking</Text>
             )}
           </Text>
-          <Text dimColor>enter: send · /done: finish · PgUp/PgDn: scroll · drag border: move/resize</Text>
+          <PanelFooter hint="enter: send · /done: finish · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pendingConvergence ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
-          <Text bold color="yellow">
-            Convergence — {pendingConvergence.req.nodeId} ({pendingConvergence.req.mode}
-            {pendingConvergence.req.mode === 'compare' ? ': pick exactly one' : ': pick one or more'}
-            )
-          </Text>
-          {pendingConvergence.req.branches.map((branch, i) => (
-            <Text key={branch.instanceId} wrap="truncate-end">
-              <Text {...(i === convCursor ? { color: 'cyan' } : {})}>
-                {i === convCursor ? '❯ ' : '  '}
-                {convSelected.has(branch.instanceId) ? '[x] ' : '[ ] '}
-                {branch.instanceId} ({branch.branch}) {branch.status === 'done' ? '●' : '✖'}{' '}
-              </Text>
-              <Text dimColor>{branch.diffSummary.split('\n').at(-1) ?? ''}</Text>
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Convergence — {pendingConvergence.req.nodeId} ({pendingConvergence.req.mode}
+              {pendingConvergence.req.mode === 'compare'
+                ? ': pick exactly one'
+                : ': pick one or more'}
+              )
             </Text>
-          ))}
-          <Text dimColor>↑/↓: move · space: select · enter: confirm</Text>
+          </PanelTitle>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            {pendingConvergence.req.branches.map((branch, i) => (
+              <Text key={branch.instanceId} wrap="truncate-end">
+                <Text {...(i === convCursor ? { color: 'cyan' } : {})}>
+                  {i === convCursor ? '❯ ' : '  '}
+                  {convSelected.has(branch.instanceId) ? '[x] ' : '[ ] '}
+                  {branch.instanceId} ({branch.branch}) {branch.status === 'done' ? '●' : '✖'}{' '}
+                </Text>
+                <Text dimColor>{branch.diffSummary.split('\n').at(-1) ?? ''}</Text>
+              </Text>
+            ))}
+          </Box>
+          <PanelFooter hint="↑/↓: move · space: select · enter: confirm · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pendingApproval ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
-          <Text bold color="yellow">
-            Approval — {pendingApproval.req.title}
-          </Text>
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Approval — {pendingApproval.req.title}
+            </Text>
+          </PanelTitle>
           {pendingApproval.req.pushTarget ? (
             <Text color="red">
               On approval, `{pendingApproval.req.pushTarget.nodeId}` will push to{' '}
@@ -464,75 +556,85 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           <Text dimColor>
             upstream: {pendingApproval.req.upstreamSummaries.map((u) => u.nodeId).join(', ') || '—'}
           </Text>
-          {(() => {
-            const lines = pendingApproval.req.diffs.flatMap((d) => [
-              ...(d.label ? [`── ${d.label} ──`] : []),
-              ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
-            ]);
-            const visible = Math.max(1, panelHeight - 6);
-            const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
-            return lines.slice(start, start + visible).map((line, i) => (
-              <Text
-                key={i}
-                wrap="truncate-end"
-                {...(line.startsWith('+')
-                  ? { color: 'green' }
-                  : line.startsWith('-')
-                    ? { color: 'red' }
-                    : {})}
-                dimColor={line.startsWith('@@') || line.startsWith('──')}
-              >
-                {line || ' '}
-              </Text>
-            ));
-          })()}
-          <Text dimColor>[a] approve · [r] reject · j/k: scroll diff</Text>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            {(() => {
+              const lines = pendingApproval.req.diffs.flatMap((d) => [
+                ...(d.label ? [`── ${d.label} ──`] : []),
+                ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
+              ]);
+              const visible = Math.max(1, panelHeight - 6);
+              const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
+              return lines.slice(start, start + visible).map((line, i) => (
+                <Text
+                  key={i}
+                  wrap="truncate-end"
+                  {...(line.startsWith('+')
+                    ? { color: 'green' }
+                    : line.startsWith('-')
+                      ? { color: 'red' }
+                      : {})}
+                  dimColor={line.startsWith('@@') || line.startsWith('──')}
+                >
+                  {line || ' '}
+                </Text>
+              ));
+            })()}
+          </Box>
+          <PanelFooter hint="[a] approve · [r] reject · j/k: scroll diff · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : expanded && focusedNode ? (
-        <Box flexDirection="column" borderStyle="round" paddingX={1} {...panelBoxProps}>
+        <Box {...panelBoxProps}>
           {(() => {
             const state = runState.nodes[focusedNode.id]!;
             const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
             const live = store.liveOutputFor(focusedNode.id);
             const liveLines = live.length > 0 ? live.trimEnd().split('\n') : [];
-            const outputBudget = Math.max(1, Math.floor((panelHeight - 5) / 2));
-            const activityBudget = Math.max(1, panelHeight - 5 - outputBudget);
+            // Rows left for output + activity: the panel minus its borders,
+            // title, config line, activity separator and footer.
+            const bodyBudget = Math.max(2, panelHeight - 6);
+            const outputBudget = Math.max(1, Math.floor(bodyBudget / 2));
+            const activityBudget = Math.max(1, bodyBudget - outputBudget);
             return (
               <>
-                <Text bold>
-                  {focusedNode.id} <Text dimColor>({focusedNode.type.displayName})</Text>{' '}
-                  {STATUS_GLYPHS[state.status]} {state.status}
-                  {state.statusDetail ? <Text dimColor> — {state.statusDetail}</Text> : null}
-                  {state.denials > 0 ? (
-                    <Text color="red" bold>
-                      {'  '}⚠ {state.denials} blocked action{state.denials > 1 ? 's' : ''}
+                <PanelTitle>
+                  <Text bold wrap="truncate-end">
+                    {focusedNode.id} <Text dimColor>({focusedNode.type.displayName})</Text>{' '}
+                    {STATUS_GLYPHS[state.status]} {state.status}
+                    {state.statusDetail ? <Text dimColor> — {state.statusDetail}</Text> : null}
+                    {state.denials > 0 ? (
+                      <Text color="red" bold>
+                        {'  '}⚠ {state.denials} blocked action{state.denials > 1 ? 's' : ''}
+                      </Text>
+                    ) : null}
+                  </Text>
+                </PanelTitle>
+                <Box flexDirection="column" flexGrow={1} overflow="hidden">
+                  <Text dimColor wrap="truncate-end">
+                    config: {JSON.stringify(focusedNode.config)}
+                  </Text>
+                  {(state.priorAttempts?.length ?? 0) > 0 ? (
+                    <Text color="magenta" wrap="truncate-end">
+                      attempt {state.attempt ?? 1} — earlier:{' '}
+                      {state.priorAttempts!.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
                     </Text>
                   ) : null}
-                </Text>
-                <Text dimColor wrap="truncate-end">
-                  config: {JSON.stringify(focusedNode.config)}
-                </Text>
-                {(state.priorAttempts?.length ?? 0) > 0 ? (
-                  <Text color="magenta" wrap="truncate-end">
-                    attempt {state.attempt ?? 1} — earlier:{' '}
-                    {state.priorAttempts!.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
-                  </Text>
-                ) : null}
-                {tail(liveLines, outputBudget).map((line, i) => (
-                  <Text key={`o${i}`} wrap="truncate-end">
-                    {line || ' '}
-                  </Text>
-                ))}
-                {activity.length > 0 ? <Text dimColor>── activity ──</Text> : null}
-                {tail(activity, activityBudget).map((entry, i) => (
-                  <Text
-                    key={`a${i}`}
-                    wrap="truncate-end"
-                    {...(entry.decision === 'denied' ? { color: 'red' } : {})}
-                  >
-                    {formatActivityRow(entry)}
-                  </Text>
-                ))}
+                  {tail(liveLines, outputBudget).map((line, i) => (
+                    <Text key={`o${i}`} wrap="truncate-end">
+                      {line || ' '}
+                    </Text>
+                  ))}
+                  {activity.length > 0 ? <Text dimColor>── activity ──</Text> : null}
+                  {tail(activity, activityBudget).map((entry, i) => (
+                    <Text
+                      key={`a${i}`}
+                      wrap="truncate-end"
+                      {...(entry.decision === 'denied' ? { color: 'red' } : {})}
+                    >
+                      {formatActivityRow(entry)}
+                    </Text>
+                  ))}
+                </Box>
+                <PanelFooter hint="enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
               </>
             );
           })()}
