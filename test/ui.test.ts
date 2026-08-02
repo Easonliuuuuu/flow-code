@@ -101,6 +101,95 @@ describe('canvas rendering', () => {
   });
 });
 
+const LOOP_WF = workflowFromYaml(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: impl, loopback: true }
+`);
+
+const FORWARD_WF = workflowFromYaml(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+edges:
+  - { from: impl, to: check }
+`);
+
+function renderText(wf: typeof LOOP_WF, state: ReturnType<typeof storeFor>): string {
+  const layout = computeLayout(wf);
+  const grid = renderGraph(wf, layout, state.snapshot(), null);
+  return gridToLines(grid, {
+    ox: 0,
+    oy: 0,
+    width: layout.width + 2,
+    height: grid.length,
+  })
+    .join('\n')
+    .replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+describe('loop-back rendering', () => {
+  it('lays out identically with and without a loop-back', () => {
+    const looped = computeLayout(LOOP_WF);
+    const forward = computeLayout(FORWARD_WF);
+    for (const id of ['impl', 'check']) {
+      expect(looped.boxes.get(id)!.x).toBe(forward.boxes.get(id)!.x);
+      expect(looped.boxes.get(id)!.y).toBe(forward.boxes.get(id)!.y);
+      expect(looped.boxes.get(id)!.layer).toBe(forward.boxes.get(id)!.layer);
+    }
+  });
+
+  it('draws the return path distinctly from forward edges', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    const text = renderText(LOOP_WF, store);
+    // Forward edges use ─ ▶; the return path uses a dashed run and ▲.
+    expect(text).toContain('▶');
+    expect(text).toContain('╌');
+    expect(text).toContain('▲');
+    expect(renderText(FORWARD_WF, storeFor(FORWARD_WF, '/tmp'))).not.toContain('╌');
+  });
+
+  it('uses a distinct style for the return path', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    const layout = computeLayout(LOOP_WF);
+    const grid = renderGraph(LOOP_WF, layout, store.snapshot(), null);
+    const styles = new Set(grid.flat().map((c) => c.style));
+    expect(styles.has('loopback')).toBe(true);
+  });
+
+  it('shows no attempt badge on a first attempt', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    store.setStatus('impl', 'done');
+    expect(renderText(LOOP_WF, store)).not.toContain('↻');
+  });
+
+  it('badges a re-run node and marks the loop that fired', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    store.setStatus('check', 'error', 'Validate verdict: fail');
+    store.resetNode('check');
+    store.resetNode('impl');
+    const text = renderText(LOOP_WF, store);
+    expect(text).toContain('↻2');
+    expect(text).toContain('retry from check');
+  });
+
+  it('renders reset nodes as idle again', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    store.setStatus('impl', 'done');
+    store.resetNode('impl');
+    expect(renderText(LOOP_WF, store)).toContain(`${STATUS_GLYPHS.idle} impl`);
+  });
+});
+
 describe('mouse parsing (SGR)', () => {
   it('parses press, drag, and release with 0-based coordinates', () => {
     expect(parseMouseEvents('\x1b[<0;5;3M')).toEqual([{ kind: 'press', x: 4, y: 2, button: 0 }]);

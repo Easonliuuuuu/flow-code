@@ -379,6 +379,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
                 <Text dimColor wrap="truncate-end">
                   config: {JSON.stringify(focusedNode.config)}
                 </Text>
+                {(state.priorAttempts?.length ?? 0) > 0 ? (
+                  <Text color="magenta" wrap="truncate-end">
+                    attempt {state.attempt ?? 1} — earlier:{' '}
+                    {state.priorAttempts!.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
+                  </Text>
+                ) : null}
                 {tail(liveLines, outputBudget).map((line, i) => (
                   <Text key={`o${i}`} wrap="truncate-end">
                     {line || ' '}

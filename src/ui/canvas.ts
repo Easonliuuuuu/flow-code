@@ -39,6 +39,9 @@ const ANSI: Record<string, string> = {
   label: '',
   focus: '\x1b[1;36m',
   blocked: '\x1b[31;1m',
+  // Return paths read as a different kind of line from forward edges.
+  loopback: '\x1b[35m',
+  'loopback-fired': '\x1b[1;35m',
 };
 const RESET = '\x1b[0m';
 
@@ -67,10 +70,14 @@ export function renderGraph(
   runState: RunState,
   focusedId: string | null,
 ): Grid {
-  const grid = makeGrid(layout.width + 2, layout.height + 1);
+  const loopbacks = workflow.graph.allLoopbacks();
+  // Each return path gets its own row below the boxes so they never collide
+  // with each other or with the forward elbows between the same two nodes.
+  const bandTop = layout.height + 1;
+  const grid = makeGrid(layout.width + 2, bandTop + loopbacks.length + 1);
 
-  // Edges under boxes.
-  for (const edge of workflow.edges) {
+  // Edges under boxes. Loop-backs are not dependencies and are drawn below.
+  for (const edge of workflow.edges.filter((e) => !e.loopback)) {
     const from = layout.boxes.get(edge.from)!;
     const to = layout.boxes.get(edge.to)!;
     const sx = from.x + from.w;
@@ -90,6 +97,38 @@ export function renderGraph(
     for (let x = mid + 1; x < tx; x++) put(grid, x, ty, '─', 'edge');
     put(grid, tx, ty, '▶', 'edge');
   }
+
+  // Return paths: down out of the failing node, back along a reserved row,
+  // then up into the node execution resumes at.
+  loopbacks.forEach((loop, i) => {
+    const from = layout.boxes.get(loop.from);
+    const to = layout.boxes.get(loop.to);
+    if (!from || !to) return;
+    const bandY = bandTop + i;
+    const sx = from.x + Math.floor(from.w / 2);
+    const tx = to.x + Math.floor(to.w / 2);
+    // A loop that has actually fired is drawn brighter, and says so.
+    const fired =
+      (runState.nodes[loop.to]?.attempt ?? 1) > 1 &&
+      (runState.nodes[loop.from]?.priorAttempts?.length ?? 0) > 0;
+    const style = fired ? 'loopback-fired' : 'loopback';
+
+    for (let y = from.y + from.h; y < bandY; y++) put(grid, sx, y, '╎', style);
+    put(grid, sx, bandY, '╯', style);
+    const [left, right] = tx < sx ? [tx, sx] : [sx, tx];
+    for (let x = left + 1; x < right; x++) put(grid, x, bandY, '╌', style);
+    put(grid, tx, bandY, '╰', style);
+    for (let y = to.y + to.h + 1; y < bandY; y++) put(grid, tx, y, '╎', style);
+    put(grid, tx, to.y + to.h, '▲', style);
+
+    if (fired) {
+      const label = ` ↻ retry from ${loop.from} `;
+      const span = right - left - 1;
+      if (span >= label.length) {
+        put(grid, left + 1 + Math.floor((span - label.length) / 2), bandY, label, style);
+      }
+    }
+  });
 
   // Boxes.
   for (const node of workflow.nodes) {
@@ -113,6 +152,13 @@ export function renderGraph(
     const typeLabel = ` ${node.type.displayName}`.slice(0, inner).padEnd(inner);
     put(grid, box.x, box.y + 2, '│', style);
     put(grid, box.x + 1, box.y + 2, typeLabel, focused ? 'focus' : 'dim');
+    // Only a node a loop-back has re-run carries a badge; a first attempt is
+    // the ordinary case and says nothing.
+    const attempt = state.attempt ?? 1;
+    if (attempt > 1) {
+      const badge = `↻${attempt}`;
+      put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
+    }
     put(grid, box.x + box.w - 1, box.y + 2, '│', style);
     put(grid, box.x, box.y + 3, `╰${'─'.repeat(inner)}╯`, style);
   }
