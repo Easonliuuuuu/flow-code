@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { gridToLines, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
-import { parseMouseEvents } from '../src/ui/mouse.js';
+import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import { RunInterruptedError } from '../src/engine/types.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import { wrapText } from '../src/ui/textwrap.js';
@@ -199,6 +199,21 @@ describe('mouse parsing (SGR)', () => {
 
   it('ignores non-mouse input entirely (graceful no-mouse fallback)', () => {
     expect(parseMouseEvents('hello\x1b[Aworld')).toEqual([]);
+  });
+
+  it('parses wheel up/down as scroll events, not clicks', () => {
+    expect(parseMouseEvents('\x1b[<64;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 0, direction: 'up' },
+    ]);
+    expect(parseMouseEvents('\x1b[<65;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 1, direction: 'down' },
+    ]);
+  });
+
+  it('recognizes the bare sequence ink hands back after stripping ESC', () => {
+    expect(LEAKED_MOUSE_SEQUENCE.test('[<0;5;3M')).toBe(true);
+    expect(LEAKED_MOUSE_SEQUENCE.test('[<64;5;3M')).toBe(true);
+    expect(LEAKED_MOUSE_SEQUENCE.test('hello')).toBe(false);
   });
 });
 

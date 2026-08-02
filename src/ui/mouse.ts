@@ -5,11 +5,13 @@
  */
 
 export interface MouseEvent {
-  kind: 'press' | 'drag' | 'release';
+  kind: 'press' | 'drag' | 'release' | 'scroll';
   /** 0-based cell coordinates. */
   x: number;
   y: number;
   button: number;
+  /** Only set when kind is 'scroll'. */
+  direction?: 'up' | 'down';
 }
 
 const ENABLE = '\x1b[?1002h\x1b[?1006h';
@@ -25,6 +27,12 @@ export function disableMouse(stdout: NodeJS.WriteStream): void {
 
 const SGR_PATTERN = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 
+/** Bit 6 of the SGR button code marks wheel events (button numbers 64-67). */
+const WHEEL_BIT = 64;
+
+/** Matches a bare SGR mouse sequence once ink has stripped its leading ESC. */
+export const LEAKED_MOUSE_SEQUENCE = /^\[<\d+;\d+;\d+[Mm]$/;
+
 export function parseMouseEvents(data: string): MouseEvent[] {
   const events: MouseEvent[] = [];
   for (const match of data.matchAll(SGR_PATTERN)) {
@@ -32,6 +40,11 @@ export function parseMouseEvents(data: string): MouseEvent[] {
     const x = Number(match[2]) - 1;
     const y = Number(match[3]) - 1;
     const release = match[4] === 'm';
+    if ((code & WHEEL_BIT) !== 0) {
+      const direction = (code & 0b1) === 0 ? 'up' : 'down';
+      events.push({ kind: 'scroll', x, y, button: code & 0b11, direction });
+      continue;
+    }
     const button = code & 0b11;
     const motion = (code & 32) !== 0;
     events.push({ kind: release ? 'release' : motion ? 'drag' : 'press', x, y, button });
