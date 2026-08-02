@@ -3,8 +3,17 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } fr
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { Engine } from './engine/engine.js';
-import { preflight, PreflightError } from './engine/preflight.js';
-import { CompositeSessionRunner, NvidiaSessionRunner, SdkSessionRunner } from './executors/index.js';
+import { discussCredentialsPath, loadDiscussCredentials, saveDiscussCredentials } from './engine/discussCredentials.js';
+import { preflight, PreflightError, defaultCredentialsResolver } from './engine/preflight.js';
+import { DISCUSS_PROVIDERS, discussProviderInfo, type DiscussProviderId } from './engine/providers.js';
+import type { SessionRunner } from './engine/types.js';
+import {
+  CompositeSessionRunner,
+  NvidiaSessionRunner,
+  OpenAiSessionRunner,
+  OpenRouterSessionRunner,
+  SdkSessionRunner,
+} from './executors/index.js';
 import { builtinExecutors } from './executors/index.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { listNodeTypes } from './registry/index.js';
@@ -36,7 +45,7 @@ function fail(message: string): never {
 /** Keep run-state and worktrees out of untracked-change detection and diffs. */
 function ensureGitExclude(repoRoot: string): void {
   const excludePath = join(repoRoot, '.git', 'info', 'exclude');
-  const wanted = ['.flow-code/runs/', '.flow-code/worktrees/'];
+  const wanted = ['.flow-code/runs/', '.flow-code/worktrees/', '.flow-code/credentials.json'];
   let current = '';
   try {
     current = readFileSync(excludePath, 'utf8');
@@ -56,6 +65,123 @@ async function confirm(question: string): Promise<boolean> {
   const answer = (await rl.question(`${question} [y/N] `)).trim().toLowerCase();
   rl.close();
   return answer === 'y' || answer === 'yes';
+}
+
+/** Reads one line from stdin without echoing it, masking each keystroke with `*`. Caller must check isTTY first. */
+async function promptSecret(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(question);
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw ?? false;
+    stdin.resume();
+    stdin.setEncoding('utf8');
+    stdin.setRawMode?.(true);
+
+    let value = '';
+    const cleanup = (): void => {
+      stdin.removeListener('data', onData);
+      stdin.setRawMode?.(wasRaw);
+      stdin.pause();
+    };
+    const onData = (chunk: string): void => {
+      for (const char of chunk) {
+        if (char === '\n' || char === '\r') {
+          cleanup();
+          process.stdout.write('\n');
+          resolve(value);
+          return;
+        }
+        if (char === '\u0003') {
+          // ctrl+c
+          cleanup();
+          process.stdout.write('\n');
+          process.exit(130);
+        }
+        if (char === '\u007f' || char === '\b') {
+          if (value.length > 0) {
+            value = value.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+          continue;
+        }
+        value += char;
+        process.stdout.write('*');
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
+/**
+ * Determines which provider Discuss should run against for this run, and
+ * makes sure its API key ends up in the environment. Order of preference:
+ * a previously saved per-repo choice, then an already-set env var for any
+ * provider, then (interactively, TTY only) a prompt to pick one and paste a
+ * key — with an offer to save it for next time. Headless (no TTY, e.g. CI)
+ * and workflows without a Discuss node both fall back to 'claude' untouched,
+ * preserving the pre-existing default behavior.
+ */
+async function resolveDiscussProvider(
+  repoRoot: string,
+  workflow: { nodes: Array<{ type: { id: string } }> },
+): Promise<DiscussProviderId> {
+  if (!workflow.nodes.some((n) => n.type.id === 'discuss')) return 'claude';
+
+  const saved = loadDiscussCredentials(repoRoot);
+  if (saved) {
+    const envVar = discussProviderInfo(saved.provider).apiKeyEnvVar;
+    if (envVar && saved.apiKey && !process.env[envVar]) {
+      process.env[envVar] = saved.apiKey;
+    }
+    return saved.provider;
+  }
+
+  for (const info of DISCUSS_PROVIDERS) {
+    if (info.apiKeyEnvVar && process.env[info.apiKeyEnvVar]) return info.id;
+  }
+  if (defaultCredentialsResolver()) return 'claude';
+
+  if (!process.stdin.isTTY) return 'claude';
+
+  console.log('\nflow-code: Discuss needs a model provider — pick one (or set the env var and re-run):');
+  DISCUSS_PROVIDERS.forEach((p, i) => {
+    console.log(`  ${i + 1}) ${p.label}${p.apiKeyEnvVar ? ` (${p.apiKeyEnvVar})` : ' (existing claude login)'}`);
+  });
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  let choice: (typeof DISCUSS_PROVIDERS)[number] | undefined;
+  while (!choice) {
+    const answer = (await rl.question(`Select a provider [1-${DISCUSS_PROVIDERS.length}, default 1]: `)).trim();
+    const idx = answer === '' ? 0 : Number(answer) - 1;
+    choice = DISCUSS_PROVIDERS[idx];
+    if (!choice) console.log('  invalid choice — try again.');
+  }
+  rl.close();
+
+  if (!choice.apiKeyEnvVar) return choice.id;
+  if (process.env[choice.apiKeyEnvVar]) return choice.id;
+
+  const apiKey = await promptSecret(`${choice.label} API key: `);
+  process.env[choice.apiKeyEnvVar] = apiKey;
+
+  if (await confirm(`Save this key for future runs in this repo (${discussCredentialsPath(repoRoot)})?`)) {
+    saveDiscussCredentials(repoRoot, { provider: choice.id, apiKey });
+    ensureGitExclude(repoRoot);
+  }
+
+  return choice.id;
+}
+
+function buildDiscussRunner(provider: DiscussProviderId): SessionRunner {
+  switch (provider) {
+    case 'claude':
+      return new SdkSessionRunner();
+    case 'nvidia':
+      return new NvidiaSessionRunner();
+    case 'openai':
+      return new OpenAiSessionRunner();
+    case 'openrouter':
+      return new OpenRouterSessionRunner();
+  }
 }
 
 async function cmdInit(): Promise<void> {
@@ -134,6 +260,8 @@ async function cmdRun(args: string[]): Promise<void> {
     throw err;
   }
 
+  const discussProvider = await resolveDiscussProvider(repoRoot, workflow);
+
   let resumeState: RunState | undefined;
   if (resuming) {
     resumeState = resumeRunId
@@ -176,7 +304,7 @@ async function cmdRun(args: string[]): Promise<void> {
   try {
     // A resumed tree is expected to carry the interrupted work's uncommitted
     // changes — the normal dirty-tree refusal doesn't apply here.
-    await preflight(workflow, repoRoot, { allowDirty: allowDirty || resuming });
+    await preflight(workflow, repoRoot, { allowDirty: allowDirty || resuming, discussProvider });
   } catch (err) {
     if (err instanceof PreflightError) fail(err.message);
     throw err;
@@ -235,7 +363,7 @@ async function cmdRun(args: string[]): Promise<void> {
     repoRoot,
     baseline,
     ports,
-    sessions: new CompositeSessionRunner(workflow, new SdkSessionRunner(), new NvidiaSessionRunner()),
+    sessions: new CompositeSessionRunner(workflow, buildDiscussRunner(discussProvider), new NvidiaSessionRunner()),
     executors: builtinExecutors,
     signal: abortController.signal,
   });

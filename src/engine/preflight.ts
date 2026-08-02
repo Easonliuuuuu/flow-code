@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
 import type { Workflow } from '../workflow/load.js';
+import { discussProviderInfo, type DiscussProviderId } from './providers.js';
 
 export type PreflightFailureKind =
   | 'credentials'
@@ -30,6 +31,13 @@ export function defaultNvidiaCredentialsResolver(): boolean {
   return Boolean(process.env['NVIDIA_API_KEY']);
 }
 
+/** Checks the env var for whichever provider Discuss is configured to use. */
+export function defaultDiscussCredentialsResolver(provider: DiscussProviderId): boolean {
+  if (provider === 'claude') return defaultCredentialsResolver();
+  const envVar = discussProviderInfo(provider).apiKeyEnvVar!;
+  return Boolean(process.env[envVar]);
+}
+
 /** Every agent-driven node type other than Discuss routes to the NVIDIA-backed runner. */
 export function workflowNeedsNvidia(workflow: Workflow): boolean {
   return workflow.nodes.some((n) => n.type.agentDriven && n.type.id !== 'discuss');
@@ -37,8 +45,10 @@ export function workflowNeedsNvidia(workflow: Workflow): boolean {
 
 export interface PreflightOptions {
   allowDirty: boolean;
+  /** Which provider Discuss is configured to use; defaults to 'claude' (back-compat). */
+  discussProvider?: DiscussProviderId;
   /** Injectable for tests. */
-  credentialsResolver?: () => boolean;
+  credentialsResolver?: (provider: DiscussProviderId) => boolean;
   /** Injectable for tests. */
   nvidiaCredentialsResolver?: () => boolean;
 }
@@ -53,12 +63,18 @@ export async function preflight(
   repoRoot: string,
   opts: PreflightOptions,
 ): Promise<void> {
-  const hasCredentials = (opts.credentialsResolver ?? defaultCredentialsResolver)();
-  if (!hasCredentials) {
-    throw new PreflightError(
-      'credentials',
-      'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI.',
-    );
+  const hasDiscussNode = workflow.nodes.some((n) => n.type.id === 'discuss');
+  if (hasDiscussNode) {
+    const discussProvider = opts.discussProvider ?? 'claude';
+    const hasCredentials = (opts.credentialsResolver ?? defaultDiscussCredentialsResolver)(discussProvider);
+    if (!hasCredentials) {
+      throw new PreflightError(
+        'credentials',
+        discussProvider === 'claude'
+          ? 'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI.'
+          : `No ${discussProviderInfo(discussProvider).label} API key found. Set the ${discussProviderInfo(discussProvider).apiKeyEnvVar} environment variable, or re-run to be prompted for one.`,
+      );
+    }
   }
 
   if (workflowNeedsNvidia(workflow)) {

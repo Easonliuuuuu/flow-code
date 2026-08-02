@@ -3,18 +3,19 @@ import type { AgentSessionRequest, InteractiveAgentSession, SessionRunner } from
 import type { Workflow } from '../workflow/load.js';
 
 /**
- * Routes each node's session to a runner by node type: `discuss` goes to the
- * Claude Agent SDK runner (interactive, and free for anyone already logged
- * into Claude Code); every other agent-driven node type goes to the
- * NVIDIA-backed runner. See design.md in the add-nvidia-session-runner
- * change for why Discuss isn't ported yet.
+ * Routes each node's session to a runner by node type: `discuss` goes to
+ * whichever runner backs the user's chosen Discuss provider (Claude by
+ * default; NVIDIA/OpenAI/OpenRouter also supported — see engine/providers.ts
+ * and the CLI's provider-selection prompt); every other agent-driven node
+ * type goes to the NVIDIA-backed runner. See design.md in the
+ * add-nvidia-session-runner change for the original NVIDIA-only rollout.
  */
 export class CompositeSessionRunner implements SessionRunner {
   private readonly typeByNodeId: Map<string, string>;
 
   constructor(
     workflow: Workflow,
-    private readonly claudeRunner: SessionRunner,
+    private readonly discussRunner: SessionRunner,
     private readonly nvidiaRunner: SessionRunner,
   ) {
     this.typeByNodeId = new Map(workflow.nodes.map((n) => [n.id, n.type.id]));
@@ -25,7 +26,7 @@ export class CompositeSessionRunner implements SessionRunner {
     if (typeId === undefined) {
       throw new Error(`CompositeSessionRunner: unknown node id "${nodeId}"`);
     }
-    return typeId === 'discuss' ? this.claudeRunner : this.nvidiaRunner;
+    return typeId === 'discuss' ? this.discussRunner : this.nvidiaRunner;
   }
 
   async run(req: AgentSessionRequest, store: RunStateStore): Promise<{ finalText: string }> {
