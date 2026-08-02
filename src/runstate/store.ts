@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ActivityEntry,
+  DiscussTranscriptEntry,
   NodeRunState,
   NodeStatus,
   RunBaseline,
@@ -26,18 +27,43 @@ export class RunStateStore {
   private liveOutput = new Map<string, string>();
   private persister: StorePersister | undefined;
 
-  constructor(opts: { runId?: string; repoRoot: string; nodeIds: string[] }) {
+  constructor(opts: {
+    runId?: string;
+    repoRoot: string;
+    nodeIds: string[];
+    /**
+     * Continue a previously-interrupted run under its own runId: nodes
+     * already `done` keep their recorded state; everything else resets to
+     * `idle` but keeps its Discuss transcript/session id, so `--resume`
+     * picks the conversation back up instead of starting blank.
+     */
+    resumeFrom?: RunState;
+  }) {
     const nodes: Record<string, NodeRunState> = {};
-    for (const id of opts.nodeIds) nodes[id] = { status: 'idle', denials: 0 };
+    for (const id of opts.nodeIds) {
+      const prior = opts.resumeFrom?.nodes[id];
+      if (!prior) {
+        nodes[id] = { status: 'idle', denials: 0 };
+      } else if (prior.status === 'done') {
+        nodes[id] = prior;
+      } else {
+        nodes[id] = {
+          status: 'idle',
+          denials: 0,
+          ...(prior.discussTranscript ? { discussTranscript: prior.discussTranscript } : {}),
+          ...(prior.sessionId ? { sessionId: prior.sessionId } : {}),
+        };
+      }
+    }
     this.state = {
-      runId: opts.runId ?? randomUUID(),
-      createdAt: new Date().toISOString(),
+      runId: opts.resumeFrom?.runId ?? opts.runId ?? randomUUID(),
+      createdAt: opts.resumeFrom?.createdAt ?? new Date().toISOString(),
       repoRoot: opts.repoRoot,
       pid: process.pid,
-      baseline: null,
+      baseline: opts.resumeFrom?.baseline ?? null,
       nodes,
-      worktrees: [],
-      activity: [],
+      worktrees: opts.resumeFrom?.worktrees ?? [],
+      activity: opts.resumeFrom?.activity ?? [],
     };
   }
 
@@ -157,8 +183,22 @@ export class RunStateStore {
     return this.liveOutput.get(nodeId) ?? '';
   }
 
-  markFinished(): void {
+  appendDiscussMessage(nodeId: string, entry: DiscussTranscriptEntry): void {
+    const node = this.node(nodeId);
+    const discussTranscript = [...(node.discussTranscript ?? []), entry];
+    this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, discussTranscript } };
+    this.commit();
+  }
+
+  setSessionId(nodeId: string, sessionId: string): void {
+    const node = this.node(nodeId);
+    this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, sessionId } };
+    this.commit();
+  }
+
+  markFinished(interrupted = false): void {
     this.state.finishedAt = new Date().toISOString();
+    this.state.interrupted = interrupted;
     this.commit();
   }
 

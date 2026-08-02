@@ -8,8 +8,13 @@ import { CompositeSessionRunner, NvidiaSessionRunner, SdkSessionRunner } from '.
 import { builtinExecutors } from './executors/index.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { listNodeTypes } from './registry/index.js';
-import { FileRunStatePersister } from './runstate/persist.js';
+import {
+  FileRunStatePersister,
+  findInterruptedRun,
+  findLatestInterruptedRun,
+} from './runstate/persist.js';
 import { RunStateStore } from './runstate/store.js';
+import type { RunState } from './runstate/types.js';
 import { runUi, UiInteractionPorts } from './ui/index.js';
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
 import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError } from './workflow/load.js';
@@ -103,6 +108,12 @@ async function cmdDoctor(args: string[]): Promise<void> {
 
 async function cmdRun(args: string[]): Promise<void> {
   const allowDirty = args.includes('--allow-dirty');
+  const resumeIdx = args.indexOf('--resume');
+  const resuming = resumeIdx >= 0;
+  const resumeRunId =
+    resuming && args[resumeIdx + 1] !== undefined && !args[resumeIdx + 1]!.startsWith('-')
+      ? args[resumeIdx + 1]
+      : undefined;
   const repoRoot = await repoRootFromCwd();
 
   let workflow;
@@ -117,27 +128,96 @@ async function cmdRun(args: string[]): Promise<void> {
     throw err;
   }
 
-  // Reconcile orphans from crashed runs before starting a new one.
-  const orphans = findOrphanedWorktrees(repoRoot);
-  if (orphans.length > 0) {
-    console.log(`flow-code: ${orphans.length} orphaned worktree(s) found from a previous run.`);
-    if (await confirm('Clean them up before starting?')) {
-      await removeOrphanedWorktrees(repoRoot, orphans);
-    } else {
-      console.log('flow-code: continuing; run `flow-code doctor` to clean up later.');
+  let resumeState: RunState | undefined;
+  if (resuming) {
+    resumeState = resumeRunId
+      ? findInterruptedRun(repoRoot, resumeRunId)
+      : findLatestInterruptedRun(repoRoot);
+    if (!resumeState) {
+      fail(
+        resumeRunId
+          ? `no interrupted run \`${resumeRunId}\` found to resume.`
+          : 'no interrupted run found to resume — start a new one with `flow-code run`.',
+      );
+    }
+    const currentIds = new Set(workflow.nodes.map((n) => n.id));
+    const missing = Object.keys(resumeState.nodes).filter((id) => !currentIds.has(id));
+    if (missing.length > 0) {
+      fail(
+        `the workflow has changed since run ${resumeState.runId.slice(0, 8)} — ` +
+          `missing node(s): ${missing.join(', ')}. Start a new run instead.`,
+      );
+    }
+    if (!resumeState.baseline) {
+      fail(`run ${resumeState.runId.slice(0, 8)} has no recorded baseline — cannot resume.`);
+    }
+  } else {
+    // Reconcile orphans from crashed runs before starting a new one. Skipped
+    // while resuming: this run's own retained worktrees would show up here
+    // too (nothing distinguishes them from a truly abandoned run) and must
+    // not be offered up for deletion.
+    const orphans = findOrphanedWorktrees(repoRoot);
+    if (orphans.length > 0) {
+      console.log(`flow-code: ${orphans.length} orphaned worktree(s) found from a previous run.`);
+      if (await confirm('Clean them up before starting?')) {
+        await removeOrphanedWorktrees(repoRoot, orphans);
+      } else {
+        console.log('flow-code: continuing; run `flow-code doctor` to clean up later.');
+      }
     }
   }
 
   try {
-    await preflight(workflow, repoRoot, { allowDirty });
+    // A resumed tree is expected to carry the interrupted work's uncommitted
+    // changes — the normal dirty-tree refusal doesn't apply here.
+    await preflight(workflow, repoRoot, { allowDirty: allowDirty || resuming });
   } catch (err) {
     if (err instanceof PreflightError) fail(err.message);
     throw err;
   }
 
   ensureGitExclude(repoRoot);
-  const baseline = await recordBaseline(repoRoot, allowDirty);
-  const store = new RunStateStore({ repoRoot, nodeIds: workflow.nodes.map((n) => n.id) });
+
+  let baseline;
+  let store: RunStateStore;
+  if (resumeState) {
+    baseline = resumeState.baseline!;
+    // Any node not already `done` restarts from scratch; clear its old
+    // worktree (if any) first so the retry doesn't collide with the same
+    // dir/branch the interrupted attempt used.
+    const resetNodeIds = new Set(
+      Object.entries(resumeState.nodes)
+        .filter(([, n]) => n.status !== 'done')
+        .map(([id]) => id),
+    );
+    for (const wt of resumeState.worktrees) {
+      if (wt.removed || !resetNodeIds.has(wt.nodeId)) continue;
+      if (existsSync(wt.dir)) {
+        try {
+          await removeWorktree(repoRoot, wt.dir);
+        } catch {
+          // best-effort — addWorktree will surface a real problem below
+        }
+      }
+      // addWorktree re-creates this branch with `-b`, which fails outright
+      // if it already exists from the interrupted attempt.
+      try {
+        await git(['branch', '-D', wt.branch], repoRoot);
+      } catch {
+        // never existed, or already gone — fine either way
+      }
+      wt.removed = true;
+    }
+    store = new RunStateStore({
+      repoRoot,
+      nodeIds: workflow.nodes.map((n) => n.id),
+      resumeFrom: resumeState,
+    });
+    console.log(`flow-code: resuming run ${store.runId.slice(0, 8)}.`);
+  } else {
+    baseline = await recordBaseline(repoRoot, allowDirty);
+    store = new RunStateStore({ repoRoot, nodeIds: workflow.nodes.map((n) => n.id) });
+  }
   store.attachPersister(new FileRunStatePersister(repoRoot));
   store.setBaseline(baseline);
 
@@ -222,6 +302,11 @@ Usage:
   flow-code init              Scaffold .flow-code/workflow.yaml with the default graph
   flow-code run [--allow-dirty]
                               Run the workflow (refuses a dirty tree unless overridden)
+  flow-code run --resume [runId]
+                              Resume a run interrupted by ctrl+c/SIGTERM (defaults to the
+                              most recent one); completed nodes are kept, the rest re-run,
+                              and an interrupted Discuss conversation picks back up with
+                              full history
   flow-code node-types        List built-in node types, capabilities, config and output shapes
   flow-code doctor [--yes]    List/remove orphaned worktrees from crashed runs
 `;

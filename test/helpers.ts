@@ -10,6 +10,7 @@ import type {
   InteractiveAgentSession,
   SessionRunner,
 } from '../src/engine/types.js';
+import type { DiscussTranscriptEntry } from '../src/runstate/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { loadWorkflowFromString, type Workflow } from '../src/workflow/load.js';
 
@@ -47,15 +48,22 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
   approvalRequests: ApprovalRequest[];
   convergenceRequests: ConvergenceRequest[];
   assistantTexts: string[];
+  beginCalls: Array<{ nodeId: string; topic: string | undefined; seedTranscript: DiscussTranscriptEntry[] }>;
 } {
   const approvalRequests: ApprovalRequest[] = [];
   const convergenceRequests: ConvergenceRequest[] = [];
   const assistantTexts: string[] = [];
+  const beginCalls: Array<{
+    nodeId: string;
+    topic: string | undefined;
+    seedTranscript: DiscussTranscriptEntry[];
+  }> = [];
   const remainingMessages = [...(opts.userMessages ?? [])];
   return {
     approvalRequests,
     convergenceRequests,
     assistantTexts,
+    beginCalls,
     approval: {
       async request(req) {
         approvalRequests.push(req);
@@ -71,7 +79,9 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
       },
     },
     discuss: {
-      begin() {},
+      begin(nodeId, topic, seedTranscript = []) {
+        beginCalls.push({ nodeId, topic, seedTranscript });
+      },
       postAssistant(_nodeId, text) {
         assistantTexts.push(text);
       },

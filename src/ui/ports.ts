@@ -4,11 +4,9 @@ import type {
   InteractionPorts,
 } from '../engine/types.js';
 import { RunInterruptedError } from '../engine/types.js';
+import type { DiscussTranscriptEntry } from '../runstate/types.js';
 
-export interface DiscussTranscriptEntry {
-  role: 'user' | 'assistant';
-  text: string;
-}
+export type { DiscussTranscriptEntry } from '../runstate/types.js';
 
 export interface DiscussUiState {
   nodeId: string;
@@ -107,8 +105,18 @@ export class UiInteractionPorts implements InteractionPorts {
   };
 
   discuss = {
-    begin: (nodeId: string, topic: string | undefined): void => {
-      this.discussState = { nodeId, topic, transcript: [], awaitingUser: false, active: true };
+    begin: (
+      nodeId: string,
+      topic: string | undefined,
+      seedTranscript: DiscussTranscriptEntry[] = [],
+    ): void => {
+      this.discussState = {
+        nodeId,
+        topic,
+        transcript: [...seedTranscript],
+        awaitingUser: false,
+        active: true,
+      };
       this.notify();
     },
     postAssistant: (nodeId: string, text: string): void => {

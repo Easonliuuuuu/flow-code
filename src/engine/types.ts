@@ -1,6 +1,6 @@
 import type { CapabilitySet } from '../capabilities.js';
 import type { RunStateStore } from '../runstate/store.js';
-import type { NodeStatus, RunBaseline } from '../runstate/types.js';
+import type { DiscussTranscriptEntry, NodeStatus, RunBaseline } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import type { RunSettings } from '../workflow/schema.js';
 
@@ -30,6 +30,10 @@ export interface AgentSessionRequest {
   onText?: (chunk: string) => void;
   /** Aborted when the run is interrupted (e.g. ctrl+c); cancels the underlying session/tool calls. */
   signal?: AbortSignal;
+  /** Reported once the underlying session id is known, so it can be persisted for `--resume`. */
+  onSessionId?: (sessionId: string) => void;
+  /** Continue a previously interrupted session with full history, instead of starting fresh. */
+  resumeSessionId?: string;
 }
 
 /** Thrown (or used to reject a pending port) when a run is interrupted mid-flight. */
@@ -77,8 +81,8 @@ export interface ConvergenceRequest {
 }
 
 export interface DiscussPort {
-  /** Called when the discussion opens. */
-  begin(nodeId: string, topic: string | undefined): void;
+  /** Called when the discussion opens; `seedTranscript` replays a resumed conversation into the UI. */
+  begin(nodeId: string, topic: string | undefined, seedTranscript?: DiscussTranscriptEntry[]): void;
   /** Assistant text to show the user. */
   postAssistant(nodeId: string, text: string): void;
   /** Next user message; resolve null when the user signals the discussion is done. */

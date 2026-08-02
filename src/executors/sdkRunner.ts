@@ -62,6 +62,7 @@ function buildOptions(
     cwd: req.workingDir,
     ...(abortController ? { abortController } : {}),
     ...(req.model !== undefined ? { model: req.model } : {}),
+    ...(req.resumeSessionId !== undefined ? { resume: req.resumeSessionId } : {}),
     systemPrompt: `${req.rolePrompt}\n\n${policy.boundaryPrompt}`,
     disallowedTools: policy.disallowedTools,
     env: { ...process.env, ...policy.env },
@@ -238,9 +239,14 @@ export class SdkSessionRunner implements SessionRunner {
       for (const turn of pendingTurns.splice(0)) turn.reject(reason);
     };
 
+    let sessionIdReported = false;
     const pump = (async () => {
       try {
         for await (const message of q) {
+          if (!sessionIdReported && message.session_id) {
+            sessionIdReported = true;
+            req.onSessionId?.(message.session_id);
+          }
           const text = assistantText(message);
           if (text.length > 0) {
             turnText += (turnText.length > 0 ? '\n' : '') + text;
