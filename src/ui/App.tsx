@@ -5,7 +5,7 @@ import type { ActivityEntry, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { gridToLines, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
-import { disableMouse, enableMouse, parseMouseEvents } from './mouse.js';
+import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import type { UiInteractionPorts } from './ports.js';
 import { wrapText } from './textwrap.js';
 
@@ -128,6 +128,15 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           }
         } else if (event.kind === 'release') {
           dragRef.current = null;
+        } else if (event.kind === 'scroll') {
+          if (pendingApproval) {
+            setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
+          } else {
+            setOffset((o) => ({
+              ...o,
+              oy: event.direction === 'down' ? o.oy + 2 : Math.max(0, o.oy - 2),
+            }));
+          }
         }
       }
     };
@@ -136,7 +145,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       stdin.off('data', onData);
       disableMouse(stdout);
     };
-  }, [stdin, stdout, layout, offset, workflow.order]);
+  }, [stdin, stdout, layout, offset, workflow.order, pendingApproval]);
 
   useInput((input, key) => {
     // ctrl+c always interrupts, regardless of mode — takes over from Ink's
@@ -144,6 +153,14 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     // just closing over a still-running session.
     if (key.ctrl && input === 'c') {
       onInterrupt();
+      return;
+    }
+
+    // Ink's keypress parser doesn't recognize SGR mouse sequences and, after
+    // stripping the leading ESC byte, hands the rest back as literal `input`
+    // text. Without this guard that text lands character-for-character in
+    // whatever's capturing keyboard input right now (e.g. the discuss box).
+    if (LEAKED_MOUSE_SEQUENCE.test(input)) {
       return;
     }
 
