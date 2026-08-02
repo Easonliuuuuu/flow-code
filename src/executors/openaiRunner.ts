@@ -11,7 +11,7 @@ export class OpenAiSessionRunner extends OpenAiCompatSessionRunner {
       label: 'OpenAI',
       baseUrl: OPENAI_BASE_URL,
       defaultModel: DEFAULT_OPENAI_MODEL,
-      apiKeyEnvVar: 'OPENAI_API_KEY',
+      apiKeyEnvVars: ['OPENAI_API_KEY'],
     });
   }
 }

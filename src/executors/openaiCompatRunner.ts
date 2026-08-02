@@ -28,7 +28,8 @@ export interface OpenAiCompatProviderConfig {
   readonly label: string;
   readonly baseUrl: string;
   readonly defaultModel: string;
-  readonly apiKeyEnvVar: string;
+  /** Env vars checked in order; every one that's set is used, in order, as a rotation pool on 429/5xx. */
+  readonly apiKeyEnvVars: readonly string[];
 }
 
 async function executeTool(
@@ -84,7 +85,7 @@ async function runTurn(
   config: OpenAiCompatProviderConfig,
   messages: ChatMessage[],
   req: AgentSessionRequest,
-  apiKey: string,
+  apiKeys: string[],
   interceptor: NvidiaInterceptor,
 ): Promise<string> {
   const tools = toolsForCapabilities(req.capabilities);
@@ -98,7 +99,7 @@ async function runTurn(
       model,
       messages,
       tools,
-      apiKey,
+      apiKeys,
       ...(req.signal ? { signal: req.signal } : {}),
     });
     messages.push(message);
@@ -167,28 +168,32 @@ async function runTurn(
 export class OpenAiCompatSessionRunner implements SessionRunner {
   constructor(private readonly config: OpenAiCompatProviderConfig) {}
 
-  private requireApiKey(): string {
-    const apiKey = process.env[this.config.apiKeyEnvVar];
-    if (apiKey === undefined) {
-      throw new Error(`${this.config.apiKeyEnvVar} is not set — this should have been caught by preflight.`);
+  private requireApiKeys(): string[] {
+    const apiKeys = this.config.apiKeyEnvVars
+      .map((envVar) => process.env[envVar])
+      // GitHub Actions sets a referenced-but-unconfigured secret to '' rather
+      // than leaving the env var unset, so treat empty the same as absent.
+      .filter((value): value is string => value !== undefined && value !== '');
+    if (apiKeys.length === 0) {
+      throw new Error(`${this.config.apiKeyEnvVars[0]} is not set — this should have been caught by preflight.`);
     }
-    return apiKey;
+    return apiKeys;
   }
 
   async run(req: AgentSessionRequest, store: RunStateStore): Promise<{ finalText: string }> {
-    const apiKey = this.requireApiKey();
+    const apiKeys = this.requireApiKeys();
     const config = this.config;
     const interceptor = buildInterceptor(req, store);
     const messages: ChatMessage[] = [
       { role: 'system', content: systemPrompt(req) },
       { role: 'user', content: req.prompt },
     ];
-    const finalText = await runTurn(config, messages, req, apiKey, interceptor);
+    const finalText = await runTurn(config, messages, req, apiKeys, interceptor);
     return { finalText };
   }
 
   async openInteractive(req: AgentSessionRequest, store: RunStateStore): Promise<InteractiveAgentSession> {
-    const apiKey = this.requireApiKey();
+    const apiKeys = this.requireApiKeys();
     const config = this.config;
     const interceptor = buildInterceptor(req, store);
     const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt(req) }];
@@ -204,7 +209,7 @@ export class OpenAiCompatSessionRunner implements SessionRunner {
       send(userText: string): Promise<string> {
         if (req.signal?.aborted) return Promise.reject(new RunInterruptedError());
         messages.push({ role: 'user', content: userText });
-        return runTurn(config, messages, req, apiKey, interceptor);
+        return runTurn(config, messages, req, apiKeys, interceptor);
       },
       async end(): Promise<void> {
         // No server-side session to tear down — nothing to do.

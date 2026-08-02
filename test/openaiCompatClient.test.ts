@@ -25,7 +25,7 @@ function chatOpts() {
     model: 'model-1',
     messages: [{ role: 'user', content: 'hi' }] as ChatMessage[],
     tools: NO_TOOLS,
-    apiKey: 'test-key',
+    apiKeys: ['test-key'],
   };
 }
 
@@ -69,12 +69,91 @@ describe('callOpenAiCompatChat retries', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('retries a request that throws (e.g. a stalled connection hitting the per-attempt timeout)', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException('The operation was aborted.', 'TimeoutError'))
+      .mockResolvedValueOnce(jsonResponse(OK_BODY));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await callOpenAiCompatChat(chatOpts());
+
+    expect(result.content).toBe('hi');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retry when the caller aborts, and reports it distinctly from a timeout', async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(() => {
+      controller.abort();
+      return Promise.reject(new DOMException('The operation was aborted.', 'AbortError'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callOpenAiCompatChat({ ...chatOpts(), signal: controller.signal })).rejects.toBeInstanceOf(
+      OpenAiCompatApiError,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the first response body when it succeeds immediately', async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(OK_BODY));
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await callOpenAiCompatChat(chatOpts());
     expect(result.content).toBe('hi');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('callOpenAiCompatChat key rotation', () => {
+  function authHeader(fetchMock: ReturnType<typeof vi.fn>, callIndex: number): string | undefined {
+    return (fetchMock.mock.calls[callIndex]![1].headers as Record<string, string>).Authorization;
+  }
+
+  it('rotates to the next key once the first key exhausts its retries', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: 429 }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 429 }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 429 }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(jsonResponse({ status: 429 }, 429, { 'retry-after': '0' }))
+      .mockResolvedValueOnce(jsonResponse(OK_BODY));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await callOpenAiCompatChat({ ...chatOpts(), apiKeys: ['key-1', 'key-2'] });
+
+    expect(result.content).toBe('hi');
+    // 4 calls (initial + 3 retries) on key-1, then 1 call on key-2.
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+    expect(authHeader(fetchMock, 0)).toBe('Bearer key-1');
+    expect(authHeader(fetchMock, 3)).toBe('Bearer key-1');
+    expect(authHeader(fetchMock, 4)).toBe('Bearer key-2');
+  });
+
+  it('throws once every key exhausts its retries', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ status: 429 }, 429, { 'retry-after': '0' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callOpenAiCompatChat({ ...chatOpts(), apiKeys: ['key-1', 'key-2'] })).rejects.toBeInstanceOf(
+      OpenAiCompatApiError,
+    );
+    // 4 calls per key (initial + 3 retries) across 2 keys.
+    expect(fetchMock).toHaveBeenCalledTimes(8);
+  });
+
+  it('does not rotate keys on a non-retryable client error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ error: 'bad request' }, 400));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(callOpenAiCompatChat({ ...chatOpts(), apiKeys: ['key-1', 'key-2'] })).rejects.toBeInstanceOf(
+      OpenAiCompatApiError,
+    );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

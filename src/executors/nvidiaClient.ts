@@ -26,8 +26,9 @@ export async function callNvidiaChat(opts: {
   apiKey: string;
   signal?: AbortSignal;
 }): Promise<NvidiaMessage> {
+  const { apiKey, ...rest } = opts;
   try {
-    return await callOpenAiCompatChat({ baseUrl: NVIDIA_BASE_URL, ...opts });
+    return await callOpenAiCompatChat({ baseUrl: NVIDIA_BASE_URL, apiKeys: [apiKey], ...rest });
   } catch (err) {
     if (err instanceof OpenAiCompatApiError) throw new NvidiaApiError(err.message);
     throw err;
