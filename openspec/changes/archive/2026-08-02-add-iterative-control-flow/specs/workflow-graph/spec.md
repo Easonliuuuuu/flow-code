@@ -1,51 +1,4 @@
-# workflow-graph Specification
-
-## Purpose
-
-Defines the workflow definition file (`.flow-code/workflow.yaml`), its scaffolding via `flow-code init`, parsing and validation of nodes, edges, and run settings, and the built-in node type registry with its capability model.
-
-## Requirements
-
-### Requirement: Default workflow scaffold
-The system SHALL provide an `init` command that scaffolds a default workflow definition file (`.flow-code/workflow.yaml`) in the current repo when one does not already exist, containing a working Discuss → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph.
-
-#### Scenario: Init in a repo with no existing workflow file
-- **WHEN** the user runs `flow-code init` in a git repo that has no `.flow-code/workflow.yaml`
-- **THEN** the system creates `.flow-code/workflow.yaml` with a valid default graph and reports the file was created
-
-#### Scenario: Default graph gates the git-mutating step
-- **WHEN** the scaffolded default workflow is loaded
-- **THEN** the graph SHALL contain an Approval-Gate node between the Review node and the Git-ops node, so the "nothing is pushed without explicit approval" guarantee holds with zero configuration
-
-#### Scenario: Init in a repo that already has a workflow file
-- **WHEN** the user runs `flow-code init` in a repo that already has `.flow-code/workflow.yaml`
-- **THEN** the system SHALL NOT overwrite the existing file and SHALL inform the user it already exists
-
-### Requirement: Workflow file parsing and validation
-The system SHALL parse `.flow-code/workflow.yaml` and validate every node's `type` against the built-in node type registry and every node's `config` against that type's schema before running.
-
-#### Scenario: Valid workflow file
-- **WHEN** the user runs `flow-code run` with a workflow file containing only known node types and valid config for each
-- **THEN** the system loads the graph successfully and proceeds to execution
-
-#### Scenario: Unknown node type
-- **WHEN** the workflow file references a node `type` that is not in the built-in registry
-- **THEN** the system SHALL fail before starting execution with an error naming the offending node id and the unknown type
-
-#### Scenario: Invalid node config
-- **WHEN** a node's `config` fails validation against its type's schema
-- **THEN** the system SHALL fail before starting execution with an error naming the node id and the specific config field that failed
-
-### Requirement: Run settings block
-The workflow file SHALL support a top-level `settings` block carrying run-wide configuration that is not specific to any node, including the concurrency cap and the default model, validated before execution like any node config.
-
-#### Scenario: Settings omitted
-- **WHEN** the workflow file contains no `settings` block
-- **THEN** the system SHALL apply documented defaults for every setting and start normally
-
-#### Scenario: Invalid setting value
-- **WHEN** the `settings` block contains an unknown key or a value failing its schema
-- **THEN** the system SHALL fail before starting execution with an error naming the setting and why it failed
+## MODIFIED Requirements
 
 ### Requirement: Graph structural validation
 The system SHALL validate, before execution, that the workflow graph has no dangling edges and that its forward edges form a directed acyclic graph. Loop-back edges are exempt from the acyclicity check and SHALL instead be validated as pointing to a node that is an ancestor of the edge's source over the forward-edge subgraph.
@@ -112,31 +65,7 @@ The system SHALL expose a registry of built-in node types (Discuss, Implement, T
 - **WHEN** the Approval-Gate node type is registered
 - **THEN** it SHALL be declared context-transparent, so placing a gate on the graph does not sever the context chain across it
 
-### Requirement: Test node runs deterministic commands
-The Test node type SHALL execute a configured list of shell commands and report their results without invoking an agent session, distinguishing it from Validate (agent-driven conformance check against the task intent) and Review (agent-driven quality critique).
-
-#### Scenario: Test node executes configured commands
-- **WHEN** a Test node whose config lists one or more commands is started
-- **THEN** the system SHALL run each command in order in the node's working directory, record each command's exit status and output, and consume no Claude Agent SDK session and no API tokens
-
-#### Scenario: A configured command fails
-- **WHEN** any command configured on a Test node exits non-zero
-- **THEN** the node SHALL emit `error`, and its output SHALL identify which command failed and with what exit status
-
-### Requirement: Git-ops node configuration
-The Git-ops node type SHALL declare an explicit config schema covering which git operations it performs, and pushing SHALL be opt-in rather than implied by the node's presence in the graph.
-
-#### Scenario: Default Git-ops configuration commits only
-- **WHEN** a Git-ops node is declared with no push configuration
-- **THEN** the node SHALL commit the pending changes on the current branch and SHALL NOT push to any remote
-
-#### Scenario: Pushing is explicitly configured
-- **WHEN** a Git-ops node's config enables pushing
-- **THEN** the config SHALL name the remote and the target branch, and validation SHALL fail before execution if either is missing
-
-#### Scenario: Push target is reported before the gate
-- **WHEN** a Git-ops node is downstream of an Approval-Gate and configured to push
-- **THEN** the gate's detail view SHALL state the remote and branch that will be pushed to on approval
+## ADDED Requirements
 
 ### Requirement: Loop-back edge declaration
 The workflow file SHALL allow an edge to be declared as a loop-back, naming the upstream node to return to and the maximum number of attempts permitted, validated before execution like any other part of the file.
