@@ -53,4 +53,10 @@ edges:
   - { from: validate, to: review }
   - { from: review, to: gate }
   - { from: gate, to: git-ops }
+
+  # A failing Validate or Review stops the run here. To iterate instead, add a
+  # loop-back: when the named node fails, execution returns to the target and
+  # re-runs everything between them, with the failure as context. Bounded by
+  # maxAttempts (default 3) so a loop that never converges still terminates.
+  # - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
 `;

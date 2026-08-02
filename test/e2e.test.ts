@@ -105,6 +105,11 @@ function defaultWorkflowScript(req: AgentSessionRequest, tools: HarnessTools): s
         findings: [{ location: 'greeting.txt:1', description: 'fine', severity: 'info' }],
       });
     case 'git-ops': {
+      // Git-ops sits after the Approval-Gate: it must still see what was
+      // reviewed, not just the gate's decision.
+      if (!req.prompt.includes('"verdict"')) {
+        throw new Error('git-ops did not receive the review context through the gate');
+      }
       tools.bash('git add -A');
       tools.bash('git commit -m "add greeting"');
       const denied = tools.write('sneaky.txt', 'git-ops must not edit');
@@ -192,5 +197,104 @@ describe('end-to-end: default workflow on a sample repo', () => {
     const log = execFileSync('git', ['log', '--oneline'], { cwd: repo }).toString();
     expect(log).not.toContain('add greeting');
     expect(log.trim().split('\n')).toHaveLength(1);
+  });
+});
+
+/** The default graph plus a loop-back from Validate to Implement. */
+const LOOPING_WORKFLOW_YAML = DEFAULT_WORKFLOW_YAML.replace(
+  '  # - { from: validate, to: implement, loopback: { maxAttempts: 3 } }',
+  '  - { from: validate, to: implement, loopback: { maxAttempts: 3 } }',
+);
+
+/**
+ * Same roles as the default script, but Validate fails until Implement has run
+ * `passOnImplementRun` times — the real "fix it and check again" loop.
+ */
+function loopingScript(passOnImplementRun: number): {
+  script: (req: AgentSessionRequest, tools: HarnessTools) => string;
+  implementRuns: () => number;
+  retryPrompts: () => string[];
+} {
+  let implementRuns = 0;
+  const retryPrompts: string[] = [];
+  const script = (req: AgentSessionRequest, tools: HarnessTools): string => {
+    switch (req.nodeId) {
+      case 'discuss':
+        return req.prompt.includes('JSON object recording')
+          ? JSON.stringify({ conclusion: 'Add a greeting file.', constraints: [] })
+          : 'Understood.';
+      case 'implement':
+        implementRuns++;
+        if (req.prompt.includes('running again because')) retryPrompts.push(req.prompt);
+        tools.write('greeting.txt', `hello (attempt ${implementRuns})\n`);
+        return `Wrote greeting.txt on attempt ${implementRuns}.`;
+      case 'validate':
+        return implementRuns >= passOnImplementRun
+          ? JSON.stringify({ verdict: 'pass', notes: 'greeting.txt is correct' })
+          : JSON.stringify({ verdict: 'fail', notes: 'greeting.txt has the wrong content' });
+      case 'review':
+        return JSON.stringify({ verdict: 'pass', findings: [] });
+      case 'git-ops':
+        tools.bash('git add -A');
+        tools.bash('git commit -m "add greeting"');
+        return 'Committed.';
+      default:
+        throw new Error(`unexpected agent session for node ${req.nodeId}`);
+    }
+  };
+  return { script, implementRuns: () => implementRuns, retryPrompts: () => retryPrompts };
+}
+
+async function runLoopingWorkflow(passOnImplementRun: number) {
+  const repo = makeTempGitRepo();
+  const workflow = workflowFromYaml(LOOPING_WORKFLOW_YAML);
+  const store = storeFor(workflow, repo);
+  store.attachPersister(new FileRunStatePersister(repo));
+  const baseline = await recordBaseline(repo, false);
+  store.setBaseline(baseline);
+  const scripted = loopingScript(passOnImplementRun);
+  const engine = new Engine({
+    workflow,
+    store,
+    repoRoot: repo,
+    baseline,
+    ports: fakePorts({ approve: 'approve', userMessages: [] }),
+    sessions: harnessedSessions(scripted.script),
+    executors: builtinExecutors,
+  });
+  await engine.run();
+  return { repo, store, scripted };
+}
+
+describe('end-to-end: iterating on a failed verdict', () => {
+  it('loops back, fixes, and reaches git-ops', async () => {
+    const { store, scripted } = await runLoopingWorkflow(2);
+
+    // Implement ran twice: once badly, once after learning why it failed.
+    expect(scripted.implementRuns()).toBe(2);
+    expect(store.attemptOf('implement')).toBe(2);
+    expect(store.attemptOf('validate')).toBe(2);
+    // The retry was told what went wrong.
+    expect(scripted.retryPrompts()).toHaveLength(1);
+    expect(scripted.retryPrompts()[0]).toContain('wrong content');
+
+    for (const id of ['implement', 'validate', 'review', 'gate', 'git-ops']) {
+      expect(store.node(id).status, id).toBe('done');
+    }
+    expect(store.node('validate').priorAttempts![0]!.status).toBe('error');
+  });
+
+  it('stops at the attempt bound and never reaches git-ops when it cannot converge', async () => {
+    const { repo, store, scripted } = await runLoopingWorkflow(Number.MAX_SAFE_INTEGER);
+
+    expect(scripted.implementRuns()).toBe(3);
+    expect(store.node('validate').status).toBe('error');
+    expect(store.node('validate').statusDetail).toContain('attempt limit');
+    for (const id of ['review', 'gate', 'git-ops']) {
+      expect(store.node(id).status, id).toBe('skipped');
+    }
+    // Nothing was committed: the loop gave up before the git-mutating step.
+    expect(execFileSync('git', ['log', '--oneline'], { cwd: repo }).toString().trim().split('\n')).toHaveLength(1);
+    expect(store.snapshot().finishedAt).toBeDefined();
   });
 });
