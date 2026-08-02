@@ -78,6 +78,25 @@ The system SHALL provide an expandable detail view per node showing its current 
 - **WHEN** the user expands an agent-driven node
 - **THEN** the detail view SHALL name the model that node resolves to and where that model came from
 
+#### Scenario: Output line wider than the panel
+- **WHEN** a node's streamed output contains a line wider than the detail panel's inner width
+- **THEN** the system SHALL wrap that line onto further rows so its full text is readable, rather than cutting it off at the panel's right edge
+
+### Requirement: Discuss transcript formatting
+The Discuss panel SHALL render the agent's markdown as terminal styling rather than as literal markup, wrapping every row to the panel's inner width so no text is cut off at its right edge. The user's own messages SHALL be shown exactly as typed.
+
+#### Scenario: Agent replies in markdown
+- **WHEN** an agent message in the Discuss transcript contains markdown — headings, list items, fenced or inline code, emphasis, block quotes, or links
+- **THEN** the panel SHALL render the styling those markers denote and SHALL NOT display the markers themselves
+
+#### Scenario: User types markdown characters
+- **WHEN** the user's own message contains characters that are markdown markers
+- **THEN** the panel SHALL display that message verbatim, since the user typed those characters deliberately
+
+#### Scenario: Transcript line wider than the panel
+- **WHEN** a transcript message is wider than the panel's inner width
+- **THEN** the panel SHALL wrap it onto further rows, breaking between words where possible and never inside a styled span's word, and SHALL hard-break only a single token wider than the panel
+
 ### Requirement: Graph layout and viewport
 The system SHALL arrange nodes automatically in a left-to-right layout derived from the graph's forward-edge dependency order, and SHALL remain usable when the graph does not fit the terminal viewport. Loop-back edges SHALL NOT participate in layer assignment.
 

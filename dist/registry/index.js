@@ -157,6 +157,10 @@ const definitions = [
         hasModelField: true,
         rolePrompt: 'You are the implementation step of a coding workflow. ' +
             'Carry out the configured task by reading and editing files and running commands. ' +
+            'You own both the production code and the tests that cover it: the downstream Test step ' +
+            "is a deterministic command runner that only executes the project's existing test " +
+            'commands — it cannot write or repair a test for you, so any test the change needs must ' +
+            'be written here. ' +
             'Do not perform any git operation that mutates history or remotes; a later, dedicated step handles git.',
         configSchema: implementConfig,
         outputSchema: implementOutput,
@@ -166,7 +170,8 @@ const definitions = [
     {
         id: 'test',
         displayName: 'Test',
-        description: 'Deterministic command runner: executes configured shell commands with no agent session and no API cost.',
+        description: 'Deterministic command runner: executes configured shell commands with no agent session and no API cost. ' +
+            'It runs tests; it never writes them (the Implement step does).',
         capabilities: ['read', 'exec'],
         agentDriven: false,
         hasModelField: false,

@@ -7,7 +7,7 @@ Defines the workflow definition file (`.flow-code/workflow.yaml`), its scaffoldi
 ## Requirements
 
 ### Requirement: Default workflow scaffold
-The system SHALL provide an `init` command that scaffolds a default workflow definition file (`.flow-code/workflow.yaml`) in the current repo when one does not already exist, containing a working Discuss → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph.
+The system SHALL provide an `init` command that scaffolds a default workflow definition file (`.flow-code/workflow.yaml`) in the current repo when one does not already exist, containing a working Discuss → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph. The scaffolded graph SHALL declare loop-back edges from each verification node back to Implement, so iteration on a failed check is the zero-configuration default rather than an opt-in.
 
 #### Scenario: Init in a repo with no existing workflow file
 - **WHEN** the user runs `flow-code init` in a git repo that has no `.flow-code/workflow.yaml`
@@ -16,6 +16,14 @@ The system SHALL provide an `init` command that scaffolds a default workflow def
 #### Scenario: Default graph gates the git-mutating step
 - **WHEN** the scaffolded default workflow is loaded
 - **THEN** the graph SHALL contain an Approval-Gate node between the Review node and the Git-ops node, so the "nothing is pushed without explicit approval" guarantee holds with zero configuration
+
+#### Scenario: Default graph iterates on a failed check
+- **WHEN** the scaffolded default workflow is loaded
+- **THEN** the graph SHALL contain loop-back edges from Test, Validate, and Review back to Implement with a bounded attempt count, so a failing check returns to Implement with the failure as context instead of ending the run
+
+#### Scenario: Default graph does not retry a rejected gate
+- **WHEN** the scaffolded default workflow is loaded
+- **THEN** the Approval-Gate node SHALL have no loop-back edge, because a rejection is a user decision to stop rather than a failure to retry
 
 #### Scenario: Init in a repo that already has a workflow file
 - **WHEN** the user runs `flow-code init` in a repo that already has `.flow-code/workflow.yaml`
@@ -122,6 +130,10 @@ The Test node type SHALL execute a configured list of shell commands and report 
 #### Scenario: A configured command fails
 - **WHEN** any command configured on a Test node exits non-zero
 - **THEN** the node SHALL emit `error`, and its output SHALL identify which command failed and with what exit status
+
+#### Scenario: Authoring tests belongs to Implement
+- **WHEN** the Implement node type's role prompt is composed
+- **THEN** it SHALL state that Implement owns the tests covering its change and that the downstream Test node only runs commands and cannot author a test, so no test the change needs is left unwritten on the assumption that a later node will write it
 
 ### Requirement: Git-ops node configuration
 The Git-ops node type SHALL declare an explicit config schema covering which git operations it performs, and pushing SHALL be opt-in rather than implied by the node's presence in the graph.

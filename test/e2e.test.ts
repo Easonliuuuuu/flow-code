@@ -200,11 +200,8 @@ describe('end-to-end: default workflow on a sample repo', () => {
   });
 });
 
-/** The default graph plus a loop-back from Validate to Implement. */
-const LOOPING_WORKFLOW_YAML = DEFAULT_WORKFLOW_YAML.replace(
-  '  # - { from: validate, to: implement, loopback: { maxAttempts: 3 } }',
-  '  - { from: validate, to: implement, loopback: { maxAttempts: 3 } }',
-);
+/** The default graph, whose Validate → Implement loop-back ships enabled. */
+const LOOPING_WORKFLOW_YAML = DEFAULT_WORKFLOW_YAML;
 
 /**
  * Same roles as the default script, but Validate fails until Implement has run
