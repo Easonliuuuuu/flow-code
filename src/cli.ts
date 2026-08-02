@@ -18,6 +18,7 @@ import { ensureGitExclude } from './git/exclude.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
+import { runTestSetupWizard } from './init/testWizard.js';
 import { listNodeTypes } from './registry/index.js';
 import {
   FileRunStatePersister,
@@ -97,10 +98,11 @@ export function buildRunner(provider: ProviderId): SessionRunner {
   }
 }
 
-async function cmdInit(args: string[]): Promise<void> {
+async function cmdInit(): Promise<void> {
   const repoRoot = await repoRootFromCwd();
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
-  if (!existsSync(path)) {
+  const justScaffolded = !existsSync(path);
+  if (justScaffolded) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, DEFAULT_WORKFLOW_YAML);
     ensureGitExclude(repoRoot);
@@ -110,14 +112,30 @@ async function cmdInit(args: string[]): Promise<void> {
     console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
   }
 
-  const reconfigure = args.includes('--reconfigure');
+  if (justScaffolded) {
+    if (process.stdin.isTTY) {
+      await runTestSetupWizard(repoRoot, path);
+    } else {
+      console.log(
+        '  No TTY detected — leaving the placeholder test command in .flow-code/workflow.yaml; edit it directly, or re-run `flow-code init` from an interactive terminal.',
+      );
+    }
+  }
+
   const existing = loadCredentials(repoRoot);
-  if (existing && !reconfigure) {
+  let runWizard = !existing;
+  if (existing) {
     console.log(
       `flow-code: provider already configured (${providerInfo(existing.provider).label}, model ${existing.model}).`,
     );
-    console.log('  Re-run `flow-code init --reconfigure` to change it. Start a run with: flow-code run');
-    return;
+    runWizard = await confirm('  Reconfigure the provider/model?');
+  }
+
+  if (!runWizard) {
+    console.log('  Start a run with: flow-code run');
+    // Explicit rather than relying on the event loop draining naturally: see
+    // the comment atop prompts.ts on why these two don't mix reliably.
+    process.exit(0);
   }
 
   if (!process.stdin.isTTY) {
@@ -125,16 +143,17 @@ async function cmdInit(args: string[]): Promise<void> {
     console.log(
       '  Set ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
     );
-    return;
+    process.exit(0);
   }
 
   const result = await runProviderWizard(repoRoot);
   if (!result) {
     console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
-    return;
+    process.exit(0);
   }
   console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
   console.log('  Start a run with: flow-code run');
+  process.exit(0);
 }
 
 function cmdNodeTypes(): void {
@@ -169,11 +188,14 @@ async function cmdDoctor(args: string[]): Promise<void> {
   const yes = args.includes('--yes') || (await confirm('Remove them?'));
   if (!yes) {
     console.log('flow-code: leaving them in place. Re-run with --yes to remove.');
-    return;
+    // Explicit rather than relying on the event loop draining naturally: see
+    // the comment atop prompts.ts on why these two don't mix reliably.
+    process.exit(0);
   }
   const { removed, failed } = await removeOrphanedWorktrees(repoRoot, orphans);
   for (const dir of removed) console.log(`  removed ${dir}`);
   for (const failure of failed) console.log(`  FAILED ${failure.dir}: ${failure.error}`);
+  process.exit(0);
 }
 
 async function cmdRun(args: string[]): Promise<void> {
@@ -377,10 +399,9 @@ async function cmdRun(args: string[]): Promise<void> {
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
 
 Usage:
-  flow-code init [--reconfigure]
-                              Scaffold .flow-code/workflow.yaml with the default graph and
-                              walk through picking the provider/model for the project
-                              (--reconfigure re-runs the picker even if already configured)
+  flow-code init              Scaffold .flow-code/workflow.yaml with the default graph, set up
+                              its test command(s), and pick the provider/model for the project
+                              (re-run any time — already-configured steps ask before redoing)
   flow-code run [--allow-dirty]
                               Run the workflow (refuses a dirty tree unless overridden)
   flow-code run --resume [runId]
@@ -396,7 +417,7 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'init':
-      return cmdInit(args);
+      return cmdInit();
     case 'run':
       return cmdRun(args);
     case 'node-types':
