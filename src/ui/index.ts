@@ -2,10 +2,11 @@ import { render } from 'ink';
 import React from 'react';
 import type { RunStateStore } from '../runstate/store.js';
 import type { Workflow } from '../workflow/load.js';
-import { App } from './App.js';
+import { App, type ModelContext } from './App.js';
 import type { UiInteractionPorts } from './ports.js';
 
 export { UiInteractionPorts } from './ports.js';
+export type { ModelContext } from './App.js';
 
 /** Mount the terminal UI; resolves when the user exits. */
 export function runUi(opts: {
@@ -13,6 +14,7 @@ export function runUi(opts: {
   store: RunStateStore;
   ports: UiInteractionPorts;
   onInterrupt: () => void;
+  modelContext: ModelContext;
 }): Promise<void> {
   return new Promise((resolve) => {
     const instance = render(
@@ -20,6 +22,7 @@ export function runUi(opts: {
         workflow: opts.workflow,
         store: opts.store,
         ports: opts.ports,
+        modelContext: opts.modelContext,
         onExit: () => {
           instance.unmount();
           resolve();

@@ -89,6 +89,14 @@ flow-code: provider already configured (OpenAI, model gpt-4o-mini).
 
 If none of those are set and the workflow has any agent-driven node, `run` fails fast with a message pointing at `flow-code init` instead of hanging on a prompt.
 
+### Overriding a node's model
+
+The provider/model picked at `flow-code init` backs every agent-driven node by default, but any individual node — Discuss, Implement, Validate, Review, or Git-ops — can run on a different model from the same provider. Focus the node (tab) during a run and press **m** to open the picker; it lists the provider's models with the node's current model marked, moves with **↑/↓** (or **j/k**), confirms with **enter**, and cancels with **esc** without changing anything. If the provider's live model list can't be fetched, the picker falls back to typing a model id directly.
+
+A confirmed choice is written to that node's `config.model` in `.flow-code/workflow.yaml` — comments and formatting elsewhere in the file are left alone — and, for a node that hasn't started yet, applies to the run in progress with no restart needed. On a node that's already `running` or `done`, the picker says the change applies next time rather than to the attempt already underway; the choice is still saved, so a loop-back re-run picks it up. Selecting the model the node would already be using (the workflow's `settings.model`, or the provider default if that's unset) clears the override rather than writing a redundant one.
+
+A node running on something other than the project default carries a small badge on its box naming the model — click it (or press **m** while that node is focused) to change it. Test and Approval-Gate nodes run no agent session and have no model to pick; Worktree-Agent sets a model per fan-out instance in its own config rather than one for the whole node, so it isn't covered by this picker either — edit `workflow.yaml` directly for those.
+
 ## Configuring a workflow
 
 Workflows are defined per-project in `.flow-code/workflow.yaml`. The full schema — node types, capabilities, edges, and run settings — is documented in [`openspec/specs/workflow-graph/spec.md`](openspec/specs/workflow-graph/spec.md), which is the source of truth for the config format.

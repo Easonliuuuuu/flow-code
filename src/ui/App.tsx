@@ -1,11 +1,17 @@
 import { Box, Text, useApp, useInput, useStdin, useStdout } from 'ink';
+import { join } from 'node:path';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { providerInfo, type ProviderId } from '../engine/providers.js';
+import { windowFor } from '../init/SelectList.js';
 import type { RunStateStore } from '../runstate/store.js';
 import type { ActivityEntry, RunState } from '../runstate/types.js';
-import type { Workflow } from '../workflow/load.js';
-import { gridToLines, renderGraph, STATUS_GLYPHS } from './canvas.js';
+import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
+import { resolveNodeModel } from '../workflow/modelResolution.js';
+import { setNodeModel, WorkflowWriteError } from '../workflow/write.js';
+import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
+import { createModelListLoader, type ModelListLoader } from './modelListLoader.js';
 import {
   applyPanelMove,
   applyPanelResize,
@@ -19,6 +25,18 @@ import {
 } from './panel.js';
 import type { UiInteractionPorts } from './ports.js';
 import { wrapText } from './textwrap.js';
+
+/** Provenance context the run UI needs to distinguish a node's own model
+ * choice from one inherited from the workflow's settings or the provider's
+ * default — captured by `cmdRun` before it fills `settings.model` in with
+ * the provider default, since that fill-in would otherwise erase the
+ * distinction (see design.md's "Pass model provenance into the UI
+ * explicitly"). */
+export interface ModelContext {
+  providerId: ProviderId | undefined;
+  providerDefaultModel: string | undefined;
+  workflowSettingsModel: string | undefined;
+}
 
 interface PanelDrag {
   mode: 'move' | 'resize';
@@ -38,6 +56,7 @@ export interface AppProps {
   onExit: () => void;
   /** ctrl+c: interrupt the run rather than just closing the UI over it. */
   onInterrupt: () => void;
+  modelContext: ModelContext;
 }
 
 function formatActivityRow(entry: ActivityEntry): string {
@@ -83,7 +102,14 @@ function PanelFooter({ hint }: { hint: string }): React.ReactElement {
   );
 }
 
-export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): React.ReactElement {
+export function App({
+  workflow,
+  store,
+  ports,
+  onExit,
+  onInterrupt,
+  modelContext,
+}: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const { stdin } = useStdin();
@@ -111,6 +137,32 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   const dragRef = useRef<{ id: string; lastX: number; lastY: number } | null>(null);
   const panelDragRef = useRef<PanelDrag | null>(null);
 
+  // Model picker: opened with `m` on the focused node (or a click on its
+  // model badge). Renders in the same status panel as Discuss/Approval/etc.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerCursor, setPickerCursor] = useState(0);
+  // null = list mode; a string (possibly empty) = free-text entry, used when
+  // the provider's model list failed to load.
+  const [pickerFreeText, setPickerFreeText] = useState<string | null>(null);
+  // Transient feedback for actions that don't open a panel: a decline (no
+  // model field, no provider) or a failed save. Shown in the header, which —
+  // unlike the bottom hint line — is visible no matter what panel is open.
+  const [pickerMessage, setPickerMessage] = useState<string | null>(null);
+  const pickerMessageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped after mutating a node's config in place (see confirmModel) so the
+  // badge and detail view re-render from the change — that mutation isn't
+  // itself React state.
+  const [modelTick, setModelTick] = useState(0);
+  const modelListLoadersRef = useRef<Map<ProviderId, ModelListLoader>>(new Map());
+  const [modelListTick, setModelListTick] = useState(0);
+
+  useEffect(
+    () => () => {
+      if (pickerMessageTimeoutRef.current) clearTimeout(pickerMessageTimeoutRef.current);
+    },
+    [],
+  );
+
   useEffect(() => store.subscribe(setRunState), [store]);
   useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
 
@@ -122,7 +174,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   const discussState = ports.discussState;
   const discussActive = discussState?.active ?? false;
 
-  const panelOpen = expanded || pendingApproval !== null || pendingConvergence !== null || discussActive;
+  const panelOpen =
+    expanded || pendingApproval !== null || pendingConvergence !== null || discussActive || pickerOpen;
   const floating = panelRect !== null;
   const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
   // A docked, open panel reserves flow space below the canvas; a floating one
@@ -139,6 +192,68 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
   const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
   const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
+
+  const showPickerMessage = (text: string): void => {
+    setPickerMessage(text);
+    if (pickerMessageTimeoutRef.current) clearTimeout(pickerMessageTimeoutRef.current);
+    pickerMessageTimeoutRef.current = setTimeout(() => setPickerMessage(null), 3000);
+  };
+
+  const modelListLoaderFor = (provider: ProviderId): ModelListLoader => {
+    let loader = modelListLoadersRef.current.get(provider);
+    if (!loader) {
+      const apiKeyEnvVar = providerInfo(provider).apiKeyEnvVar;
+      loader = createModelListLoader(provider, apiKeyEnvVar ? process.env[apiKeyEnvVar] : undefined, () =>
+        setModelListTick((t) => t + 1),
+      );
+      modelListLoadersRef.current.set(provider, loader);
+    }
+    return loader;
+  };
+
+  const openModelPicker = (nodeId: string): void => {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    if (!node.type.hasModelField) {
+      showPickerMessage(`${node.type.displayName} nodes have no model to choose.`);
+      return;
+    }
+    if (!modelContext.providerId) {
+      showPickerMessage('no provider configured — run `flow-code init` to choose one.');
+      return;
+    }
+    setPickerCursor(0);
+    setPickerFreeText(null);
+    setPickerOpen(true);
+    modelListLoaderFor(modelContext.providerId).ensureLoaded();
+  };
+
+  /**
+   * Writes `model` to the node's config on disk and, so the current run
+   * picks it up without a restart, on the same in-memory `WorkflowNode`
+   * object the engine reads at node-start time (mirroring the fallback
+   * `cmdRun` already applies to `workflow.settings.model`). Selecting the
+   * model the node would already resolve to by default clears the override
+   * instead of writing a redundant one.
+   */
+  const confirmModel = (nodeId: string, model: string): void => {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const toWrite = model === workflow.settings.model ? null : model;
+    try {
+      setNodeModel(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), nodeId, toWrite);
+    } catch (err) {
+      showPickerMessage(
+        err instanceof WorkflowWriteError ? err.message : `could not save model: ${String(err)}`,
+      );
+      return;
+    }
+    const config = { ...(node.config as Record<string, unknown>) };
+    if (toWrite === null) delete config['model'];
+    else config['model'] = toWrite;
+    node.config = config;
+    setModelTick((t) => t + 1);
+  };
 
   // Focus scrolls into view (keyboard navigation on graphs larger than the terminal).
   useEffect(() => {
@@ -165,6 +280,21 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       setConvSelected(new Set());
     }
   }, [pendingConvergence]);
+
+  const pickerModelListState = modelContext.providerId
+    ? modelListLoaderFor(modelContext.providerId).getState()
+    : null;
+  // A failed fetch degrades to free-text entry automatically — the user
+  // never has to notice the list came back empty and ask for a text box.
+  useEffect(() => {
+    if (pickerOpen && pickerFreeText === null && pickerModelListState?.status === 'failed') {
+      setPickerFreeText('');
+    }
+  }, [pickerOpen, pickerFreeText, modelListTick, pickerModelListState?.status]);
+
+  const focusedNodeResolvedModel = focusedNode
+    ? resolveNodeModel(focusedNode.config, modelContext.workflowSettingsModel, modelContext.providerDefaultModel)
+    : null;
 
   // Wrapped transcript rows for the Discuss panel, and the scrollback window
   // into them (see tailWindow's doc comment for the follow/pin model).
@@ -201,6 +331,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     pendingApproval,
     columns,
     rows,
+    openModelPicker,
   });
   useEffect(() => {
     mouseStateRef.current = {
@@ -213,6 +344,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       pendingApproval,
       columns,
       rows,
+      openModelPicker,
     };
   });
 
@@ -229,8 +361,17 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
     const onData = (data: Buffer | string) => {
       const events = parseMouseEvents(data.toString());
       for (const event of events) {
-        const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows } =
-          mouseStateRef.current;
+        const {
+          layout,
+          offset,
+          activeRect,
+          panelOpen,
+          discussActive,
+          pendingApproval,
+          columns,
+          rows,
+          openModelPicker,
+        } = mouseStateRef.current;
         const overPanel =
           panelOpen &&
           event.x >= activeRect.x &&
@@ -251,7 +392,16 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           const id = hitTest(layout, canvasX, canvasY);
           if (id) {
             setFocusIdx(Math.max(0, workflow.order.indexOf(id)));
-            dragRef.current = { id, lastX: canvasX, lastY: canvasY };
+            const box = layout.boxes.get(id);
+            // The model badge is the only thing ever drawn on a box's type-label
+            // row (see canvas.ts); clicking that row when a badge is present
+            // opens the picker instead of starting a position drag, and every
+            // other row is unaffected.
+            if (box && canvasY === box.y + 2 && nodeModelBadge(workflow, id) !== null) {
+              openModelPicker(id);
+            } else {
+              dragRef.current = { id, lastX: canvasX, lastY: canvasY };
+            }
           }
         } else if (event.kind === 'drag' && panelDragRef.current) {
           const drag = panelDragRef.current;
@@ -398,6 +548,41 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       return;
     }
 
+    // Model picker: only reachable (via `m` below) when none of the modes
+    // above are active, so this can never collide with them.
+    if (pickerOpen && focusedNode) {
+      if (key.escape) {
+        setPickerOpen(false);
+        return;
+      }
+      if (pickerFreeText !== null) {
+        if (key.return) {
+          const text = pickerFreeText.trim();
+          setPickerOpen(false);
+          if (text.length > 0) confirmModel(focusedNode.id, text);
+          return;
+        }
+        if (key.backspace || key.delete) {
+          setPickerFreeText((b) => (b ?? '').slice(0, -1));
+          return;
+        }
+        if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+          setPickerFreeText((b) => (b ?? '') + input);
+        }
+        return;
+      }
+      if (pickerModelListState?.status !== 'loaded') return; // loading, or failed and about to flip to free-text
+      const models = pickerModelListState.models;
+      if (models.length === 0) return;
+      if (key.upArrow || input === 'k') setPickerCursor((c) => (c + models.length - 1) % models.length);
+      else if (key.downArrow || input === 'j') setPickerCursor((c) => (c + 1) % models.length);
+      else if (key.return) {
+        setPickerOpen(false);
+        confirmModel(focusedNode.id, models[pickerCursor]!);
+      }
+      return;
+    }
+
     // Normal navigation.
     if (key.tab && key.shift) {
       setFocusIdx((i) => (i + workflow.order.length - 1) % workflow.order.length);
@@ -405,6 +590,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
       setFocusIdx((i) => (i + 1) % workflow.order.length);
     } else if (key.return) {
       setExpanded((e) => !e);
+    } else if (input === 'm') {
+      if (focusedNode) openModelPicker(focusedNode.id);
     } else if (key.leftArrow) {
       setOffset((o) => ({ ...o, ox: Math.max(0, o.ox - 4) }));
     } else if (key.rightArrow) {
@@ -420,8 +607,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
   });
 
   const grid = useMemo(
+    // modelTick isn't read inside renderGraph — it's a dependency purely to
+    // force recomputation, since confirmModel mutates a node's config field
+    // on the same `workflow` object in place rather than replacing it, so
+    // `workflow`'s own identity never changes for this memo to key off.
     () => renderGraph(workflow, layout, runState, focusedId),
-    [workflow, layout, runState, focusedId],
+    [workflow, layout, runState, focusedId, modelTick],
   );
   const canvasLines = useMemo(
     () => gridToLines(grid, { ...offset, width: columns - 2, height: canvasHeight }),
@@ -467,6 +658,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
         <Text>{headerParts.join('  ')}</Text>
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
+        {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
       </Text>
       <Box flexDirection="column" height={canvasHeight}>
         {canvasLines.map((line, i) => (
@@ -582,6 +774,81 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
           </Box>
           <PanelFooter hint="[a] approve · [r] reject · j/k: scroll diff · drag ⠿/edge: move · ⇲: resize" />
         </Box>
+      ) : pickerOpen && focusedNode ? (
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Model — {focusedNode.id} ({focusedNode.type.displayName})
+            </Text>
+          </PanelTitle>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            {(() => {
+              const status = runState.nodes[focusedNode.id]?.status;
+              const readOnly = status === 'running' || status === 'done';
+              return (
+                <>
+                  {readOnly ? (
+                    <Text color="yellow" wrap="truncate-end">
+                      {focusedNode.id} is already {status} — a change here applies the next time it
+                      runs, not to {status === 'running' ? 'the session in flight' : 'this attempt'}.
+                    </Text>
+                  ) : null}
+                  {pickerFreeText !== null ? (
+                    <>
+                      <Text dimColor wrap="truncate-end">
+                        model list unavailable
+                        {pickerModelListState?.status === 'failed' ? `: ${pickerModelListState.error}` : ''}
+                        {' — type a model id'}
+                      </Text>
+                      <Text wrap="truncate-end">
+                        <Text color="cyan">{'> '}</Text>
+                        {pickerFreeText}
+                        <Text inverse> </Text>
+                      </Text>
+                    </>
+                  ) : pickerModelListState?.status === 'loaded' ? (
+                    (() => {
+                      const models = pickerModelListState.models;
+                      const { start, end } = windowFor(pickerCursor, models.length, 10);
+                      return (
+                        <>
+                          {start > 0 ? <Text dimColor> ↑ {start} more above</Text> : null}
+                          {models.slice(start, end).map((model, i) => {
+                            const idx = start + i;
+                            const current = model === focusedNodeResolvedModel?.model;
+                            return (
+                              <Text
+                                key={model}
+                                wrap="truncate-end"
+                                {...(idx === pickerCursor ? { color: 'cyan', bold: true } : {})}
+                              >
+                                {idx === pickerCursor ? '❯ ' : '  '}
+                                {current ? '● ' : '  '}
+                                {model}
+                              </Text>
+                            );
+                          })}
+                          {end < models.length ? (
+                            <Text dimColor> ↓ {models.length - end} more below</Text>
+                          ) : null}
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <Text dimColor>loading models…</Text>
+                  )}
+                </>
+              );
+            })()}
+          </Box>
+          <PanelFooter
+            hint={
+              pickerFreeText !== null
+                ? 'enter: confirm · esc: cancel'
+                : '↑/↓: move · enter: select · esc: cancel'
+            }
+          />
+        </Box>
       ) : expanded && focusedNode ? (
         <Box {...panelBoxProps}>
           {(() => {
@@ -612,6 +879,18 @@ export function App({ workflow, store, ports, onExit, onInterrupt }: AppProps): 
                   <Text dimColor wrap="truncate-end">
                     config: {JSON.stringify(focusedNode.config)}
                   </Text>
+                  {focusedNode.type.hasModelField ? (
+                    <Text dimColor wrap="truncate-end">
+                      model: {focusedNodeResolvedModel?.model ?? '(none — provider default)'}
+                      {focusedNodeResolvedModel
+                        ? ` (from ${
+                            { node: 'this node', settings: 'run settings', provider: 'provider default' }[
+                              focusedNodeResolvedModel.origin
+                            ]
+                          }) · m: change`
+                        : ''}
+                    </Text>
+                  ) : null}
                   {(state.priorAttempts?.length ?? 0) > 0 ? (
                     <Text color="magenta" wrap="truncate-end">
                       attempt {state.attempt ?? 1} — earlier:{' '}

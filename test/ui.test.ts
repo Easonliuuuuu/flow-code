@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gridToLines, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
+import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
 import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import {
@@ -14,6 +14,7 @@ import {
   tailWindow,
 } from '../src/ui/panel.js';
 import { RunInterruptedError } from '../src/engine/types.js';
+import { getNodeType } from '../src/registry/index.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import { wrapText } from '../src/ui/textwrap.js';
 import { storeFor, workflowFromYaml } from './helpers.js';
@@ -109,6 +110,87 @@ describe('canvas rendering', () => {
       .join('\n')
       .replace(/\x1b\[[0-9;]*m/g, '');
     expect(text).toContain('impl !');
+  });
+});
+
+describe('nodeModelBadge / model badge rendering', () => {
+  const MODEL_WF = workflowFromYaml(`
+settings:
+  model: sonnet
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x, model: opus }
+  - id: rev
+    type: review
+  - id: check
+    type: test
+    config: { commands: ["true"] }
+edges:
+  - { from: impl, to: rev }
+  - { from: impl, to: check }
+`);
+
+  it('badges a node whose resolved model differs from settings.model', () => {
+    expect(nodeModelBadge(MODEL_WF, 'impl')).toBe('opus');
+  });
+
+  it('carries no badge for a node that resolves to the run-wide default', () => {
+    expect(nodeModelBadge(MODEL_WF, 'rev')).toBeNull();
+  });
+
+  it('carries no badge for a node type with no model field', () => {
+    expect(nodeModelBadge(MODEL_WF, 'check')).toBeNull();
+  });
+
+  it('returns null for an unknown node id', () => {
+    expect(nodeModelBadge(MODEL_WF, 'nope')).toBeNull();
+  });
+
+  it('draws the badge on the box, and prefers the retry badge over it on collision', () => {
+    const store = storeFor(MODEL_WF, '/tmp');
+    const layout = computeLayout(MODEL_WF);
+
+    const before = gridToLines(renderGraph(MODEL_WF, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+    expect(before).toContain('opus');
+    expect(before).not.toContain('↻');
+
+    // A loop-back re-run bumps attempt > 1 — the retry badge then takes the
+    // same corner cell the model badge was drawn in, and wins.
+    store.resetNode('impl');
+    const after = gridToLines(renderGraph(MODEL_WF, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+    expect(after).toContain('↻2');
+    expect(after).not.toContain('opus');
+  });
+});
+
+describe('node type registry: hasModelField', () => {
+  it('is true only for agent-driven types with a single, top-level model field', () => {
+    expect(getNodeType('discuss')?.hasModelField).toBe(true);
+    expect(getNodeType('implement')?.hasModelField).toBe(true);
+    expect(getNodeType('validate')?.hasModelField).toBe(true);
+    expect(getNodeType('review')?.hasModelField).toBe(true);
+    expect(getNodeType('git-ops')?.hasModelField).toBe(true);
+  });
+
+  it('is false for types with no agent session, and for worktree-agent (per-instance model, not one field)', () => {
+    expect(getNodeType('test')?.hasModelField).toBe(false);
+    expect(getNodeType('approval-gate')?.hasModelField).toBe(false);
+    expect(getNodeType('worktree-agent')?.hasModelField).toBe(false);
   });
 });
 
