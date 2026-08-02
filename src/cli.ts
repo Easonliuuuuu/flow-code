@@ -220,6 +220,10 @@ async function cmdRun(args: string[]): Promise<void> {
     throw err;
   }
 
+  // Captured before the fallback below can overwrite it, so the run UI can
+  // still tell a node that inherits the workflow's own `settings.model` apart
+  // from one that's only ever seeing the provider default plugged into it.
+  const workflowSettingsModel = workflow.settings.model;
   const resolved = await resolveProvider(repoRoot, workflow);
   if (resolved?.model && !workflow.settings.model) {
     workflow.settings.model = resolved.model;
@@ -374,7 +378,17 @@ async function cmdRun(args: string[]): Promise<void> {
     }
   });
 
-  await runUi({ workflow, store, ports, onInterrupt: triggerInterrupt });
+  await runUi({
+    workflow,
+    store,
+    ports,
+    onInterrupt: triggerInterrupt,
+    modelContext: {
+      providerId: resolved?.provider,
+      providerDefaultModel: resolved?.model,
+      workflowSettingsModel,
+    },
+  });
   await enginePromise;
   process.off('SIGINT', triggerInterrupt);
   process.off('SIGTERM', triggerInterrupt);

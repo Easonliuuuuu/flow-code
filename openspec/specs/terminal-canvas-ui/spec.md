@@ -34,14 +34,18 @@ The system SHALL render the loaded workflow graph as boxes connected by edges in
 - **THEN** the UI SHALL indicate which loop-back edge fired and which node triggered it, so the user can tell why execution moved backwards
 
 ### Requirement: Keyboard-first navigation
-The system SHALL support navigating between nodes and performing all node interactions (expand, approve, reject) via keyboard alone, independent of mouse support.
+The system SHALL support navigating between nodes and performing all node interactions (expand, approve, reject, choose the node's model) via keyboard alone, independent of mouse support.
 
 #### Scenario: Navigating and expanding a node via keyboard
 - **WHEN** the user presses Tab to move focus between nodes and Enter on a focused node
 - **THEN** the system SHALL expand that node's detail view without requiring any mouse input
 
+#### Scenario: Choosing a node's model via keyboard
+- **WHEN** the user presses the model-picker key on a focused node and confirms a selection with the keyboard
+- **THEN** the system SHALL apply that model to the node without requiring any mouse input
+
 ### Requirement: Mouse interaction as enhancement
-The system SHALL support mouse click to focus or expand a node and mouse drag to reposition a node, when the terminal emulator reports mouse events, without being required for any workflow action. Positions changed by dragging apply to the current session only and SHALL NOT be written back to the workflow file.
+The system SHALL support mouse click to focus or expand a node and mouse drag to reposition a node, when the terminal emulator reports mouse events, without being required for any workflow action. Positions changed by dragging apply to the current session only and SHALL NOT be written back to the workflow file. Changes the user makes to a node's configuration, such as its model, are not viewport state and ARE written back to the workflow file.
 
 #### Scenario: Terminal without mouse reporting support
 - **WHEN** the terminal emulator does not send mouse events
@@ -51,8 +55,12 @@ The system SHALL support mouse click to focus or expand a node and mouse drag to
 - **WHEN** the user drags a node to a new position and the run ends
 - **THEN** `.flow-code/workflow.yaml` SHALL be unmodified, and a subsequent run SHALL lay the graph out from scratch
 
+#### Scenario: Configuration change is persisted
+- **WHEN** the user changes a node's model during a run and the run ends
+- **THEN** `.flow-code/workflow.yaml` SHALL carry that node's new `config.model`, and a subsequent run SHALL start from it
+
 ### Requirement: Node detail view
-The system SHALL provide an expandable detail view per node showing its current status, config summary, live streamed output, and its tool-call activity log.
+The system SHALL provide an expandable detail view per node showing its current status, config summary, the model it resolves to, live streamed output, and its tool-call activity log.
 
 #### Scenario: Expanding a running node
 - **WHEN** the user expands a node that is currently `running`
@@ -65,6 +73,10 @@ The system SHALL provide an expandable detail view per node showing its current 
 #### Scenario: Denied action is visible in the node
 - **WHEN** the capability harness denies a tool call for a node
 - **THEN** that denial SHALL appear in the node's activity log marked as denied, naming the missing capability, and the node SHALL carry a visible indicator that at least one action was blocked
+
+#### Scenario: Seeing which model a node runs on
+- **WHEN** the user expands an agent-driven node
+- **THEN** the detail view SHALL name the model that node resolves to and where that model came from
 
 ### Requirement: Graph layout and viewport
 The system SHALL arrange nodes automatically in a left-to-right layout derived from the graph's forward-edge dependency order, and SHALL remain usable when the graph does not fit the terminal viewport. Loop-back edges SHALL NOT participate in layer assignment.

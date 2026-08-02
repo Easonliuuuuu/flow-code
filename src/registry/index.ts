@@ -192,6 +192,7 @@ const definitions: NodeTypeDefinition[] = [
     description: 'Interactive discussion with the user to settle intent and constraints.',
     capabilities: ['read'],
     agentDriven: true,
+    hasModelField: true,
     rolePrompt:
       'You are the discussion partner at the start of a coding workflow. ' +
       'Help the user clarify what should be built and which constraints apply. ' +
@@ -207,6 +208,7 @@ const definitions: NodeTypeDefinition[] = [
     description: 'Agent session that writes code for the configured task.',
     capabilities: ['read', 'edit', 'exec'],
     agentDriven: true,
+    hasModelField: true,
     rolePrompt:
       'You are the implementation step of a coding workflow. ' +
       'Carry out the configured task by reading and editing files and running commands. ' +
@@ -223,6 +225,7 @@ const definitions: NodeTypeDefinition[] = [
       'Deterministic command runner: executes configured shell commands with no agent session and no API cost.',
     capabilities: ['read', 'exec'],
     agentDriven: false,
+    hasModelField: false,
     rolePrompt: '',
     configSchema: testConfig,
     outputSchema: testOutput,
@@ -236,6 +239,7 @@ const definitions: NodeTypeDefinition[] = [
       'Agent-driven conformance check: does the work satisfy the task intent? Cannot edit, so it cannot fix its way to passing.',
     capabilities: ['read', 'exec'],
     agentDriven: true,
+    hasModelField: true,
     rolePrompt:
       'You are the validation step of a coding workflow. ' +
       'Check whether the work done so far satisfies the task intent described in your context. ' +
@@ -252,6 +256,7 @@ const definitions: NodeTypeDefinition[] = [
     description: 'Agent-driven quality critique: findings only, no edit, no exec.',
     capabilities: ['read'],
     agentDriven: true,
+    hasModelField: true,
     rolePrompt:
       'You are the code review step of a coding workflow. ' +
       'Critique the pending changes for correctness, clarity, and risk. ' +
@@ -269,6 +274,7 @@ const definitions: NodeTypeDefinition[] = [
       'Commits (and optionally pushes) what exists. Cannot edit files: it records changes, it does not author them.',
     capabilities: ['read', 'git-read', 'git-write'],
     agentDriven: true,
+    hasModelField: true,
     rolePrompt:
       'You are the git operations step of a coding workflow. ' +
       'Commit the pending changes exactly as they exist, with a clear commit message. ' +
@@ -286,6 +292,7 @@ const definitions: NodeTypeDefinition[] = [
       'Fans out N agent instances, each in an isolated git worktree/branch; converges by user selection.',
     capabilities: ['read', 'edit', 'exec'],
     agentDriven: true,
+    hasModelField: false,
     rolePrompt:
       'You are one of several parallel implementation agents, each working in an isolated git worktree. ' +
       'Carry out your assigned task within your own working directory. ' +
@@ -304,6 +311,7 @@ const definitions: NodeTypeDefinition[] = [
       'No agent session: computes the pending diff against the run baseline and waits for explicit user approval.',
     capabilities: [],
     agentDriven: false,
+    hasModelField: false,
     rolePrompt: '',
     configSchema: approvalGateConfig,
     outputSchema: approvalGateOutput,

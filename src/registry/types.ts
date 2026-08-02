@@ -27,6 +27,14 @@ export interface NodeTypeDefinition {
   capabilities: readonly Capability[];
   /** False for Test (deterministic commands) and Approval-Gate (no session). */
   agentDriven: boolean;
+  /**
+   * True when the type's config schema carries a single top-level `model`
+   * field the run UI's model picker can read and write. False for every
+   * `agentDriven: false` type, and also for Worktree-Agent: its `compare`
+   * mode sets a model per fan-out instance, not once for the node, so there
+   * is no single value for the picker to show or edit.
+   */
+  hasModelField: boolean;
   /** Default role prompt for agent-driven types; empty otherwise. */
   rolePrompt: string;
   configSchema: ZodType;

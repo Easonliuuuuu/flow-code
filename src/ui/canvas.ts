@@ -1,5 +1,6 @@
 import type { NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
+import { resolveNodeModel } from '../workflow/modelResolution.js';
 import type { Layout, Viewport } from './layout.js';
 
 export interface Cell {
@@ -44,6 +45,22 @@ const ANSI: Record<string, string> = {
   'loopback-fired': '\x1b[1;35m',
 };
 const RESET = '\x1b[0m';
+
+/**
+ * The model a node's box should badge, or null when it's running on the
+ * run-wide default. `workflow.settings.model` already carries the provider
+ * fallback baked in by the time the UI sees it (see `cmdRun` in `cli.ts`),
+ * so it alone is "the effective default a node without its own override
+ * would get" — no separate provider-default plumbing needed here, only in
+ * the detail view's origin/provenance line, which the App computes itself.
+ */
+export function nodeModelBadge(workflow: Workflow, nodeId: string): string | null {
+  const node = workflow.nodes.find((n) => n.id === nodeId);
+  if (!node) return null;
+  const resolved = resolveNodeModel(node.config, workflow.settings.model, workflow.settings.model);
+  if (resolved.model === undefined || resolved.model === workflow.settings.model) return null;
+  return resolved.model;
+}
 
 export function makeGrid(width: number, height: number): Grid {
   return Array.from({ length: height }, () =>
@@ -152,12 +169,19 @@ export function renderGraph(
     const typeLabel = ` ${node.type.displayName}`.slice(0, inner).padEnd(inner);
     put(grid, box.x, box.y + 2, '│', style);
     put(grid, box.x + 1, box.y + 2, typeLabel, focused ? 'focus' : 'dim');
-    // Only a node a loop-back has re-run carries a badge; a first attempt is
-    // the ordinary case and says nothing.
+    // Only a node a loop-back has re-run carries a retry badge; a first
+    // attempt is the ordinary case and says nothing. The retry badge takes
+    // the corner over the model badge on the rare frame both would apply —
+    // it's the rarer, more transient of the two, and the model is still
+    // visible in the detail view.
     const attempt = state.attempt ?? 1;
+    const modelBadge = nodeModelBadge(workflow, node.id);
     if (attempt > 1) {
-      const badge = `↻${attempt}`;
+      const badge = `↻${attempt}`.slice(0, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
+    } else if (modelBadge) {
+      const badge = modelBadge.slice(0, inner);
+      put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'dim');
     }
     put(grid, box.x + box.w - 1, box.y + 2, '│', style);
     put(grid, box.x, box.y + 3, `╰${'─'.repeat(inner)}╯`, style);

@@ -2,10 +2,16 @@ import { render } from 'ink';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { describe, expect, it } from 'vitest';
-import { App } from '../src/ui/App.js';
+import { App, type ModelContext } from '../src/ui/App.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import { MOVE_HANDLE, RESIZE_GRIP } from '../src/ui/panel.js';
 import { makeTempGitRepo, storeFor, workflowFromYaml } from './helpers.js';
+
+const NO_MODEL_CONTEXT: ModelContext = {
+  providerId: undefined,
+  providerDefaultModel: undefined,
+  workflowSettingsModel: undefined,
+};
 
 /**
  * End-to-end render tests: mount the real App against a fake TTY and read the
@@ -45,7 +51,11 @@ function fakeStdin(): NodeJS.ReadStream {
   return stream;
 }
 
-const settle = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms));
+// 120ms rather than a hair-trigger value: under the full suite's load (many
+// concurrent Ink renders across files), a too-tight wait here reads a frame
+// from before React has processed the update and is genuinely flaky, not a
+// real assertion about timing.
+const settle = (ms = 120): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Last frame with visible content, stripped of styling escapes, as lines. */
 function lastFrameLines(stdout: FakeStdout): string[] {
@@ -68,6 +78,7 @@ function mountDiscussApp(): {
       workflow: WF,
       store,
       ports,
+      modelContext: NO_MODEL_CONTEXT,
       onExit: () => {},
       onInterrupt: () => {},
     }),
