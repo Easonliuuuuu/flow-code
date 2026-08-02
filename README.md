@@ -26,6 +26,23 @@ Agent-driven nodes are routed by node type: Discuss runs on the Claude Agent SDK
 
 Workflows are defined per-project in `.flow-code/workflow.yaml`. The full schema — node types, capabilities, edges, and run settings — is documented in [`openspec/specs/workflow-graph/spec.md`](openspec/specs/workflow-graph/spec.md), which is the source of truth for the config format.
 
+### Iterating on failure
+
+Validate and Review fail their node when they return a `fail` verdict, which by default stops the run there. To iterate instead of stopping, add a **loop-back edge**: when its `from` node fails, execution returns to its `to` node and re-runs every node on the path between them, with the failure injected as context so the retry knows what to fix.
+
+```yaml
+edges:
+  - { from: implement, to: validate }
+  # On a failing verdict, go back to implement and try again.
+  - { from: validate, to: implement, loopback: true }
+  # Or set the bound explicitly:
+  - { from: validate, to: implement, loopback: { maxAttempts: 5 } }
+```
+
+A loop-back must point back to a node upstream of its source — this is checked before the run starts. Every loop-back is bounded (`maxAttempts` defaults to **3**, counted per target node), so a loop that never converges still terminates: the failing node stays in `error`, its downstream nodes are skipped, and the status detail says the attempt limit was reached. Loop-backs are drawn as return paths below the graph, and a node that has been re-run carries a `↻N` badge.
+
+A rejected Approval-Gate works the same way: with a loop-back declared it sends the segment back for another pass, and without one it halts the branch as before.
+
 ## Contributing
 
 Work happens on feature branches, merged via pull request into `main` once CI is green:
