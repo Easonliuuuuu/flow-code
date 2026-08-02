@@ -1,13 +1,13 @@
 ---
 name: git-commit
-description: Stage and commit all changes using conventional commits format. Use when the user wants to commit current working tree changes with a standardized message.
+description: Stage and commit all changes using conventional commits format, then optionally push and open a PR with a matching template. Use when the user wants to commit current working tree changes with a standardized message, or also wants a PR opened.
 license: MIT
 metadata:
   author: local
-  version: "1.0"
+  version: "1.1"
 ---
 
-Stage and commit all changes using the conventional commits format.
+Stage and commit all changes using the conventional commits format, then optionally push the branch and open a PR whose description mirrors the commit body.
 
 **Input**: Optional scope or hint from the user (e.g., "auth cleanup", "firearm router"). If omitted, derive everything from the diff.
 
@@ -151,11 +151,65 @@ Stage and commit all changes using the conventional commits format.
    <hash> <message>
    ```
 
+7. **Offer to push and open a PR**
+
+   Use **AskUserQuestion** with options: "Push & open PR", "Just commit (done)"
+
+   If "Just commit (done)": stop here.
+
+   If "Push & open PR":
+
+   a. Check the current branch with `git branch --show-current`. If it's `main` (or the repo's default branch), create a new branch first — derive a short kebab-case name from the commit's `<type>(<scope>)` (e.g. `fix/ops-worktree-race`), or ask the user for one if nothing sensible can be derived:
+      ```bash
+      git checkout -b <branch-name>
+      ```
+
+   b. Push and set upstream:
+      ```bash
+      git push -u origin <branch-name>
+      ```
+
+   c. Build the PR title and body from the same material as the commit message — do not re-derive from scratch:
+      - **Title**: same conventional-commit format as step 2 — `<type>(<scope>): <summary>`, identical to the commit's first line. Use the same `<type>` values: `feat`, `fix`, `refactor`, `chore`, `docs`, `test`, `ci`, `build`.
+        Examples: `feat(canvas): draw loop-back edges for re-run nodes`, `fix(engine): stop worktree cleanup from racing the reconciler`, `refactor(ops.ts): extract shared retry helper`.
+      - **Body** — reuse the commit's `Changes`, `Root cause`/`Motivation`, and `Testing` sections, and add a `Test plan` checklist (concrete, reviewer-actionable steps derived from `Testing`):
+
+        ```
+        ## Summary
+        - <bullet from commit's Changes section>
+        - <bullet from commit's Changes section>
+
+        ## Root cause
+        <or "## Motivation" — same content as the commit body>
+
+        ## Test plan
+        - [ ] <concrete step derived from Testing>
+        - [ ] <concrete step derived from Testing>
+
+        ## Testing
+        <same content as the commit's Testing line>
+        ```
+
+      Never add a `Co-Authored-By`, "Generated with Claude Code", or similar footer to the PR body.
+
+   d. Show the proposed PR title + body and confirm with **AskUserQuestion** ("Create PR", "Edit", "Cancel") before running:
+      ```bash
+      gh pr create --title "<title>" --body "$(cat <<'EOF'
+      <body>
+      EOF
+      )"
+      ```
+
+   e. Display the returned PR URL.
+
 **Guardrails**
 - Never use `git add -A` or `git add .`
 - Never skip pre-commit hooks (`--no-verify`)
 - Never commit `.env` or credential files — warn and skip them
-- Never add a `Co-Authored-By` (or similar) line to the commit message
+- Never add a `Co-Authored-By` (or similar) line to the commit message or PR body
 - If `git commit` fails due to a hook, report the hook output and stop; do not retry automatically
 - If there are no changes to stage, report "Nothing to commit" and stop
-- Always use HEREDOC syntax for multi-line commit messages to preserve formatting
+- Always use HEREDOC syntax for multi-line commit messages and PR bodies to preserve formatting
+- Never push directly to `main`/the default branch — always create a feature branch first
+- Never force-push (`--force`/`-f`) as part of this flow
+- Only run `gh pr create` after the user has explicitly confirmed the PR title/body
