@@ -7,6 +7,7 @@ import type {
   NodeStatus,
   RunBaseline,
   RunState,
+  TokenUsage,
   WorktreeRecord,
 } from './types.js';
 
@@ -105,14 +106,40 @@ export class RunStateStore {
 
   setStatus(nodeId: string, status: NodeStatus, detail?: string): void {
     const node = this.node(nodeId);
+    const now = new Date().toISOString();
+    const terminal = status === 'done' || status === 'error' || status === 'skipped';
     this.state.nodes = {
       ...this.state.nodes,
       [nodeId]: {
         ...node,
         status,
         ...(detail !== undefined ? { statusDetail: detail } : {}),
+        // Timestamps bracket the node's wall-clock time, which the UI shows
+        // live while it runs and freezes once it finishes. `startedAt` is
+        // only stamped once, so a mid-run status detail update (running →
+        // running) doesn't restart the clock.
+        ...(status === 'running' && node.startedAt === undefined ? { startedAt: now } : {}),
+        ...(terminal ? { endedAt: now } : {}),
       },
     };
+    this.commit();
+  }
+
+  /**
+   * Accumulate token usage reported by a runner. Deltas, not totals: every
+   * API response adds its own usage, so the count climbs live during a
+   * session and survives across attempts (a loop-back re-run adds to the
+   * node's bill rather than resetting it).
+   */
+  addTokens(nodeId: string, delta: Partial<TokenUsage>): void {
+    const node = this.node(nodeId);
+    const prev = node.tokens ?? { input: 0, output: 0, cached: 0 };
+    const tokens: TokenUsage = {
+      input: prev.input + (delta.input ?? 0),
+      output: prev.output + (delta.output ?? 0),
+      cached: prev.cached + (delta.cached ?? 0),
+    };
+    this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, tokens } };
     this.commit();
   }
 
@@ -138,7 +165,15 @@ export class RunStateStore {
       ...(node.statusDetail !== undefined ? { detail: node.statusDetail } : {}),
       endedAt: new Date().toISOString(),
     };
-    const { output: _output, statusDetail: _statusDetail, ...rest } = node;
+    // Tokens deliberately survive: they are what the node has already cost,
+    // and a new attempt adds to that rather than starting the bill over.
+    const {
+      output: _output,
+      statusDetail: _statusDetail,
+      startedAt: _startedAt,
+      endedAt: _endedAt,
+      ...rest
+    } = node;
     this.state.nodes = {
       ...this.state.nodes,
       [nodeId]: {

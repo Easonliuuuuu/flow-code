@@ -87,6 +87,7 @@ async function runTurn(
   req: AgentSessionRequest,
   apiKeys: string[],
   interceptor: NvidiaInterceptor,
+  store: RunStateStore,
 ): Promise<string> {
   const tools = toolsForCapabilities(req.capabilities);
   const shellEnv = compileToolPolicy(req.capabilities, req.workingDir).env;
@@ -100,6 +101,7 @@ async function runTurn(
       messages,
       tools,
       apiKeys,
+      onUsage: (usage) => store.addTokens(req.nodeId, usage),
       ...(req.signal ? { signal: req.signal } : {}),
     });
     messages.push(message);
@@ -188,7 +190,7 @@ export class OpenAiCompatSessionRunner implements SessionRunner {
       { role: 'system', content: systemPrompt(req) },
       { role: 'user', content: req.prompt },
     ];
-    const finalText = await runTurn(config, messages, req, apiKeys, interceptor);
+    const finalText = await runTurn(config, messages, req, apiKeys, interceptor, store);
     return { finalText };
   }
 
@@ -209,7 +211,7 @@ export class OpenAiCompatSessionRunner implements SessionRunner {
       send(userText: string): Promise<string> {
         if (req.signal?.aborted) return Promise.reject(new RunInterruptedError());
         messages.push({ role: 'user', content: userText });
-        return runTurn(config, messages, req, apiKeys, interceptor);
+        return runTurn(config, messages, req, apiKeys, interceptor, store);
       },
       async end(): Promise<void> {
         // No server-side session to tear down — nothing to do.

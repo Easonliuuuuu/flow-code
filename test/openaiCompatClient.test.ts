@@ -107,6 +107,38 @@ describe('callOpenAiCompatChat retries', () => {
   });
 });
 
+describe('callOpenAiCompatChat usage reporting', () => {
+  it('splits cached prompt tokens out of the input count so a total never double-counts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          ...OK_BODY,
+          usage: {
+            prompt_tokens: 1_000,
+            completion_tokens: 120,
+            prompt_tokens_details: { cached_tokens: 800 },
+          },
+        }),
+      ),
+    );
+    const onUsage = vi.fn();
+
+    await callOpenAiCompatChat({ ...chatOpts(), onUsage });
+
+    expect(onUsage).toHaveBeenCalledWith({ input: 200, output: 120, cached: 800 });
+  });
+
+  it('stays quiet when the provider reports no usage at all', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(OK_BODY)));
+    const onUsage = vi.fn();
+
+    await callOpenAiCompatChat({ ...chatOpts(), onUsage });
+
+    expect(onUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('callOpenAiCompatChat key rotation', () => {
   function authHeader(fetchMock: ReturnType<typeof vi.fn>, callIndex: number): string | undefined {
     return (fetchMock.mock.calls[callIndex]![1].headers as Record<string, string>).Authorization;

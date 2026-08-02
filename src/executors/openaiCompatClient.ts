@@ -15,6 +15,35 @@ export interface ChatMessage {
 
 interface ChatCompletionResponse {
   choices: Array<{ message: ChatMessage; finish_reason: string }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+  };
+}
+
+/** Token usage for one response, in the shape the run-state store accumulates. */
+export interface ChatUsage {
+  input: number;
+  output: number;
+  cached: number;
+}
+
+/**
+ * Not every OpenAI-compatible endpoint reports usage, and some omit the
+ * cached-token breakdown — a missing field reads as zero rather than
+ * suppressing the whole report.
+ */
+function usageOf(data: ChatCompletionResponse): ChatUsage | undefined {
+  if (!data.usage) return undefined;
+  const cached = data.usage.prompt_tokens_details?.cached_tokens ?? 0;
+  return {
+    // `prompt_tokens` is inclusive of cached tokens; split them so the two
+    // never double-count in a total.
+    input: Math.max(0, (data.usage.prompt_tokens ?? 0) - cached),
+    output: data.usage.completion_tokens ?? 0,
+    cached,
+  };
 }
 
 /** Thrown on a non-2xx response or a malformed body; carries enough detail to log usefully. */
@@ -89,6 +118,8 @@ export async function callOpenAiCompatChat(opts: {
   tools: NvidiaToolDef[];
   apiKeys: string[];
   signal?: AbortSignal;
+  /** Called once per successful response, so token counts climb live mid-turn. */
+  onUsage?: (usage: ChatUsage) => void;
 }): Promise<ChatMessage> {
   const payload = JSON.stringify({
     model: opts.model,
@@ -142,6 +173,8 @@ export async function callOpenAiCompatChat(opts: {
         const data = (await res.json()) as ChatCompletionResponse;
         const message = data.choices?.[0]?.message;
         if (!message) throw new OpenAiCompatApiError(`${opts.baseUrl} response contained no choices[0].message`);
+        const usage = usageOf(data);
+        if (usage) opts.onUsage?.(usage);
         return message;
       }
 

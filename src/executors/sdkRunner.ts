@@ -27,6 +27,29 @@ function assistantText(message: SDKMessage): string {
     .join('');
 }
 
+/**
+ * Per-response token usage off an assistant message. Only assistant messages
+ * are counted: the terminal `result` message reports usage cumulatively for
+ * the whole session, so adding that too would double every turn.
+ */
+function reportUsage(message: SDKMessage, nodeId: string, store: RunStateStore): void {
+  if (message.type !== 'assistant') return;
+  const usage = message.message.usage as
+    | {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number | null;
+        cache_creation_input_tokens?: number | null;
+      }
+    | undefined;
+  if (!usage) return;
+  store.addTokens(nodeId, {
+    input: usage.input_tokens ?? 0,
+    output: usage.output_tokens ?? 0,
+    cached: (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+  });
+}
+
 function extractExitStatus(toolResponse: unknown): number | null | undefined {
   if (toolResponse === null || typeof toolResponse !== 'object') return undefined;
   const r = toolResponse as Record<string, unknown>;
@@ -187,6 +210,7 @@ export class SdkSessionRunner implements SessionRunner {
     let finalText = '';
     try {
       for await (const message of q) {
+        reportUsage(message, req.nodeId, store);
         const text = assistantText(message);
         if (text.length > 0) {
           finalText = text;
@@ -243,6 +267,7 @@ export class SdkSessionRunner implements SessionRunner {
     const pump = (async () => {
       try {
         for await (const message of q) {
+          reportUsage(message, req.nodeId, store);
           if (!sessionIdReported && message.session_id) {
             sessionIdReported = true;
             req.onSessionId?.(message.session_id);

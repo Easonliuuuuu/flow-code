@@ -13,6 +13,12 @@ export interface ChatMessage {
     tool_calls?: ChatToolCall[];
     tool_call_id?: string;
 }
+/** Token usage for one response, in the shape the run-state store accumulates. */
+export interface ChatUsage {
+    input: number;
+    output: number;
+    cached: number;
+}
 /** Thrown on a non-2xx response or a malformed body; carries enough detail to log usefully. */
 export declare class OpenAiCompatApiError extends Error {
 }
@@ -34,4 +40,6 @@ export declare function callOpenAiCompatChat(opts: {
     tools: NvidiaToolDef[];
     apiKeys: string[];
     signal?: AbortSignal;
+    /** Called once per successful response, so token counts climb live mid-turn. */
+    onUsage?: (usage: ChatUsage) => void;
 }): Promise<ChatMessage>;

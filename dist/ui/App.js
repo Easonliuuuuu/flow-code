@@ -8,6 +8,7 @@ import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { setNodeModel, WorkflowWriteError } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
+import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import { computeLayout, hitTest, scrollIntoView } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import { createModelListLoader } from './modelListLoader.js';
@@ -17,6 +18,8 @@ import { wrapText } from './textwrap.js';
 /** The header line above the canvas, and the hint line below it when no panel is docked. */
 const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
+/** Spinner/elapsed-clock cadence: fast enough to read as motion, slow enough not to churn frames. */
+const ANIMATION_INTERVAL_MS = 120;
 function formatActivityRow(entry) {
     const time = entry.ts.slice(11, 19);
     const summary = entry.summary.length > 42 ? `${entry.summary.slice(0, 42)}…` : entry.summary;
@@ -47,6 +50,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const { stdout } = useStdout();
     const { stdin } = useStdin();
     const [runState, setRunState] = useState(store.snapshot());
+    const [frame, setFrame] = useState(0);
     const [, setPortsTick] = useState(0);
     const [focusIdx, setFocusIdx] = useState(0);
     const [expanded, setExpanded] = useState(false);
@@ -92,6 +96,16 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     }, []);
     useEffect(() => store.subscribe(setRunState), [store]);
     useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
+    // Animation clock for running node cards (spinner, ticking elapsed time).
+    // It only runs while something is actually running, so an idle or finished
+    // graph costs nothing and redraws nothing.
+    const anyRunning = Object.values(runState.nodes).some((n) => n.status === 'running');
+    useEffect(() => {
+        if (!anyRunning)
+            return;
+        const timer = setInterval(() => setFrame((f) => f + 1), ANIMATION_INTERVAL_MS);
+        return () => clearInterval(timer);
+    }, [anyRunning]);
     const columns = stdout.columns ?? 100;
     const rows = stdout.rows ?? 30;
     const pendingApproval = ports.pendingApproval;
@@ -534,10 +548,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     // force recomputation, since confirmModel mutates a node's config field
     // on the same `workflow` object in place rather than replacing it, so
     // `workflow`'s own identity never changes for this memo to key off.
-    () => renderGraph(workflow, layout, runState, focusedId), [workflow, layout, runState, focusedId, modelTick]);
+    // `frame` plays the same role for the animated parts of a node card.
+    () => renderGraph(workflow, layout, runState, focusedId, { frame, now: Date.now() }), [workflow, layout, runState, focusedId, modelTick, frame]);
     const canvasLines = useMemo(() => gridToLines(grid, { ...offset, width: columns - 2, height: canvasHeight }), [grid, offset, columns, canvasHeight]);
     const statusCounts = Object.values(runState.nodes).reduce((acc, n) => ({ ...acc, [n.status]: (acc[n.status] ?? 0) + 1 }), {});
     const finished = runState.finishedAt !== undefined;
+    const runTokens = totalTokens(runState.nodes);
     const headerParts = Object.entries(statusCounts).map(([status, count]) => `${STATUS_GLYPHS[status]} ${count}`);
     // Docked panels stay in normal flow (as before); a floating one is drawn
     // absolutely-positioned on top of the canvas, at whatever rect the user
@@ -558,7 +574,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             }
             : { height: panelHeight }),
     };
-    return (_jsxs(Box, { flexDirection: "column", width: columns, height: rows, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, color: "cyan", children: "flow-code" }), _jsxs(Text, { dimColor: true, children: [" run ", runState.runId.slice(0, 8), " \u00B7 "] }), _jsx(Text, { children: headerParts.join('  ') }), finished ? _jsx(Text, { color: "green", children: " \u00B7 finished \u2014 press q to exit" }) : null, floating ? _jsx(Text, { dimColor: true, children: " \u00B7 ctrl+p: dock panel" }) : null, pickerMessage ? _jsxs(Text, { color: "yellow", children: [" \u00B7 ", pickerMessage] }) : null] }), _jsx(Box, { flexDirection: "column", height: canvasHeight, children: canvasLines.map((line, i) => (_jsx(Text, { children: line || ' ' }, i))) }), discussActive && discussState ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Discussion \u2014 ", discussState.nodeId, discussState.topic ? `: ${discussState.topic}` : '', !discussWindow.following ? (_jsxs(Text, { dimColor: true, children: [' ', "(", discussWindow.start, " above", discussRows.length - discussWindow.end > 0
+    return (_jsxs(Box, { flexDirection: "column", width: columns, height: rows, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, color: "cyan", children: "flow-code" }), _jsxs(Text, { dimColor: true, children: [" run ", runState.runId.slice(0, 8), " \u00B7 "] }), _jsx(Text, { children: headerParts.join('  ') }), runTokens > 0 ? (_jsxs(Text, { color: "cyan", children: [" \u00B7 ", formatTokens(runTokens), " tok"] })) : null, finished ? _jsx(Text, { color: "green", children: " \u00B7 finished \u2014 press q to exit" }) : null, floating ? _jsx(Text, { dimColor: true, children: " \u00B7 ctrl+p: dock panel" }) : null, pickerMessage ? _jsxs(Text, { color: "yellow", children: [" \u00B7 ", pickerMessage] }) : null] }), _jsx(Box, { flexDirection: "column", height: canvasHeight, children: canvasLines.map((line, i) => (_jsx(Text, { children: line || ' ' }, i))) }), discussActive && discussState ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Discussion \u2014 ", discussState.nodeId, discussState.topic ? `: ${discussState.topic}` : '', !discussWindow.following ? (_jsxs(Text, { dimColor: true, children: [' ', "(", discussWindow.start, " above", discussRows.length - discussWindow.end > 0
                                             ? `, ${discussRows.length - discussWindow.end} below`
                                             : '', ")"] })) : null] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", overflow: "hidden", children: discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: row.color, children: row.prefix }), row.segments.map((segment, i) => (_jsx(Text, { ...segmentStyle(segment), children: segment.text }, i)))] }, row.key))) }), _jsx(Text, { wrap: "truncate-end", children: discussState.awaitingUser ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "cyan", children: '> ' }), inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth)), _jsx(Text, { inverse: true, children: " " })] })) : (_jsx(Text, { dimColor: true, children: "\u2026 agent is thinking" })) }), _jsx(PanelFooter, { hint: "enter: send \u00B7 /done: finish \u00B7 PgUp/PgDn: scroll \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingConvergence ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Convergence \u2014 ", pendingConvergence.req.nodeId, " (", pendingConvergence.req.mode, pendingConvergence.req.mode === 'compare'
                                     ? ': pick exactly one'
@@ -609,6 +625,13 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                     const activityBudget = Math.max(1, bodyBudget - outputBudget);
                     return (_jsxs(_Fragment, { children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, wrap: "truncate-end", children: [focusedNode.id, " ", _jsxs(Text, { dimColor: true, children: ["(", focusedNode.type.displayName, ")"] }), ' ', STATUS_GLYPHS[state.status], " ", state.status, state.statusDetail ? _jsxs(Text, { dimColor: true, children: [" \u2014 ", state.statusDetail] }) : null, state.denials > 0 ? (_jsxs(Text, { color: "red", bold: true, children: ['  ', "\u26A0 ", state.denials, " blocked action", state.denials > 1 ? 's' : ''] })) : null] }) }), _jsxs(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: [_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["config: ", JSON.stringify(focusedNode.config)] }), focusedNode.type.hasModelField ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["model: ", focusedNodeResolvedModel?.model ?? '(none — provider default)', focusedNodeResolvedModel
                                                 ? ` (from ${{ node: 'this node', settings: 'run settings', provider: 'provider default' }[focusedNodeResolvedModel.origin]}) · m: change`
+                                                : ''] })) : null, state.tokens || state.startedAt ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: [state.tokens
+                                                ? `tokens: ${formatTokens(state.tokens.input)} in` +
+                                                    `${state.tokens.cached > 0 ? ` (+${formatTokens(state.tokens.cached)} cached)` : ''}` +
+                                                    ` · ${formatTokens(state.tokens.output)} out`
+                                                : 'tokens: —', state.startedAt
+                                                ? ` · elapsed ${formatDuration((state.endedAt ? Date.parse(state.endedAt) : Date.now()) -
+                                                    Date.parse(state.startedAt))}`
                                                 : ''] })) : null, (state.priorAttempts?.length ?? 0) > 0 ? (_jsxs(Text, { color: "magenta", wrap: "truncate-end", children: ["attempt ", state.attempt ?? 1, " \u2014 earlier:", ' ', state.priorAttempts.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')] })) : null, tail(liveLines, outputBudget).map((line, i) => (_jsx(Text, { wrap: "truncate-end", children: line || ' ' }, `o${i}`))), activity.length > 0 ? _jsx(Text, { dimColor: true, children: "\u2500\u2500 activity \u2500\u2500" }) : null, tail(activity, activityBudget).map((entry, i) => (_jsx(Text, { wrap: "truncate-end", ...(entry.decision === 'denied' ? { color: 'red' } : {}), children: formatActivityRow(entry) }, `a${i}`)))] }), _jsx(PanelFooter, { hint: "enter: close \u00B7 tab: focus \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] }));
                 })() })) : (_jsxs(Text, { dimColor: true, children: ["tab: focus \u00B7 enter: details \u00B7 \u2190\u2192\u2191\u2193: pan \u00B7 q: quit", focusedNode ? ` · focused: ${focusedNode.id}` : ''] }))] }));
 }

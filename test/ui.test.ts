@@ -60,11 +60,13 @@ describe('graph auto-layout', () => {
   it('scrollIntoView brings an out-of-viewport box into view', () => {
     const layout = computeLayout(WF);
     const rev = layout.boxes.get('rev')!;
-    const { ox, oy } = scrollIntoView(rev, { ox: 0, oy: 0, width: 20, height: 5 });
+    // The viewport has to be at least one box big for "fully visible" to be
+    // achievable at all — a node card is 24×6.
+    const { ox, oy } = scrollIntoView(rev, { ox: 0, oy: 0, width: 30, height: 8 });
     expect(ox).toBeGreaterThan(0);
     expect(rev.x).toBeGreaterThanOrEqual(ox);
-    expect(rev.x + rev.w).toBeLessThanOrEqual(ox + 20);
-    expect(rev.y + rev.h).toBeLessThanOrEqual(oy + 5);
+    expect(rev.x + rev.w).toBeLessThanOrEqual(ox + 30);
+    expect(rev.y + rev.h).toBeLessThanOrEqual(oy + 8);
   });
 
   it('hitTest maps canvas coordinates to node ids', () => {
@@ -92,6 +94,59 @@ describe('canvas rendering', () => {
     expect(STATUS_GLYPHS.skipped).not.toBe(STATUS_GLYPHS.idle);
     // Edges drawn between boxes.
     expect(text).toContain('▶');
+  });
+
+  it('draws a live card: spinner, current tool call, tokens and elapsed time', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'running');
+    store.addTokens('impl', { input: 1_200, output: 340, cached: 0 });
+    store.appendActivity({
+      ts: new Date().toISOString(),
+      nodeId: 'impl',
+      tool: 'Edit',
+      summary: 'src/ui/canvas.ts',
+      decision: 'allowed',
+    });
+    const layout = computeLayout(WF);
+    const started = Date.parse(store.snapshot().nodes['impl']!.startedAt!);
+    const render = (frame: number): string =>
+      gridToLines(renderGraph(WF, layout, store.snapshot(), null, { frame, now: started + 5_000 }), {
+        ox: 0,
+        oy: 0,
+        width: layout.width + 2,
+        height: layout.height + 1,
+      })
+        .join('\n')
+        .replace(/\x1b\[[0-9;]*m/g, '');
+
+    const frame0 = render(0);
+    expect(frame0).toContain('Edit src/ui/canvas.ts');
+    expect(frame0).toContain('↑1.2k ↓340 · 5s');
+    // The status glyph animates while running, so a working node is visibly
+    // distinct from a stalled one.
+    expect(render(1).split('impl')[0]).not.toBe(frame0.split('impl')[0]);
+  });
+
+  it('fills the subtitle with what a node will do, and later with what it produced', () => {
+    const store = storeFor(WF, '/tmp');
+    const layout = computeLayout(WF);
+    const text = (): string =>
+      gridToLines(renderGraph(WF, layout, store.snapshot(), null), {
+        ox: 0,
+        oy: 0,
+        width: layout.width + 2,
+        height: layout.height + 1,
+      })
+        .join('\n')
+        .replace(/\x1b\[[0-9;]*m/g, '');
+
+    // Idle: the configured intent, not the type name repeated back.
+    expect(text()).toContain('true');
+    expect(text()).not.toContain('Implement Implement');
+
+    store.setStatus('impl', 'done');
+    store.setOutput('impl', { changedFiles: ['a.ts', 'b.ts'], diff: '' });
+    expect(text()).toContain('2 files changed');
   });
 
   it('shows a blocked-action indicator on nodes with denials', () => {

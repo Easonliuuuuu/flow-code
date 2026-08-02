@@ -50,10 +50,28 @@ export interface AttemptRecord {
     detail?: string;
     endedAt: string;
 }
+/**
+ * Tokens a node has consumed so far, accumulated across every API call it
+ * makes (and, for a fan-out node, across all of its instances). Absent on
+ * node types with no agent session — they cost nothing.
+ */
+export interface TokenUsage {
+    /** Fresh (uncached) prompt tokens. */
+    input: number;
+    output: number;
+    /** Prompt tokens served from, or written to, the provider's cache. */
+    cached: number;
+}
 export interface NodeRunState {
     status: NodeStatus;
     statusDetail?: string;
     output?: unknown;
+    /** Set the first time the node enters `running`; cleared by a loop-back reset. */
+    startedAt?: string;
+    /** Set when the node reaches a terminal status; cleared by a loop-back reset. */
+    endedAt?: string;
+    /** Cumulative across attempts: what this node has cost, not what this attempt cost. */
+    tokens?: TokenUsage;
     /**
      * Which attempt this node is on, counting from 1. Greater than 1 only when
      * a loop-back has reset and re-run it.

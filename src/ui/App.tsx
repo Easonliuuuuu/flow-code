@@ -9,6 +9,7 @@ import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { setNodeModel, WorkflowWriteError } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
+import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import { createModelListLoader, type ModelListLoader } from './modelListLoader.js';
@@ -49,6 +50,9 @@ interface PanelDrag {
 /** The header line above the canvas, and the hint line below it when no panel is docked. */
 const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
+
+/** Spinner/elapsed-clock cadence: fast enough to read as motion, slow enough not to churn frames. */
+const ANIMATION_INTERVAL_MS = 120;
 
 export interface AppProps {
   workflow: Workflow;
@@ -116,6 +120,7 @@ export function App({
   const { stdin } = useStdin();
 
   const [runState, setRunState] = useState<RunState>(store.snapshot());
+  const [frame, setFrame] = useState(0);
   const [, setPortsTick] = useState(0);
   const [focusIdx, setFocusIdx] = useState(0);
   const [expanded, setExpanded] = useState(false);
@@ -166,6 +171,16 @@ export function App({
 
   useEffect(() => store.subscribe(setRunState), [store]);
   useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
+
+  // Animation clock for running node cards (spinner, ticking elapsed time).
+  // It only runs while something is actually running, so an idle or finished
+  // graph costs nothing and redraws nothing.
+  const anyRunning = Object.values(runState.nodes).some((n) => n.status === 'running');
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = setInterval(() => setFrame((f) => f + 1), ANIMATION_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [anyRunning]);
 
   const columns = stdout.columns ?? 100;
   const rows = stdout.rows ?? 30;
@@ -616,8 +631,9 @@ export function App({
     // force recomputation, since confirmModel mutates a node's config field
     // on the same `workflow` object in place rather than replacing it, so
     // `workflow`'s own identity never changes for this memo to key off.
-    () => renderGraph(workflow, layout, runState, focusedId),
-    [workflow, layout, runState, focusedId, modelTick],
+    // `frame` plays the same role for the animated parts of a node card.
+    () => renderGraph(workflow, layout, runState, focusedId, { frame, now: Date.now() }),
+    [workflow, layout, runState, focusedId, modelTick, frame],
   );
   const canvasLines = useMemo(
     () => gridToLines(grid, { ...offset, width: columns - 2, height: canvasHeight }),
@@ -629,6 +645,7 @@ export function App({
     {},
   );
   const finished = runState.finishedAt !== undefined;
+  const runTokens = totalTokens(runState.nodes);
   const headerParts = Object.entries(statusCounts).map(
     ([status, count]) => `${STATUS_GLYPHS[status as keyof typeof STATUS_GLYPHS]} ${count}`,
   );
@@ -661,6 +678,9 @@ export function App({
         </Text>
         <Text dimColor> run {runState.runId.slice(0, 8)} · </Text>
         <Text>{headerParts.join('  ')}</Text>
+        {runTokens > 0 ? (
+          <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
+        ) : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
@@ -907,6 +927,21 @@ export function App({
                               focusedNodeResolvedModel.origin
                             ]
                           }) · m: change`
+                        : ''}
+                    </Text>
+                  ) : null}
+                  {state.tokens || state.startedAt ? (
+                    <Text dimColor wrap="truncate-end">
+                      {state.tokens
+                        ? `tokens: ${formatTokens(state.tokens.input)} in` +
+                          `${state.tokens.cached > 0 ? ` (+${formatTokens(state.tokens.cached)} cached)` : ''}` +
+                          ` · ${formatTokens(state.tokens.output)} out`
+                        : 'tokens: —'}
+                      {state.startedAt
+                        ? ` · elapsed ${formatDuration(
+                            (state.endedAt ? Date.parse(state.endedAt) : Date.now()) -
+                              Date.parse(state.startedAt),
+                          )}`
                         : ''}
                     </Text>
                   ) : null}
