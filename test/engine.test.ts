@@ -20,6 +20,7 @@ function engineWith(
   yaml: string,
   fakes: Record<string, NodeExecutor>,
   overrides: Partial<Record<NodeTypeId, NodeExecutor>> = {},
+  signal?: AbortSignal,
 ) {
   const workflow = workflowFromYaml(yaml);
   const repoRoot = tempDir();
@@ -40,6 +41,7 @@ function engineWith(
     ports: fakePorts(),
     sessions: throwingSessions(),
     executors,
+    ...(signal ? { signal } : {}),
   });
   return { engine, store, workflow };
 }
@@ -214,6 +216,57 @@ nodes:
     await engine.run();
     expect(store.node('a').status).toBe('error');
     expect(store.node('a').statusDetail).toContain('output schema');
+  });
+
+  it('ctx.signal carries the run signal into every executor', async () => {
+    const controller = new AbortController();
+    const yaml = `
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+`;
+    const { engine } = engineWith(
+      yaml,
+      { a: doneAfter(IMPL_OUT, async (ctx) => expect(ctx.signal).toBe(controller.signal)) },
+      {},
+      controller.signal,
+    );
+    await engine.run();
+  });
+
+  it('interrupting mid-run stops new work and skips unrelated idle nodes with a distinct reason', async () => {
+    // 'a' and 'b' are independent (no edges), but share the main-tree lock —
+    // 'b' is still idle, waiting its turn, when 'a' gets interrupted.
+    const yaml = `
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: x }
+`;
+    const controller = new AbortController();
+    const { engine, store } = engineWith(
+      yaml,
+      {
+        a: async function* (): AsyncGenerator<StatusEvent, void, void> {
+          yield { type: 'status', status: 'running' };
+          // Simulate ctrl+c firing while this node is mid-flight.
+          controller.abort();
+          throw new Error('interrupted');
+        },
+        b: doneAfter(IMPL_OUT),
+      },
+      {},
+      controller.signal,
+    );
+    await engine.run();
+    expect(store.node('a').status).toBe('error');
+    expect(store.node('b').status).toBe('skipped');
+    expect(store.node('b').statusDetail).toBe('run interrupted');
+    expect(store.snapshot().finishedAt).toBeDefined();
   });
 
   it('an executor that finishes without a terminal status is marked done', async () => {

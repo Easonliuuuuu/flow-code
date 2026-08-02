@@ -3,6 +3,7 @@ import type {
   ConvergenceRequest,
   InteractionPorts,
 } from '../engine/types.js';
+import { RunInterruptedError } from '../engine/types.js';
 
 export interface DiscussTranscriptEntry {
   role: 'user' | 'assistant';
@@ -40,6 +41,9 @@ export class UiInteractionPorts implements InteractionPorts {
   private nextMessageResolve: ((text: string | null) => void) | null = null;
   private listeners = new Set<() => void>();
 
+  /** Aborted when the run is interrupted (e.g. ctrl+c); rejects any pending wait on the user. */
+  constructor(private readonly signal?: AbortSignal) {}
+
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -49,9 +53,26 @@ export class UiInteractionPorts implements InteractionPorts {
     for (const l of this.listeners) l();
   }
 
+  /** Rejects `reject` (and runs `onAbort`) the moment the run is interrupted. */
+  private onInterrupt(reject: (err: unknown) => void, onAbort: () => void): void {
+    if (!this.signal) return;
+    const fire = (): void => {
+      onAbort();
+      this.notify();
+      reject(new RunInterruptedError());
+    };
+    if (this.signal.aborted) {
+      // Queue as a microtask: callers attach this after constructing the
+      // Promise, so resolve/reject must not fire synchronously inline.
+      void Promise.resolve().then(fire);
+      return;
+    }
+    this.signal.addEventListener('abort', fire, { once: true });
+  }
+
   approval = {
     request: (req: ApprovalRequest): Promise<'approve' | 'reject'> =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         this.pendingApproval = {
           req,
           resolve: (d) => {
@@ -61,12 +82,15 @@ export class UiInteractionPorts implements InteractionPorts {
           },
         };
         this.notify();
+        this.onInterrupt(reject, () => {
+          this.pendingApproval = null;
+        });
       }),
   };
 
   convergence = {
     select: (req: ConvergenceRequest): Promise<string[]> =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         this.pendingConvergence = {
           req,
           resolve: (selected) => {
@@ -76,6 +100,9 @@ export class UiInteractionPorts implements InteractionPorts {
           },
         };
         this.notify();
+        this.onInterrupt(reject, () => {
+          this.pendingConvergence = null;
+        });
       }),
   };
 
@@ -91,12 +118,15 @@ export class UiInteractionPorts implements InteractionPorts {
       }
     },
     nextUserMessage: (nodeId: string): Promise<string | null> =>
-      new Promise((resolve) => {
+      new Promise((resolve, reject) => {
         if (this.discussState?.nodeId === nodeId) {
           this.discussState.awaitingUser = true;
         }
         this.nextMessageResolve = resolve;
         this.notify();
+        this.onInterrupt(reject, () => {
+          this.nextMessageResolve = null;
+        });
       }),
     end: (nodeId: string): void => {
       if (this.discussState?.nodeId === nodeId) {

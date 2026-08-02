@@ -141,7 +141,8 @@ async function cmdRun(args: string[]): Promise<void> {
   store.attachPersister(new FileRunStatePersister(repoRoot));
   store.setBaseline(baseline);
 
-  const ports = new UiInteractionPorts();
+  const abortController = new AbortController();
+  const ports = new UiInteractionPorts(abortController.signal);
   const engine = new Engine({
     workflow,
     store,
@@ -150,7 +151,33 @@ async function cmdRun(args: string[]): Promise<void> {
     ports,
     sessions: new CompositeSessionRunner(workflow, new SdkSessionRunner(), new NvidiaSessionRunner()),
     executors: builtinExecutors,
+    signal: abortController.signal,
   });
+
+  // ctrl+c (via the UI) or a real SIGINT/SIGTERM (piped stdin, `kill`, a
+  // second ctrl+c once the terminal has left raw mode) both land here.
+  // First call aborts the run and gives in-flight nodes a chance to unwind
+  // cleanly; a second forces an immediate exit in case something is stuck.
+  let interruptCount = 0;
+  const triggerInterrupt = (): void => {
+    interruptCount += 1;
+    if (interruptCount > 1) {
+      console.error('\nflow-code: forcing exit.');
+      process.exit(130);
+    }
+    console.error(
+      '\nflow-code: interrupting — finishing cleanly (press ctrl+c again to force quit)…',
+    );
+    abortController.abort();
+    // Safety net: if some code path fails to respect the signal and hangs,
+    // don't leave the terminal stuck. unref so it never delays a clean exit.
+    setTimeout(() => {
+      console.error('flow-code: cleanup took too long — forcing exit.');
+      process.exit(130);
+    }, 10_000).unref();
+  };
+  process.on('SIGINT', triggerInterrupt);
+  process.on('SIGTERM', triggerInterrupt);
 
   const enginePromise = engine.run().then(async () => {
     // The run reached a terminal state: retained (converged) worktrees can
@@ -167,13 +194,16 @@ async function cmdRun(args: string[]): Promise<void> {
     }
   });
 
-  await runUi({ workflow, store, ports });
+  await runUi({ workflow, store, ports, onInterrupt: triggerInterrupt });
   await enginePromise;
+  process.off('SIGINT', triggerInterrupt);
+  process.off('SIGTERM', triggerInterrupt);
 
   const nodes = store.snapshot().nodes;
   const failedNodes = Object.entries(nodes).filter(([, n]) => n.status === 'error');
+  const interrupted = abortController.signal.aborted;
   console.log(
-    `flow-code: run ${store.runId.slice(0, 8)} finished — ` +
+    `flow-code: run ${store.runId.slice(0, 8)} ${interrupted ? 'interrupted' : 'finished'} — ` +
       Object.entries(
         Object.values(nodes).reduce<Record<string, number>>(
           (acc, n) => ({ ...acc, [n.status]: (acc[n.status] ?? 0) + 1 }),
@@ -183,7 +213,7 @@ async function cmdRun(args: string[]): Promise<void> {
         .map(([s, c]) => `${c} ${s}`)
         .join(', '),
   );
-  process.exit(failedNodes.length > 0 ? 1 : 0);
+  process.exit(interrupted ? 130 : failedNodes.length > 0 ? 1 : 0);
 }
 
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows

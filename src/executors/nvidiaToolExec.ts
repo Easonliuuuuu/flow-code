@@ -142,6 +142,7 @@ export async function runShellTool(
   workingDir: string,
   input: Record<string, unknown>,
   extraEnv: Record<string, string> = {},
+  signal?: AbortSignal,
 ): Promise<ShellResult> {
   const command = input['command'];
   if (typeof command !== 'string') throw new Error('run_shell requires a string `command`');
@@ -150,6 +151,7 @@ export async function runShellTool(
       cwd: workingDir,
       maxBuffer: 10 * 1024 * 1024,
       env: { ...process.env, ...extraEnv },
+      ...(signal ? { signal } : {}),
     });
     return { output: truncate(stdout + stderr, MAX_TOOL_OUTPUT_CHARS), exitStatus: 0 };
   } catch (err) {
