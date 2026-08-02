@@ -133,6 +133,24 @@ export function loadWorkflowFromString(source: string): Workflow {
     throw err;
   }
 
+  // A loop-back must point backwards over the forward-edge subgraph. Without
+  // this the reset scope — the nodes between target and source — is undefined.
+  const loopbackProblems: string[] = [];
+  for (const loop of graph.allLoopbacks()) {
+    if (loop.from === loop.to) {
+      loopbackProblems.push(
+        `edge ${loop.from} -> ${loop.to}: a loop-back cannot point at its own source`,
+      );
+      continue;
+    }
+    if (!graph.ancestorsOf(loop.from).has(loop.to)) {
+      loopbackProblems.push(
+        `edge ${loop.from} -> ${loop.to}: a loop-back must point back to a node upstream of \`${loop.from}\`, and \`${loop.to}\` is not`,
+      );
+    }
+  }
+  if (loopbackProblems.length > 0) throw new WorkflowValidationError(loopbackProblems);
+
   return {
     settings: file.settings ?? DEFAULT_SETTINGS,
     nodes,

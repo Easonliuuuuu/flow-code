@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   ActivityEntry,
+  AttemptRecord,
   DiscussTranscriptEntry,
   NodeRunState,
   NodeStatus,
@@ -112,6 +113,42 @@ export class RunStateStore {
         ...(detail !== undefined ? { statusDetail: detail } : {}),
       },
     };
+    this.commit();
+  }
+
+  /**
+   * Which attempt a node is on, counting from 1. Run-state written before
+   * loop-backs existed has no counter, and reads as a first attempt.
+   */
+  attemptOf(nodeId: string): number {
+    return this.node(nodeId).attempt ?? 1;
+  }
+
+  /**
+   * Return a node to `idle` for another attempt, as a loop-back does. Results
+   * of the finished attempt are cleared — a stale output would otherwise look
+   * like this attempt's — while its outcome is kept in `priorAttempts`. The
+   * activity log is append-only and is never cleared: it is the record of what
+   * actually ran, across every attempt.
+   */
+  resetNode(nodeId: string): void {
+    const node = this.node(nodeId);
+    const prior: AttemptRecord = {
+      status: node.status,
+      ...(node.statusDetail !== undefined ? { detail: node.statusDetail } : {}),
+      endedAt: new Date().toISOString(),
+    };
+    const { output: _output, statusDetail: _statusDetail, ...rest } = node;
+    this.state.nodes = {
+      ...this.state.nodes,
+      [nodeId]: {
+        ...rest,
+        status: 'idle',
+        attempt: this.attemptOf(nodeId) + 1,
+        priorAttempts: [...(node.priorAttempts ?? []), prior],
+      },
+    };
+    this.liveOutput.delete(nodeId);
     this.commit();
   }
 

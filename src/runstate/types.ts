@@ -50,10 +50,24 @@ export interface DiscussTranscriptEntry {
   text: string;
 }
 
+/** The terminal outcome of one attempt, kept when a loop-back resets a node. */
+export interface AttemptRecord {
+  status: NodeStatus;
+  detail?: string;
+  endedAt: string;
+}
+
 export interface NodeRunState {
   status: NodeStatus;
   statusDetail?: string;
   output?: unknown;
+  /**
+   * Which attempt this node is on, counting from 1. Greater than 1 only when
+   * a loop-back has reset and re-run it.
+   */
+  attempt?: number;
+  /** Terminal outcome of each earlier attempt, oldest first. */
+  priorAttempts?: AttemptRecord[];
   /** Count of denied tool calls, for the blocked-action indicator. */
   denials: number;
   workingDir?: string;

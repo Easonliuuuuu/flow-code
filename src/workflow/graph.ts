@@ -1,13 +1,26 @@
 import type { WorkflowEdge } from './schema.js';
 
+/** A return path: when `from` fails, execution resumes at `to`. */
+export interface Loopback {
+  from: string;
+  to: string;
+  maxAttempts: number;
+}
+
 /**
  * Pure graph structure over node ids. Built after schema validation; assumes
  * every edge references a known node (checked by the loader).
+ *
+ * Every traversal here is over forward edges only. Loop-back edges are held
+ * separately: they are return paths, not dependencies, so they must not make
+ * their target wait on their source, appear in the topological order, or
+ * influence layout.
  */
 export class Graph {
   readonly nodeIds: string[];
   private readonly out = new Map<string, string[]>();
   private readonly in_ = new Map<string, string[]>();
+  private readonly loopbacks: Loopback[] = [];
 
   constructor(nodeIds: string[], edges: WorkflowEdge[]) {
     this.nodeIds = nodeIds;
@@ -16,9 +29,36 @@ export class Graph {
       this.in_.set(id, []);
     }
     for (const e of edges) {
+      if (e.loopback) {
+        this.loopbacks.push({ from: e.from, to: e.to, maxAttempts: e.loopback.maxAttempts });
+        continue;
+      }
       this.out.get(e.from)!.push(e.to);
       this.in_.get(e.to)!.push(e.from);
     }
+  }
+
+  /** Loop-back edges whose source is `id` — i.e. that fire when `id` fails. */
+  loopbacksFrom(id: string): Loopback[] {
+    return this.loopbacks.filter((l) => l.from === id);
+  }
+
+  allLoopbacks(): Loopback[] {
+    return [...this.loopbacks];
+  }
+
+  /**
+   * The nodes a loop-back resets: the target, the source, and everything on a
+   * forward path between them. A branch hanging off the target that does not
+   * lead to the source did not feed the failure and is left alone.
+   */
+  nodesBetween(target: string, source: string): Set<string> {
+    const between = new Set([target, source]);
+    const descendants = this.downstreamOf(target);
+    for (const id of this.ancestorsOf(source)) {
+      if (descendants.has(id)) between.add(id);
+    }
+    return between;
   }
 
   directDependencies(id: string): string[] {
