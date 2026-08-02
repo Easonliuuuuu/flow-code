@@ -15,18 +15,30 @@ node dist/cli.js run    # run the workflow graph
 
 Once installed globally or linked (`npm link`), the same commands are available as `flow-code init` / `flow-code run`. Run `flow-code help` for the full command list (`init`, `run`, `node-types`, `doctor`).
 
-## Provider & model setup
+## Test command setup
 
-One provider backs every agent-driven node in the project — Discuss, Implement, Validate, Review, Git-ops, and Worktree-Agent all run against whichever provider you pick. `flow-code init` is where you pick it, right after scaffolding the workflow file:
-
-```bash
-flow-code init
-```
+Right after scaffolding `.flow-code/workflow.yaml`, `flow-code init` looks for how this project runs its tests — `package.json` scripts, a `Makefile` target, `pytest`/`go test`/`cargo test` markers — and offers each one it finds for you to accept or skip:
 
 ```
 flow-code: created .flow-code/workflow.yaml
   Default graph: discuss → implement → test → validate → review → gate → git-ops
 
+flow-code: set up the command(s) the Test node runs.
+
+  Detected 2 possible test commands:
+  Include `npm test`? [Y/n]
+  Include `npm run test:e2e`? [Y/n]
+  Add another test command? [y/N]
+flow-code: saved 2 test commands to .flow-code/workflow.yaml.
+```
+
+Nothing detected (a brand-new project with no tests yet) just skips straight through, leaving the scaffolded placeholder (`echo "replace me with your project's test command"`) in place — a harmless no-op until you're ready to fill it in, by hand or by re-running `flow-code init`. Multiple commands run in order in the Test node; the first failing one stops it, so unit/integration/e2e levels can each be their own entry.
+
+## Provider & model setup
+
+One provider backs every agent-driven node in the project — Discuss, Implement, Validate, Review, Git-ops, and Worktree-Agent all run against whichever provider you pick. `flow-code init` walks through picking it right after the test-command step:
+
+```
 flow-code: pick the provider and model that will back every agent-driven node.
 
 Provider:
@@ -59,10 +71,11 @@ flow-code: configured OpenAI / gpt-4o-mini for this project.
   Start a run with: flow-code run
 ```
 
-From here, `flow-code run` is fully headless — it reuses the saved provider/model with no prompts, every time. Running `flow-code init` again just prints what's configured and exits; pass `--reconfigure` to go through the picker again and change it:
+From here, `flow-code run` is fully headless — it reuses the saved provider/model with no prompts, every time. Running `flow-code init` again just prints what's configured and asks whether to reconfigure — say no and it exits immediately, no flags to remember:
 
-```bash
-flow-code init --reconfigure
+```
+flow-code: provider already configured (OpenAI, model gpt-4o-mini).
+  Reconfigure the provider/model? [y/N]
 ```
 
 ### Headless / CI usage
