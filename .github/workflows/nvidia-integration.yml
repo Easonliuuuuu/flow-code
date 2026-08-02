@@ -2,11 +2,13 @@ name: NVIDIA Integration
 
 # Separate from ci.yml on purpose: this job makes real calls to NVIDIA's NIM
 # API (cost + latency + external-service flakiness), so it must never block
-# the fast, always-required lint/typecheck/test gate.
+# the fast, always-required lint/typecheck/test gate. Runs only on merge to
+# main (not on every PR push) — NVIDIA's free tier throttles GitHub Actions'
+# shared IP range hard enough that per-PR runs were mostly just burning quota
+# and CI minutes on failures retries can't out-wait. Use workflow_dispatch to
+# run it on demand against a branch.
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch: {}
 
@@ -25,8 +27,8 @@ jobs:
   integration:
     needs: check-secret
     runs-on: ubuntu-latest
-    # Skips cleanly (not "fails") when the secret isn't configured — e.g. a
-    # fork PR, or before NVIDIA_API_KEY is added to this repo's secrets.
+    # Skips cleanly (not "fails") when the secret isn't configured, e.g.
+    # before NVIDIA_API_KEY is added to this repo's secrets.
     if: needs.check-secret.outputs.has_key == 'true'
     steps:
       - uses: actions/checkout@v4
