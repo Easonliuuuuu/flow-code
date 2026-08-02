@@ -64,8 +64,9 @@ export const executeValidate: NodeExecutor = async function* (ctx) {
     `{"verdict": "pass" | "fail", "notes": "<what you checked and what you found>"}`;
   const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
   const parsed = validateOutput.parse(extractJson(finalText));
+  // No terminal status here: the type's `failsWhen` predicate decides whether
+  // this verdict is a pass or a failure.
   yield { type: 'result', output: parsed };
-  yield { type: 'status', status: 'done' };
 };
 
 export const executeReview: NodeExecutor = async function* (ctx) {
@@ -78,8 +79,8 @@ export const executeReview: NodeExecutor = async function* (ctx) {
     `{"verdict": "pass" | "fail", "findings": [{"location": "<file:line or area>", "description": "<finding>", "severity": "info" | "minor" | "major"}]}`;
   const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
   const parsed = reviewOutput.parse(extractJson(finalText));
+  // No terminal status here: see executeValidate.
   yield { type: 'result', output: parsed };
-  yield { type: 'status', status: 'done' };
 };
 
 export const executeGitOps: NodeExecutor = async function* (ctx) {

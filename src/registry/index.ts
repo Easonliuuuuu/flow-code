@@ -169,6 +169,19 @@ export type WorktreeAgentConfig = z.infer<typeof worktreeAgentConfig>;
 export type ApprovalGateConfig = z.infer<typeof approvalGateConfig>;
 
 // ---------------------------------------------------------------------------
+// Failure predicates
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared by the verification types: a `fail` verdict is a failed node, not a
+ * successful node that happens to report bad news. Evaluated by the engine
+ * against output already validated by the type's output schema.
+ */
+function failsOnFailVerdict(output: unknown): boolean {
+  return (output as { verdict?: string } | undefined)?.verdict === 'fail';
+}
+
+// ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
@@ -231,6 +244,7 @@ const definitions: NodeTypeDefinition[] = [
     outputSchema: validateOutput,
     configSummary: 'instructions? (string), model? (string)',
     outputSummary: "verdict ('pass'|'fail'), notes (string)",
+    failsWhen: failsOnFailVerdict,
   },
   {
     id: 'review',
@@ -246,6 +260,7 @@ const definitions: NodeTypeDefinition[] = [
     outputSchema: reviewOutput,
     configSummary: 'instructions? (string), model? (string)',
     outputSummary: "verdict ('pass'|'fail'), findings ({location, description, severity?}[])",
+    failsWhen: failsOnFailVerdict,
   },
   {
     id: 'git-ops',
@@ -294,6 +309,9 @@ const definitions: NodeTypeDefinition[] = [
     outputSchema: approvalGateOutput,
     configSummary: 'title? (string)',
     outputSummary: "decision ('approved'|'rejected'), decidedAt (ISO timestamp)",
+    // A gate records a decision, not a result: without transparency every node
+    // after a gate would receive `{decision, decidedAt}` and nothing else.
+    contextTransparent: true,
   },
 ];
 

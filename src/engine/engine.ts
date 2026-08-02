@@ -65,6 +65,8 @@ export class Engine {
   private readonly signal: AbortSignal;
   private mainTreeLockHolder: string | null = null;
   private readonly running = new Map<string, Promise<void>>();
+  /** Pending "why you are running again" context, keyed by loop-back target. */
+  private readonly retryReasons = new Map<string, UpstreamInput>();
 
   constructor(opts: EngineOptions) {
     this.opts = opts;
@@ -100,21 +102,61 @@ export class Engine {
   }
 
   /**
-   * A starting node receives the recorded outputs of its direct upstream
-   * dependencies only — fan-in bounds context growth, not graph depth.
+   * The dependency ids whose outputs a starting node receives: its direct
+   * dependencies, plus — through any dependency whose type is
+   * context-transparent — that dependency's own dependencies. Fan-in still
+   * bounds context growth; transparency only prevents a node that records a
+   * decision rather than a result (an Approval-Gate) from severing the chain.
+   *
+   * Older context is collected first, and each node id appears once however
+   * many paths reach it.
+   */
+  private upstreamNodeIds(id: string): string[] {
+    const collected: string[] = [];
+    const seen = new Set<string>();
+    const visit = (nodeId: string): void => {
+      for (const depId of this.wf.graph.directDependencies(nodeId)) {
+        if (seen.has(depId)) continue;
+        seen.add(depId);
+        if (this.nodeById(depId).type.contextTransparent) visit(depId);
+        collected.push(depId);
+      }
+    };
+    visit(id);
+    return collected;
+  }
+
+  /**
+   * Recorded outputs injected into a starting node's context, sharing one
+   * overall size budget so that forwarding through a transparent node cannot
+   * grow context without bound. Every dependency is still present; an entry
+   * that does not fit is truncated and marked.
    */
   private upstreamInputs(id: string): UpstreamInput[] {
-    return this.wf.graph.directDependencies(id).map((depId) => {
+    const direct = new Set(this.wf.graph.directDependencies(id));
+    let remaining = UPSTREAM_OUTPUT_LIMIT;
+    const inputs = this.upstreamNodeIds(id).map((depId) => {
       const dep = this.nodeById(depId);
       const output = this.store.node(depId).output;
       let json = JSON.stringify(output ?? null, null, 2);
       let truncated = false;
-      if (json.length > UPSTREAM_OUTPUT_LIMIT) {
-        json = json.slice(0, UPSTREAM_OUTPUT_LIMIT) + TRUNCATION_MARKER;
+      if (json.length > remaining) {
+        json = json.slice(0, Math.max(0, remaining)) + TRUNCATION_MARKER;
         truncated = true;
       }
-      return { nodeId: depId, typeId: dep.type.id, outputJson: json, truncated };
+      remaining = Math.max(0, remaining - json.length);
+      return {
+        nodeId: depId,
+        typeId: dep.type.id,
+        outputJson: json,
+        truncated,
+        ...(direct.has(depId) ? {} : { forwarded: true }),
+      };
     });
+    // The retry reason goes last: it is the most salient thing this attempt
+    // has that the previous one did not.
+    const retry = this.retryReasons.get(id);
+    return retry ? [...inputs, retry] : inputs;
   }
 
   /**
@@ -136,6 +178,89 @@ export class Engine {
       queue.push(...this.wf.graph.directDependencies(depId));
     }
     return this.opts.repoRoot;
+  }
+
+  /**
+   * Evaluate a node type's declared failure predicate against its recorded
+   * output, returning the status detail when the node has failed on its own
+   * result. The predicate only ever sees output already validated against the
+   * type's output schema.
+   */
+  private outputFailureDetail(node: WorkflowNode): string | undefined {
+    const predicate = node.type.failsWhen;
+    if (predicate === undefined) return undefined;
+    const output = this.store.node(node.id).output;
+    if (output === undefined || !predicate(output)) return undefined;
+    // Presentation only: name the verdict when the type reports one.
+    const verdict = (output as { verdict?: unknown }).verdict;
+    return typeof verdict === 'string'
+      ? `${node.type.displayName} verdict: ${verdict}`
+      : `${node.type.displayName} reported failure`;
+  }
+
+  /**
+   * Capture why a loop-back fired, so the retried segment learns something the
+   * first pass did not know. Without this the re-run is identical to the run
+   * that just failed, and the loop is pure cost.
+   */
+  private recordRetryReason(targetId: string, sourceId: string): void {
+    const failing = this.store.node(sourceId);
+    let outputJson = JSON.stringify(
+      {
+        failedNode: sourceId,
+        statusDetail: failing.statusDetail ?? null,
+        output: failing.output ?? null,
+      },
+      null,
+      2,
+    );
+    let truncated = false;
+    if (outputJson.length > UPSTREAM_OUTPUT_LIMIT) {
+      outputJson = outputJson.slice(0, UPSTREAM_OUTPUT_LIMIT) + TRUNCATION_MARKER;
+      truncated = true;
+    }
+    this.retryReasons.set(targetId, {
+      nodeId: sourceId,
+      typeId: this.nodeById(sourceId).type.id,
+      outputJson,
+      truncated,
+      retryReason: true,
+    });
+  }
+
+  /**
+   * A failed node routes back to an upstream node when a loop-back declares it
+   * as its source. Resets that target, the source, and everything on a forward
+   * path between them, so the scheduler re-runs the segment. Returns false when
+   * no loop-back applies — the caller then skips downstream as before.
+   */
+  private fireLoopback(sourceId: string): boolean {
+    // Interrupted runs unwind; they never start another attempt.
+    if (this.signal.aborted) return false;
+    const loopbacks = this.wf.graph.loopbacksFrom(sourceId);
+    if (loopbacks.length === 0) return false;
+
+    const firable = loopbacks.find((l) => this.store.attemptOf(l.to) < l.maxAttempts);
+    if (!firable) {
+      // Every loop-back out of this node is spent: fail for real, and say why.
+      const exhausted = loopbacks
+        .map((l) => `\`${l.to}\` after ${l.maxAttempts} attempt(s)`)
+        .join(', ');
+      const detail = this.store.node(sourceId).statusDetail;
+      this.store.setStatus(
+        sourceId,
+        'error',
+        `${detail ? `${detail} — ` : ''}loop-back attempt limit reached: ${exhausted}`,
+      );
+      return false;
+    }
+
+    // Read the failure before the reset clears it.
+    this.recordRetryReason(firable.to, sourceId);
+    for (const id of this.wf.graph.nodesBetween(firable.to, sourceId)) {
+      this.store.resetNode(id);
+    }
+    return true;
   }
 
   private markDownstreamSkipped(id: string): void {
@@ -188,17 +313,28 @@ export class Engine {
           this.store.setOutput(node.id, parsed.data);
         }
       }
-      const finalStatus = this.store.node(node.id).status;
-      if (finalStatus !== 'done' && finalStatus !== 'error') {
-        // An executor that returns without a terminal status completed.
-        this.store.setStatus(node.id, 'done');
+      const outputFailure = this.outputFailureDetail(node);
+      if (outputFailure !== undefined) {
+        // The type declared that this output means failure. Applied after the
+        // executor has finished so no executor has to encode its own pass/fail
+        // rule, and so the output is recorded in full either way.
+        sawError = true;
+        this.store.setStatus(node.id, 'error', outputFailure);
+      } else {
+        const finalStatus = this.store.node(node.id).status;
+        if (finalStatus !== 'done' && finalStatus !== 'error') {
+          // An executor that returns without a terminal status completed.
+          this.store.setStatus(node.id, 'done');
+        }
       }
     } catch (err) {
       sawError = true;
       this.store.setStatus(node.id, 'error', err instanceof Error ? err.message : String(err));
     }
     if (sawError || this.store.node(node.id).status === 'error') {
-      this.markDownstreamSkipped(node.id);
+      // A declared loop-back turns this failure into another attempt; without
+      // one, the branch stops here exactly as it always has.
+      if (!this.fireLoopback(node.id)) this.markDownstreamSkipped(node.id);
     }
   }
 

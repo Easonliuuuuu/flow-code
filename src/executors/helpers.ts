@@ -2,10 +2,17 @@ import type { ExecuteContext, UpstreamInput } from '../engine/types.js';
 
 export function upstreamPreamble(upstream: UpstreamInput[]): string {
   if (upstream.length === 0) return '';
-  const parts = upstream.map(
-    (u) =>
-      `### Output of upstream node \`${u.nodeId}\` (${u.typeId})${u.truncated ? ' [truncated]' : ''}\n${u.outputJson}`,
-  );
+  const parts = upstream.map((u) => {
+    const suffix = `${u.forwarded ? ' [forwarded]' : ''}${u.truncated ? ' [truncated]' : ''}`;
+    if (u.retryReason) {
+      return (
+        `### You are running again because \`${u.nodeId}\` (${u.typeId}) failed${suffix}\n` +
+        `Address this before finishing; repeating the previous attempt will fail the same way.\n` +
+        `${u.outputJson}`
+      );
+    }
+    return `### Output of upstream node \`${u.nodeId}\` (${u.typeId})${suffix}\n${u.outputJson}`;
+  });
   return `## Upstream context\n\n${parts.join('\n\n')}\n\n`;
 }
 

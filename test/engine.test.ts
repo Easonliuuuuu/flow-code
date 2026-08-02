@@ -3,7 +3,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Engine, TRUNCATION_MARKER, UPSTREAM_OUTPUT_LIMIT } from '../src/engine/engine.js';
-import type { ExecuteContext, NodeExecutor, StatusEvent } from '../src/engine/types.js';
+import type {
+  ExecuteContext,
+  NodeExecutor,
+  StatusEvent,
+  UpstreamInput,
+} from '../src/engine/types.js';
 import { builtinExecutors } from '../src/executors/index.js';
 import type { NodeTypeId } from '../src/registry/index.js';
 import type { RunBaseline } from '../src/runstate/types.js';
@@ -284,5 +289,392 @@ nodes:
     });
     await engine.run();
     expect(store.node('a').status).toBe('done');
+  });
+});
+
+const GATED = `
+nodes:
+  - id: propose
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: apply
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: propose, to: gate }
+  - { from: gate, to: apply }
+`;
+
+const GATE_OUT = { decision: 'approved', decidedAt: '2026-08-02T00:00:00Z' };
+
+describe('context propagation across transparent nodes', () => {
+  it('forwards the gate’s upstream outputs alongside its decision', async () => {
+    let seen: UpstreamInput[] = [];
+    const { engine } = engineWith(GATED, {
+      propose: doneAfter({ ...IMPL_OUT, summary: 'change: add-user-auth' }),
+      gate: doneAfter(GATE_OUT),
+      apply: doneAfter(IMPL_OUT, async (ctx) => {
+        seen = ctx.upstream;
+      }),
+    });
+    await engine.run();
+    expect(seen.map((u) => u.nodeId)).toEqual(['propose', 'gate']);
+    // The node after the gate can still tell which change it is implementing.
+    expect(seen.find((u) => u.nodeId === 'propose')!.outputJson).toContain('add-user-auth');
+    expect(seen.find((u) => u.nodeId === 'gate')!.outputJson).toContain('approved');
+  });
+
+  it('marks forwarded outputs as forwarded and direct ones as not', async () => {
+    let seen: UpstreamInput[] = [];
+    const { engine } = engineWith(GATED, {
+      propose: doneAfter(IMPL_OUT),
+      gate: doneAfter(GATE_OUT),
+      apply: doneAfter(IMPL_OUT, async (ctx) => {
+        seen = ctx.upstream;
+      }),
+    });
+    await engine.run();
+    expect(seen.find((u) => u.nodeId === 'propose')!.forwarded).toBe(true);
+    expect(seen.find((u) => u.nodeId === 'gate')!.forwarded).toBeUndefined();
+  });
+
+  it('composes through chained transparent nodes, injecting each output once', async () => {
+    const yaml = `
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: g1
+    type: approval-gate
+  - id: g2
+    type: approval-gate
+  - id: z
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: a, to: g1 }
+  - { from: g1, to: g2 }
+  - { from: g2, to: z }
+`;
+    let seen: string[] = [];
+    const { engine } = engineWith(yaml, {
+      a: doneAfter(IMPL_OUT),
+      g1: doneAfter(GATE_OUT),
+      g2: doneAfter(GATE_OUT),
+      z: doneAfter(IMPL_OUT, async (ctx) => {
+        seen = ctx.upstream.map((u) => u.nodeId);
+      }),
+    });
+    await engine.run();
+    expect(seen).toEqual(['a', 'g1', 'g2']);
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it('still does not propagate ancestors reached only through opaque nodes', async () => {
+    let seen: string[] = [];
+    const { engine } = engineWith(LINEAR, {
+      a: doneAfter(IMPL_OUT),
+      b: doneAfter(IMPL_OUT),
+      c: doneAfter(IMPL_OUT, async (ctx) => {
+        seen = ctx.upstream.map((u) => u.nodeId);
+      }),
+    });
+    await engine.run();
+    // `b` is an Implement node: opaque, so `a` does not reach `c`.
+    expect(seen).toEqual(['b']);
+  });
+
+  it('truncates forwarded context against one shared budget', async () => {
+    const big = 'x'.repeat(UPSTREAM_OUTPUT_LIMIT * 2);
+    let seen: UpstreamInput[] = [];
+    const { engine, store } = engineWith(GATED, {
+      propose: doneAfter({ ...IMPL_OUT, diff: big }),
+      gate: doneAfter(GATE_OUT),
+      apply: doneAfter(IMPL_OUT, async (ctx) => {
+        seen = ctx.upstream;
+      }),
+    });
+    await engine.run();
+    const total = seen.reduce((n, u) => n + u.outputJson.length, 0);
+    expect(total).toBeLessThan(big.length);
+    expect(seen.some((u) => u.truncated)).toBe(true);
+    // Every dependency is still present, and run-state keeps the full value.
+    expect(seen.map((u) => u.nodeId)).toEqual(['propose', 'gate']);
+    expect((store.node('propose').output as { diff: string }).diff).toHaveLength(big.length);
+  });
+});
+
+const VERIFY = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: after
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: after }
+`;
+
+describe('output-conditional failure', () => {
+  it('errors a node whose type declares its output a failure, keeping the output', async () => {
+    const failing = { verdict: 'fail', notes: 'task 3 was never implemented' };
+    const { engine, store } = engineWith(VERIFY, {
+      impl: doneAfter(IMPL_OUT),
+      check: doneAfter(failing),
+      after: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('check').status).toBe('error');
+    // The verdict is still recorded in full — failing is not losing the result.
+    expect(store.node('check').output).toEqual(failing);
+    expect(store.node('check').statusDetail).toContain('fail');
+  });
+
+  it('does not let a failed verdict reach downstream nodes', async () => {
+    const { engine, store } = engineWith(VERIFY, {
+      impl: doneAfter(IMPL_OUT),
+      check: doneAfter({ verdict: 'fail', notes: 'no' }),
+      after: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('after').status).toBe('skipped');
+  });
+
+  it('completes a node whose predicate does not hold', async () => {
+    const { engine, store } = engineWith(VERIFY, {
+      impl: doneAfter(IMPL_OUT),
+      check: doneAfter({ verdict: 'pass', notes: 'all good' }),
+      after: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('check').status).toBe('done');
+    expect(store.node('after').status).toBe('done');
+  });
+
+  it('overrides an explicit done from the executor', async () => {
+    const { engine, store } = engineWith(VERIFY, {
+      impl: doneAfter(IMPL_OUT),
+      // doneAfter yields `status: done` itself; the predicate still wins.
+      check: doneAfter({ verdict: 'fail', notes: 'no' }),
+      after: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('check').status).toBe('error');
+  });
+
+  it('leaves node types without a failure predicate unaffected', async () => {
+    const { engine, store } = engineWith(LINEAR, {
+      a: doneAfter(IMPL_OUT),
+      // An Implement node declares no predicate: a `verdict` field in its
+      // output means nothing to the engine.
+      b: doneAfter({ ...IMPL_OUT, summary: 'verdict: fail' }),
+      c: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('b').status).toBe('done');
+    expect(store.node('c').status).toBe('done');
+  });
+});
+
+const LOOPING = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: ship
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: ship }
+  - { from: check, to: impl, loopback: { maxAttempts: 3 } }
+`;
+
+/** Fails its first `failures` runs, then passes. */
+function flaky(failures: number): { executor: NodeExecutor; runs: () => number } {
+  let runs = 0;
+  const executor: NodeExecutor = async function* (): AsyncGenerator<StatusEvent, void, void> {
+    runs++;
+    yield { type: 'status', status: 'running' };
+    yield {
+      type: 'result',
+      output:
+        runs <= failures
+          ? { verdict: 'fail', notes: `attempt ${runs} found a problem` }
+          : { verdict: 'pass', notes: 'looks good' },
+    };
+  };
+  return { executor, runs: () => runs };
+}
+
+describe('loop-back execution', () => {
+  it('re-runs the segment and continues once the retry passes', async () => {
+    const check = flaky(1);
+    let implRuns = 0;
+    const { engine, store } = engineWith(LOOPING, {
+      impl: doneAfter(IMPL_OUT, async () => {
+        implRuns++;
+      }),
+      check: check.executor,
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(implRuns).toBe(2);
+    expect(check.runs()).toBe(2);
+    expect(store.node('check').status).toBe('done');
+    expect(store.node('ship').status).toBe('done');
+    expect(store.attemptOf('impl')).toBe(2);
+  });
+
+  it('records prior attempts on the re-run nodes', async () => {
+    const check = flaky(1);
+    const { engine, store } = engineWith(LOOPING, {
+      impl: doneAfter(IMPL_OUT),
+      check: check.executor,
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.node('check').priorAttempts).toHaveLength(1);
+    expect(store.node('check').priorAttempts![0]!.status).toBe('error');
+  });
+
+  it('tells the retried node why it is running again', async () => {
+    const check = flaky(1);
+    const seen: string[][] = [];
+    const { engine } = engineWith(LOOPING, {
+      impl: doneAfter(IMPL_OUT, async (ctx) => {
+        seen.push(ctx.upstream.map((u) => u.outputJson));
+      }),
+      check: check.executor,
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(seen).toHaveLength(2);
+    // First pass knows nothing; the retry carries the failure that caused it.
+    expect(seen[0]).toEqual([]);
+    expect(seen[1]!.join('\n')).toContain('attempt 1 found a problem');
+    expect(seen[1]!.join('\n')).toContain('"failedNode": "check"');
+  });
+
+  it('stops at the attempt bound and skips downstream', async () => {
+    const check = flaky(Number.MAX_SAFE_INTEGER);
+    const { engine, store } = engineWith(LOOPING, {
+      impl: doneAfter(IMPL_OUT),
+      check: check.executor,
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    // maxAttempts 3 on the target: attempts 1, 2, 3, then the loop is spent.
+    expect(check.runs()).toBe(3);
+    expect(store.node('check').status).toBe('error');
+    expect(store.node('check').statusDetail).toContain('attempt limit');
+    expect(store.node('ship').status).toBe('skipped');
+    expect(store.snapshot().finishedAt).toBeDefined();
+  });
+
+  it('leaves nodes off the failure path untouched', async () => {
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: aside
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+edges:
+  - { from: impl, to: check }
+  - { from: impl, to: aside }
+  - { from: check, to: impl, loopback: { maxAttempts: 2 } }
+`;
+    const check = flaky(1);
+    let asideRuns = 0;
+    const { engine, store } = engineWith(yaml, {
+      impl: doneAfter(IMPL_OUT),
+      aside: doneAfter({ ...IMPL_OUT, summary: 'aside result' }, async () => {
+        asideRuns++;
+      }),
+      check: check.executor,
+    });
+    await engine.run();
+    expect(asideRuns).toBe(1);
+    expect(store.attemptOf('aside')).toBe(1);
+    expect((store.node('aside').output as { summary: string }).summary).toBe('aside result');
+  });
+
+  it('re-runs the segment when a gate is rejected and a loop-back is declared', async () => {
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: ship }
+  - { from: gate, to: impl, loopback: { maxAttempts: 2 } }
+`;
+    let implRuns = 0;
+    let gateRuns = 0;
+    const { engine, store } = engineWith(yaml, {
+      impl: doneAfter(IMPL_OUT, async () => {
+        implRuns++;
+      }),
+      gate: async function* (): AsyncGenerator<StatusEvent, void, void> {
+        gateRuns++;
+        yield { type: 'status', status: 'running' };
+        const rejected = gateRuns === 1;
+        yield {
+          type: 'result',
+          output: {
+            decision: rejected ? 'rejected' : 'approved',
+            decidedAt: new Date().toISOString(),
+          },
+        };
+        yield rejected
+          ? { type: 'status', status: 'error', detail: 'rejected by user' }
+          : { type: 'status', status: 'done' };
+      },
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(implRuns).toBe(2);
+    expect(store.node('ship').status).toBe('done');
+  });
+
+  it('still skips downstream on failure when no loop-back is declared', async () => {
+    const check = flaky(Number.MAX_SAFE_INTEGER);
+    const { engine, store } = engineWith(VERIFY, {
+      impl: doneAfter(IMPL_OUT),
+      check: check.executor,
+      after: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(check.runs()).toBe(1);
+    expect(store.node('after').status).toBe('skipped');
+  });
+
+  it('terminates a run whose loop never converges', async () => {
+    const check = flaky(Number.MAX_SAFE_INTEGER);
+    const { engine, store } = engineWith(LOOPING, {
+      impl: doneAfter(IMPL_OUT),
+      check: check.executor,
+      ship: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+    expect(store.allTerminal()).toBe(true);
   });
 });

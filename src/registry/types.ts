@@ -35,4 +35,17 @@ export interface NodeTypeDefinition {
   configSummary: string;
   /** Human-readable one-line description of the output shape, for `node-types`. */
   outputSummary: string;
+  /**
+   * Predicate over this type's own validated output: when it holds, the node
+   * ends in `error` rather than `done`. Lives on the type, never on an edge —
+   * whether a node succeeded is knowledge the node type owns, and the graph
+   * only routes the answer.
+   */
+  failsWhen?: (output: unknown) => boolean;
+  /**
+   * A context-transparent node forwards its own dependencies' outputs
+   * alongside its recorded output, so inserting one into the graph does not
+   * sever the context chain across it. Context stays bounded by fan-in.
+   */
+  contextTransparent?: boolean;
 }

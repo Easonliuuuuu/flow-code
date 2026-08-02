@@ -16,6 +16,10 @@ export interface UpstreamInput {
   /** JSON-serialized output, possibly truncated (then `truncated` is true). */
   outputJson: string;
   truncated: boolean;
+  /** True when this reached the node through a context-transparent dependency. */
+  forwarded?: boolean;
+  /** True when this is the failure that caused the node to run again. */
+  retryReason?: boolean;
 }
 
 /** Request to run one non-interactive agent session under the harness. */

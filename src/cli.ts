@@ -81,6 +81,12 @@ function cmdNodeTypes(): void {
     console.log(`  agent session: ${type.agentDriven ? 'yes' : 'no'}`);
     console.log(`  config: ${type.configSummary}`);
     console.log(`  output: ${type.outputSummary}`);
+    if (type.failsWhen) {
+      console.log('  fails on: its own output verdict (a `fail` verdict errors the node)');
+    }
+    if (type.contextTransparent) {
+      console.log("  context: transparent — forwards its dependencies' outputs downstream");
+    }
     console.log('');
   }
 }
