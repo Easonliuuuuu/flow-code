@@ -35,6 +35,11 @@ interface PendingConvergence {
 export class UiInteractionPorts implements InteractionPorts {
   pendingApproval: PendingApproval | null = null;
   pendingConvergence: PendingConvergence | null = null;
+  /**
+   * Replaced wholesale on every change (never mutated in place): the App
+   * memoizes the rendered transcript on this object's identity, so an
+   * in-place push would leave new messages invisible on screen.
+   */
   discussState: DiscussUiState | null = null;
   private nextMessageResolve: ((text: string | null) => void) | null = null;
   private listeners = new Set<() => void>();
@@ -121,14 +126,17 @@ export class UiInteractionPorts implements InteractionPorts {
     },
     postAssistant: (nodeId: string, text: string): void => {
       if (this.discussState?.nodeId === nodeId) {
-        this.discussState.transcript.push({ role: 'assistant', text });
+        this.discussState = {
+          ...this.discussState,
+          transcript: [...this.discussState.transcript, { role: 'assistant', text }],
+        };
         this.notify();
       }
     },
     nextUserMessage: (nodeId: string): Promise<string | null> =>
       new Promise((resolve, reject) => {
         if (this.discussState?.nodeId === nodeId) {
-          this.discussState.awaitingUser = true;
+          this.discussState = { ...this.discussState, awaitingUser: true };
         }
         this.nextMessageResolve = resolve;
         this.notify();
@@ -138,8 +146,7 @@ export class UiInteractionPorts implements InteractionPorts {
       }),
     end: (nodeId: string): void => {
       if (this.discussState?.nodeId === nodeId) {
-        this.discussState.active = false;
-        this.discussState.awaitingUser = false;
+        this.discussState = { ...this.discussState, active: false, awaitingUser: false };
         this.notify();
       }
     },
@@ -151,8 +158,14 @@ export class UiInteractionPorts implements InteractionPorts {
     if (!resolve) return;
     this.nextMessageResolve = null;
     if (this.discussState) {
-      this.discussState.awaitingUser = false;
-      if (text !== null) this.discussState.transcript.push({ role: 'user', text });
+      this.discussState = {
+        ...this.discussState,
+        awaitingUser: false,
+        transcript:
+          text === null
+            ? this.discussState.transcript
+            : [...this.discussState.transcript, { role: 'user', text }],
+      };
     }
     this.notify();
     resolve(text);
