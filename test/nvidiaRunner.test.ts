@@ -39,6 +39,10 @@ function baseRequest(overrides: Partial<AgentSessionRequest> = {}): AgentSession
 describe('NvidiaSessionRunner', () => {
   beforeEach(() => {
     vi.stubEnv('NVIDIA_API_KEY', 'test-key');
+    // Pin the rotation pool to exactly one key regardless of what's set in the
+    // host shell (e.g. a real NVIDIA_API_KEY_2 for local rotation testing) —
+    // otherwise these tests would fire real requests at a live account.
+    vi.stubEnv('NVIDIA_API_KEY_2', undefined);
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -218,11 +222,17 @@ describe('NvidiaSessionRunner', () => {
     const runner = new NvidiaSessionRunner();
     const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
     await runner.run(baseRequest({ signal: controller.signal }), store);
-    expect(fetchMock.mock.calls[0]![1].signal).toBe(controller.signal);
+    // Not the same object — it's combined with a per-attempt timeout signal —
+    // but it must still reflect the caller's abort.
+    const passedSignal = fetchMock.mock.calls[0]![1].signal as AbortSignal;
+    expect(passedSignal.aborted).toBe(false);
+    controller.abort();
+    expect(passedSignal.aborted).toBe(true);
   });
 
   it('throws a clear error when NVIDIA_API_KEY is unset', async () => {
-    vi.unstubAllEnvs();
+    vi.stubEnv('NVIDIA_API_KEY', undefined);
+    vi.stubEnv('NVIDIA_API_KEY_2', undefined);
     const runner = new NvidiaSessionRunner();
     const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['impl'] });
     await expect(runner.run(baseRequest(), store)).rejects.toThrow(/NVIDIA_API_KEY/);

@@ -30,6 +30,20 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 /** Retries after the initial attempt for a retryable status. */
 const MAX_RETRIES = 3;
 
+/**
+ * Per-attempt request timeout. Observed against NVIDIA's NIM endpoint under
+ * load: a connection is accepted and then simply never answered — no error,
+ * no 429/503, nothing — so a plain `fetch` with no client-side timeout can
+ * hang for the lifetime of the run instead of hitting the retry path.
+ */
+const REQUEST_TIMEOUT_MS = 60_000;
+
+/** Combines the caller's cancellation signal (if any) with a fresh per-attempt timeout. */
+function attemptSignal(signal?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve) => {
     if (signal?.aborted) return resolve();
@@ -61,13 +75,19 @@ function retryDelayMs(attempt: number, retryAfterSeconds: number | undefined): n
  * One chat-completions call against any OpenAI-compatible endpoint (NVIDIA
  * NIM, OpenAI, OpenRouter, …) — the request/response shape is standard
  * across all of them, only the base URL, key, and model differ.
+ *
+ * `apiKeys` supports rotation: when every retry on the current key is still
+ * met with a retryable status, the call moves on to the next key (fresh
+ * quota, no backoff needed for the switch itself) instead of giving up.
+ * Most providers only ever have one key configured, so this is a no-op loop
+ * of length one for them.
  */
 export async function callOpenAiCompatChat(opts: {
   baseUrl: string;
   model: string;
   messages: ChatMessage[];
   tools: NvidiaToolDef[];
-  apiKey: string;
+  apiKeys: string[];
   signal?: AbortSignal;
 }): Promise<ChatMessage> {
   const payload = JSON.stringify({
@@ -77,55 +97,79 @@ export async function callOpenAiCompatChat(opts: {
     // at once; the loop only ever needs one per turn anyway.
     ...(opts.tools.length > 0 ? { tools: opts.tools, tool_choice: 'auto', parallel_tool_calls: false } : {}),
   });
-  const request = (): Promise<Response> =>
+  const request = (apiKey: string): Promise<Response> =>
     fetch(`${opts.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${opts.apiKey}`,
+        Authorization: `Bearer ${apiKey}`,
       },
       body: payload,
-      ...(opts.signal ? { signal: opts.signal } : {}),
+      signal: attemptSignal(opts.signal),
     });
 
-  const res = await request();
+  let lastDetail = '';
 
-  if (res.ok) {
-    const data = (await res.json()) as ChatCompletionResponse;
-    const message = data.choices?.[0]?.message;
-    if (!message) throw new OpenAiCompatApiError(`${opts.baseUrl} response contained no choices[0].message`);
-    return message;
-  }
+  for (let keyIndex = 0; keyIndex < opts.apiKeys.length; keyIndex++) {
+    const apiKey = opts.apiKeys[keyIndex]!;
+    const hasNextKey = keyIndex < opts.apiKeys.length - 1;
 
-  const body = await res.text().catch(() => '');
-  const detail = `${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 500)}` : ''}`;
-
-  let current = res;
-  if (RETRYABLE_STATUS.has(current.status) && !opts.signal?.aborted) {
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const retryAfter = Number(current.headers.get('retry-after'));
-      const delay = retryDelayMs(attempt, Number.isNaN(retryAfter) ? undefined : retryAfter);
-      console.warn(
-        `flow-code: ${opts.baseUrl} returned ${current.status} ${current.statusText}; retrying in ${Math.round(delay)}ms…`,
-      );
-      await sleep(delay, opts.signal);
-      current = await request();
-      if (current.ok) {
-        const data = (await current.json()) as ChatCompletionResponse;
-        const message = data.choices?.[0]?.message;
-        if (!message) {
-          throw new OpenAiCompatApiError(`${opts.baseUrl} response contained no choices[0].message`);
+    for (let attempt = 0; ; attempt++) {
+      let res: Response;
+      try {
+        res = await request(apiKey);
+      } catch (err) {
+        // The caller's own cancellation (not our per-attempt timeout) should
+        // propagate immediately rather than being retried or rotated past.
+        if (opts.signal?.aborted) throw new OpenAiCompatApiError(`${opts.baseUrl} request aborted`);
+        lastDetail = `request failed: ${err instanceof Error ? err.message : String(err)}`;
+        if (attempt >= MAX_RETRIES) {
+          if (hasNextKey) {
+            console.warn(
+              `flow-code: ${opts.baseUrl} still failing (${lastDetail}) after ${MAX_RETRIES} retries; rotating to the next API key…`,
+            );
+            break;
+          }
+          throw new OpenAiCompatApiError(`${opts.baseUrl} request failed: ${lastDetail}`);
         }
+        const delay = retryDelayMs(attempt, undefined);
+        console.warn(`flow-code: ${opts.baseUrl} request failed (${lastDetail}); retrying in ${Math.round(delay)}ms…`);
+        await sleep(delay, opts.signal);
+        continue;
+      }
+
+      if (res.ok) {
+        const data = (await res.json()) as ChatCompletionResponse;
+        const message = data.choices?.[0]?.message;
+        if (!message) throw new OpenAiCompatApiError(`${opts.baseUrl} response contained no choices[0].message`);
         return message;
       }
-      const retryBody = await current.text().catch(() => '');
-      if (!RETRYABLE_STATUS.has(current.status) || opts.signal?.aborted) {
-        throw new OpenAiCompatApiError(
-          `${opts.baseUrl} request failed: ${current.status} ${current.statusText}${retryBody ? ` — ${retryBody.slice(0, 500)}` : ''}`,
-        );
+
+      const body = await res.text().catch(() => '');
+      lastDetail = `${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 500)}` : ''}`;
+
+      if (!RETRYABLE_STATUS.has(res.status) || opts.signal?.aborted) {
+        throw new OpenAiCompatApiError(`${opts.baseUrl} request failed: ${lastDetail}`);
       }
+
+      if (attempt >= MAX_RETRIES) {
+        if (hasNextKey) {
+          console.warn(
+            `flow-code: ${opts.baseUrl} still ${res.status} ${res.statusText} after ${MAX_RETRIES} retries; rotating to the next API key…`,
+          );
+          break;
+        }
+        throw new OpenAiCompatApiError(`${opts.baseUrl} request failed: ${lastDetail}`);
+      }
+
+      const retryAfter = Number(res.headers.get('retry-after'));
+      const delay = retryDelayMs(attempt, Number.isNaN(retryAfter) ? undefined : retryAfter);
+      console.warn(
+        `flow-code: ${opts.baseUrl} returned ${res.status} ${res.statusText}; retrying in ${Math.round(delay)}ms…`,
+      );
+      await sleep(delay, opts.signal);
     }
   }
 
-  throw new OpenAiCompatApiError(`${opts.baseUrl} request failed: ${detail}`);
+  throw new OpenAiCompatApiError(`${opts.baseUrl} request failed: ${lastDetail}`);
 }
