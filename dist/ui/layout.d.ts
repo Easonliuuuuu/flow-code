@@ -1,7 +1,14 @@
 import type { Workflow } from '../workflow/load.js';
-export declare const BOX_HEIGHT = 4;
-export declare const GAP_X = 7;
+/** Border, title, type/model, live subtitle, metrics, border — see renderGraph. */
+export declare const BOX_HEIGHT = 6;
+export declare const GAP_X = 5;
 export declare const GAP_Y = 1;
+/**
+ * Boxes are sized for their content rows, not just their title: the subtitle
+ * and metrics lines carry real text, and a box narrow enough to fit only an
+ * id would truncate all of it away.
+ */
+export declare const MIN_BOX_CONTENT = 22;
 export interface NodeBox {
     id: string;
     x: number;

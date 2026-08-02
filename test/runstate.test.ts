@@ -131,6 +131,46 @@ describe('resuming a run', () => {
   });
 });
 
+describe('token and timing tracking', () => {
+  it('accumulates token deltas as a session reports them', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    expect(store.node('n1').tokens).toBeUndefined();
+    store.addTokens('n1', { input: 100, output: 20, cached: 5 });
+    store.addTokens('n1', { input: 50, output: 10 });
+    expect(store.node('n1').tokens).toEqual({ input: 150, output: 30, cached: 5 });
+  });
+
+  it('stamps startedAt once and endedAt on the terminal status', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'running');
+    const startedAt = store.node('n1').startedAt;
+    expect(startedAt).toBeDefined();
+    expect(store.node('n1').endedAt).toBeUndefined();
+    // A mid-run detail update must not restart the clock.
+    store.setStatus('n1', 'running', 'still working');
+    expect(store.node('n1').startedAt).toBe(startedAt);
+    store.setStatus('n1', 'done');
+    expect(store.node('n1').endedAt).toBeDefined();
+  });
+
+  it('restarts the clock on a loop-back reset but keeps the tokens already spent', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'running');
+    store.addTokens('n1', { input: 100, output: 20, cached: 0 });
+    store.setStatus('n1', 'error', 'boom');
+
+    store.resetNode('n1');
+
+    expect(store.node('n1').startedAt).toBeUndefined();
+    expect(store.node('n1').endedAt).toBeUndefined();
+    // Tokens are what the node has already cost — a retry adds to that bill.
+    expect(store.node('n1').tokens).toEqual({ input: 100, output: 20, cached: 0 });
+  });
+});
+
 describe('attempt tracking', () => {
   it('reports a first attempt for a node that has never been reset', () => {
     const repo = makeTempGitRepo();

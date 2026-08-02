@@ -47,7 +47,7 @@ function buildInterceptor(req, store) {
  * answers with plain text. `messages` is mutated in place so interactive
  * callers can keep accumulating history across turns.
  */
-async function runTurn(config, messages, req, apiKeys, interceptor) {
+async function runTurn(config, messages, req, apiKeys, interceptor, store) {
     const tools = toolsForCapabilities(req.capabilities);
     const shellEnv = compileToolPolicy(req.capabilities, req.workingDir).env;
     const model = req.model ?? config.defaultModel;
@@ -60,6 +60,7 @@ async function runTurn(config, messages, req, apiKeys, interceptor) {
             messages,
             tools,
             apiKeys,
+            onUsage: (usage) => store.addTokens(req.nodeId, usage),
             ...(req.signal ? { signal: req.signal } : {}),
         });
         messages.push(message);
@@ -139,7 +140,7 @@ export class OpenAiCompatSessionRunner {
             { role: 'system', content: systemPrompt(req) },
             { role: 'user', content: req.prompt },
         ];
-        const finalText = await runTurn(config, messages, req, apiKeys, interceptor);
+        const finalText = await runTurn(config, messages, req, apiKeys, interceptor, store);
         return { finalText };
     }
     async openInteractive(req, store) {
@@ -158,7 +159,7 @@ export class OpenAiCompatSessionRunner {
                 if (req.signal?.aborted)
                     return Promise.reject(new RunInterruptedError());
                 messages.push({ role: 'user', content: userText });
-                return runTurn(config, messages, req, apiKeys, interceptor);
+                return runTurn(config, messages, req, apiKeys, interceptor, store);
             },
             async end() {
                 // No server-side session to tear down — nothing to do.

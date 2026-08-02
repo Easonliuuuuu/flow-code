@@ -1,8 +1,16 @@
-export const BOX_HEIGHT = 4;
-export const GAP_X = 7;
+/** Border, title, type/model, live subtitle, metrics, border — see renderGraph. */
+export const BOX_HEIGHT = 6;
+export const GAP_X = 5;
 export const GAP_Y = 1;
+/**
+ * Boxes are sized for their content rows, not just their title: the subtitle
+ * and metrics lines carry real text, and a box narrow enough to fit only an
+ * id would truncate all of it away.
+ */
+export const MIN_BOX_CONTENT = 22;
 function boxWidth(id, typeName) {
-    return Math.max(id.length + 2, typeName.length) + 6;
+    // +4 on the title row leaves room for the status glyph and the denial bang.
+    return Math.max(id.length + 4, typeName.length + 2, MIN_BOX_CONTENT) + 2;
 }
 /**
  * Left-to-right auto-layout in dependency order: a node's layer is the

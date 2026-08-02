@@ -1,8 +1,16 @@
 import type { Workflow } from '../workflow/load.js';
 
-export const BOX_HEIGHT = 4;
-export const GAP_X = 7;
+/** Border, title, type/model, live subtitle, metrics, border — see renderGraph. */
+export const BOX_HEIGHT = 6;
+export const GAP_X = 5;
 export const GAP_Y = 1;
+
+/**
+ * Boxes are sized for their content rows, not just their title: the subtitle
+ * and metrics lines carry real text, and a box narrow enough to fit only an
+ * id would truncate all of it away.
+ */
+export const MIN_BOX_CONTENT = 22;
 
 export interface NodeBox {
   id: string;
@@ -23,7 +31,8 @@ export interface Layout {
 export type PositionOverrides = Map<string, { dx: number; dy: number }>;
 
 function boxWidth(id: string, typeName: string): number {
-  return Math.max(id.length + 2, typeName.length) + 6;
+  // +4 on the title row leaves room for the status glyph and the denial bang.
+  return Math.max(id.length + 4, typeName.length + 2, MIN_BOX_CONTENT) + 2;
 }
 
 /**

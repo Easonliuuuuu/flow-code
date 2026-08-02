@@ -1,3 +1,20 @@
+/**
+ * Not every OpenAI-compatible endpoint reports usage, and some omit the
+ * cached-token breakdown — a missing field reads as zero rather than
+ * suppressing the whole report.
+ */
+function usageOf(data) {
+    if (!data.usage)
+        return undefined;
+    const cached = data.usage.prompt_tokens_details?.cached_tokens ?? 0;
+    return {
+        // `prompt_tokens` is inclusive of cached tokens; split them so the two
+        // never double-count in a total.
+        input: Math.max(0, (data.usage.prompt_tokens ?? 0) - cached),
+        output: data.usage.completion_tokens ?? 0,
+        cached,
+    };
+}
 /** Thrown on a non-2xx response or a malformed body; carries enough detail to log usefully. */
 export class OpenAiCompatApiError extends Error {
 }
@@ -103,6 +120,9 @@ export async function callOpenAiCompatChat(opts) {
                 const message = data.choices?.[0]?.message;
                 if (!message)
                     throw new OpenAiCompatApiError(`${opts.baseUrl} response contained no choices[0].message`);
+                const usage = usageOf(data);
+                if (usage)
+                    opts.onUsage?.(usage);
                 return message;
             }
             const body = await res.text().catch(() => '');

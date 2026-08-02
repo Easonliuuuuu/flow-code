@@ -1,4 +1,5 @@
 import { resolveNodeModel } from '../workflow/modelResolution.js';
+import { nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
 export const STATUS_GLYPHS = {
     idle: '○',
     running: '◐',
@@ -25,6 +26,9 @@ const ANSI = {
     red: '\x1b[31m',
     edge: '\x1b[90m',
     label: '',
+    // The live metrics row of a running node: bright enough to draw the eye to
+    // whatever is actually consuming tokens right now.
+    meter: '\x1b[96m',
     focus: '\x1b[1;36m',
     blocked: '\x1b[31;1m',
     // Return paths read as a different kind of line from forward edges.
@@ -65,8 +69,18 @@ function put(grid, x, y, text, style) {
     }
 }
 /** Render the workflow graph (boxes + elbow edges) onto a character grid. */
-export function renderGraph(workflow, layout, runState, focusedId) {
+export function renderGraph(workflow, layout, runState, focusedId, anim = { frame: 0, now: Date.now() }) {
     const loopbacks = workflow.graph.allLoopbacks();
+    // Bucketed once per render: every running box wants only its own last entry,
+    // and the activity log is run-wide and can be long.
+    const activityByNode = new Map();
+    for (const entry of runState.activity) {
+        const list = activityByNode.get(entry.nodeId);
+        if (list)
+            list.push(entry);
+        else
+            activityByNode.set(entry.nodeId, [entry]);
+    }
     // Each return path gets its own row below the boxes so they never collide
     // with each other or with the forward elbows between the same two nodes.
     const bandTop = layout.height + 1;
@@ -136,7 +150,9 @@ export function renderGraph(workflow, layout, runState, focusedId) {
         const style = focused ? 'focus' : STATUS_STYLES[state.status];
         const inner = box.w - 2;
         put(grid, box.x, box.y, `╭${'─'.repeat(inner)}╮`, style);
-        const glyph = STATUS_GLYPHS[state.status];
+        // A running node's glyph animates, so a stalled node is visibly distinct
+        // from a working one without reading anything else on the card.
+        const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
         const blocked = state.denials > 0 ? ' !' : '';
         const title = ` ${glyph} ${node.id}${blocked}`.slice(0, inner).padEnd(inner);
         put(grid, box.x, box.y + 1, '│', style);
@@ -165,7 +181,19 @@ export function renderGraph(workflow, layout, runState, focusedId) {
             put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'dim');
         }
         put(grid, box.x + box.w - 1, box.y + 2, '│', style);
-        put(grid, box.x, box.y + 3, `╰${'─'.repeat(inner)}╯`, style);
+        // Subtitle: what the node is doing / produced / will do. Never the type
+        // name again — that's the row above.
+        const subtitle = nodeSubtitle(node, state, activityByNode.get(node.id) ?? [], anim.frame);
+        const subtitleStyle = state.status === 'error' ? 'red' : state.status === 'running' ? 'label' : 'dim';
+        put(grid, box.x, box.y + 3, '│', style);
+        put(grid, box.x + 1, box.y + 3, ` ${subtitle}`.slice(0, inner).padEnd(inner), focused ? 'focus' : subtitleStyle);
+        put(grid, box.x + box.w - 1, box.y + 3, '│', style);
+        // Metrics: tokens burned and time spent, live while running.
+        const metrics = nodeMetrics(state, anim.now);
+        put(grid, box.x, box.y + 4, '│', style);
+        put(grid, box.x + 1, box.y + 4, ` ${metrics}`.slice(0, inner).padEnd(inner), state.status === 'running' ? 'meter' : 'dim');
+        put(grid, box.x + box.w - 1, box.y + 4, '│', style);
+        put(grid, box.x, box.y + 5, `╰${'─'.repeat(inner)}╯`, style);
     }
     return grid;
 }

@@ -1,4 +1,4 @@
-import type { ActivityEntry, DiscussTranscriptEntry, NodeRunState, NodeStatus, RunBaseline, RunState, WorktreeRecord } from './types.js';
+import type { ActivityEntry, DiscussTranscriptEntry, NodeRunState, NodeStatus, RunBaseline, RunState, TokenUsage, WorktreeRecord } from './types.js';
 export type StoreListener = (state: RunState) => void;
 export interface StorePersister {
     persist(state: RunState): void;
@@ -34,6 +34,13 @@ export declare class RunStateStore {
     node(id: string): NodeRunState;
     setBaseline(baseline: RunBaseline): void;
     setStatus(nodeId: string, status: NodeStatus, detail?: string): void;
+    /**
+     * Accumulate token usage reported by a runner. Deltas, not totals: every
+     * API response adds its own usage, so the count climbs live during a
+     * session and survives across attempts (a loop-back re-run adds to the
+     * node's bill rather than resetting it).
+     */
+    addTokens(nodeId: string, delta: Partial<TokenUsage>): void;
     /**
      * Which attempt a node is on, counting from 1. Run-state written before
      * loop-backs existed has no counter, and reads as a first attempt.
