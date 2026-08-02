@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { gridToLines, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
 import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
+import {
+  applyPanelMove,
+  applyPanelResize,
+  dockedRect,
+  hitTestPanel,
+  MIN_PANEL_HEIGHT,
+  MIN_PANEL_WIDTH,
+  pinAfterScroll,
+  tailWindow,
+} from '../src/ui/panel.js';
 import { RunInterruptedError } from '../src/engine/types.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import { wrapText } from '../src/ui/textwrap.js';
@@ -214,6 +224,109 @@ describe('mouse parsing (SGR)', () => {
     expect(LEAKED_MOUSE_SEQUENCE.test('[<0;5;3M')).toBe(true);
     expect(LEAKED_MOUSE_SEQUENCE.test('[<64;5;3M')).toBe(true);
     expect(LEAKED_MOUSE_SEQUENCE.test('hello')).toBe(false);
+  });
+});
+
+describe('panel geometry (docked/floating status panel)', () => {
+  const bounds = { columns: 100, rows: 40 };
+
+  it('docks full-width, pinned to the bottom, at the given height', () => {
+    const rect = dockedRect(bounds, 15);
+    expect(rect).toEqual({ x: 0, y: 25, w: 100, h: 15 });
+  });
+
+  it('clamps docked height to the terminal, never taller than it', () => {
+    expect(dockedRect(bounds, 999)).toEqual({ x: 0, y: 0, w: 100, h: 40 });
+  });
+
+  it('hitTestPanel recognizes the four border edges as "move"', () => {
+    const rect = { x: 10, y: 10, w: 20, h: 10 };
+    expect(hitTestPanel(rect, 10, 15)).toBe('move'); // left edge
+    expect(hitTestPanel(rect, 29, 15)).toBe('move'); // right edge
+    expect(hitTestPanel(rect, 15, 10)).toBe('move'); // top edge
+    expect(hitTestPanel(rect, 15, 19)).toBe('move'); // bottom edge (not the corner)
+  });
+
+  it('hitTestPanel recognizes the bottom-right corner as "resize"', () => {
+    const rect = { x: 10, y: 10, w: 20, h: 10 };
+    expect(hitTestPanel(rect, 29, 19)).toBe('resize');
+  });
+
+  it('hitTestPanel returns null for the interior and outside the rect', () => {
+    const rect = { x: 10, y: 10, w: 20, h: 10 };
+    expect(hitTestPanel(rect, 15, 15)).toBeNull();
+    expect(hitTestPanel(rect, 5, 5)).toBeNull();
+    expect(hitTestPanel(rect, 100, 100)).toBeNull();
+  });
+
+  it('applyPanelMove translates the rect and clamps to the screen', () => {
+    const rect = { x: 10, y: 10, w: 20, h: 10 };
+    expect(applyPanelMove(rect, 5, -3, bounds)).toEqual({ x: 15, y: 7, w: 20, h: 10 });
+    // Dragged past the right/bottom edge — clamped so it stays fully on screen.
+    expect(applyPanelMove(rect, 1000, 1000, bounds)).toEqual({ x: 80, y: 30, w: 20, h: 10 });
+    // Dragged past the top-left — clamped at 0.
+    expect(applyPanelMove(rect, -1000, -1000, bounds)).toEqual({ x: 0, y: 0, w: 20, h: 10 });
+  });
+
+  it('applyPanelResize grows/shrinks from the bottom-right corner, with a floor', () => {
+    const rect = { x: 10, y: 10, w: 20, h: 10 };
+    expect(applyPanelResize(rect, 5, 5, bounds)).toEqual({ x: 10, y: 10, w: 25, h: 15 });
+    expect(applyPanelResize(rect, -1000, -1000, bounds)).toEqual({
+      x: 10,
+      y: 10,
+      w: MIN_PANEL_WIDTH,
+      h: MIN_PANEL_HEIGHT,
+    });
+  });
+
+  it('applyPanelResize never grows past the screen edge', () => {
+    const rect = { x: 70, y: 30, w: MIN_PANEL_WIDTH, h: MIN_PANEL_HEIGHT };
+    const resized = applyPanelResize(rect, 1000, 1000, bounds);
+    expect(resized.x + resized.w).toBeLessThanOrEqual(bounds.columns);
+    expect(resized.y + resized.h).toBeLessThanOrEqual(bounds.rows);
+  });
+});
+
+describe('tailWindow (chat-style scrollback)', () => {
+  it('follows the live tail when pin is null', () => {
+    expect(tailWindow(50, 10, null)).toEqual({ start: 40, end: 50, maxScroll: 40, following: true });
+  });
+
+  it('pins the window at an absolute row, not following', () => {
+    expect(tailWindow(50, 10, 20)).toEqual({ start: 20, end: 30, maxScroll: 40, following: false });
+  });
+
+  it('clamps a pin below 0 or past the live bottom', () => {
+    expect(tailWindow(50, 10, -5).start).toBe(0);
+    expect(tailWindow(50, 10, 1000)).toEqual({ start: 40, end: 50, maxScroll: 40, following: true });
+  });
+
+  it('is a no-op window when everything already fits', () => {
+    expect(tailWindow(5, 10, 3)).toEqual({ start: 0, end: 10, maxScroll: 0, following: true });
+  });
+
+  it('holds a fixed historical slice steady as new messages extend the total', () => {
+    // A user pins to row 5 out of a 20-row transcript...
+    const before = tailWindow(20, 10, 5);
+    // ...5 more messages arrive; since the pin is an absolute row index, the
+    // same historical rows stay put instead of drifting with the moving tail.
+    const after = tailWindow(25, 10, 5);
+    expect(after.start).toBe(before.start);
+    expect(after.end).toBe(before.end);
+    expect(after.following).toBe(false);
+  });
+
+  it('pinAfterScroll converts a scroll-up gesture into a pin behind the live tail', () => {
+    const win = tailWindow(50, 10, null); // following, start=40
+    const pin = pinAfterScroll(win, 5); // scroll up 5 rows
+    expect(pin).toBe(35);
+    expect(tailWindow(50, 10, pin).following).toBe(false);
+  });
+
+  it('pinAfterScroll snaps back to following once scrolled down to the bottom', () => {
+    const win = tailWindow(50, 10, 30); // pinned, 10 rows above the live bottom (maxScroll 40)
+    expect(pinAfterScroll(win, -5)).toBe(35); // scroll down, still short of the bottom
+    expect(pinAfterScroll(win, -10)).toBeNull(); // scroll down past the bottom -> resume following
   });
 });
 
