@@ -71,7 +71,10 @@ function mountDiscussApp(): {
       onExit: () => {},
       onInterrupt: () => {},
     }),
-    { stdout, stdin, exitOnCtrlC: false, patchConsole: false },
+    // interactive: the fake stdout above *is* the TTY under test. Without
+    // this, Ink's CI detection drops to non-interactive mode and writes only
+    // the final frame at unmount, so these tests see nothing on CI.
+    { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
   );
   return { ports, stdout, stdin, unmount: () => instance.unmount() };
 }
