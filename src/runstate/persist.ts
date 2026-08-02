@@ -49,3 +49,20 @@ export function listRunStates(repoRoot: string): RunState[] {
   }
   return states;
 }
+
+/** Most recently created run that ended via interrupt (ctrl+c/SIGTERM), if any — what `--resume` (no id) targets. */
+export function findLatestInterruptedRun(repoRoot: string): RunState | undefined {
+  return listRunStates(repoRoot)
+    .filter((s) => s.interrupted === true)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/** A specific run by id, only if it ended via interrupt — what `--resume <runId>` targets. */
+export function findInterruptedRun(repoRoot: string, runId: string): RunState | undefined {
+  try {
+    const state = readRunState(runFilePath(repoRoot, runId));
+    return state.interrupted === true ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}

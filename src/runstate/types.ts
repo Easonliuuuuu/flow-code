@@ -45,6 +45,11 @@ export interface RunBaseline {
   dirtyOverride: boolean;
 }
 
+export interface DiscussTranscriptEntry {
+  role: 'user' | 'assistant';
+  text: string;
+}
+
 export interface NodeRunState {
   status: NodeStatus;
   statusDetail?: string;
@@ -52,6 +57,10 @@ export interface NodeRunState {
   /** Count of denied tool calls, for the blocked-action indicator. */
   denials: number;
   workingDir?: string;
+  /** Persisted Discuss transcript, so an interrupted conversation survives to `--resume`. */
+  discussTranscript?: DiscussTranscriptEntry[];
+  /** Underlying agent session id, so `--resume` can continue it with full context. */
+  sessionId?: string;
 }
 
 export interface RunState {
@@ -64,4 +73,6 @@ export interface RunState {
   worktrees: WorktreeRecord[];
   activity: ActivityEntry[];
   finishedAt?: string;
+  /** True when the run ended via ctrl+c/SIGTERM rather than completing on its own; `--resume` looks for this. */
+  interrupted?: boolean;
 }

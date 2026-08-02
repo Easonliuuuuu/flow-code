@@ -249,7 +249,7 @@ export class Engine {
         await Promise.race(this.running.values());
       }
     } finally {
-      this.store.markFinished();
+      this.store.markFinished(this.signal.aborted);
     }
   }
 }

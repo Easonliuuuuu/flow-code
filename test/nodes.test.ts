@@ -5,6 +5,7 @@ import { Engine } from '../src/engine/engine.js';
 import { builtinExecutors } from '../src/executors/index.js';
 import { recordBaseline } from '../src/git/ops.js';
 import type { TestOutput, ApprovalGateOutput } from '../src/registry/index.js';
+import { RunStateStore } from '../src/runstate/store.js';
 import {
   fakePorts,
   fakeSessions,
@@ -22,10 +23,11 @@ async function runReal(
     ports?: ReturnType<typeof fakePorts>;
     sessions?: ReturnType<typeof fakeSessions>;
     portOpts?: FakePortOptions;
+    store?: RunStateStore;
   } = {},
 ) {
   const workflow = workflowFromYaml(yaml);
-  const store = storeFor(workflow, repo);
+  const store = opts.store ?? storeFor(workflow, repo);
   const baseline = await recordBaseline(repo, false);
   const ports = opts.ports ?? fakePorts(opts.portOpts ?? {});
   const engine = new Engine({
@@ -93,6 +95,85 @@ edges:
     expect(output.commands).toHaveLength(2);
     expect(output.commands[1]!.exitStatus).toBe(7);
     expect(store.node('after').status).toBe('skipped');
+  });
+});
+
+describe('Discuss node resume', () => {
+  const DISCUSS_YAML = `
+nodes:
+  - id: talk
+    type: discuss
+    config: { topic: "the greeting color" }
+`;
+
+  it('continues an interrupted conversation instead of starting over', async () => {
+    const repo = makeTempGitRepo();
+    const workflow = workflowFromYaml(DISCUSS_YAML);
+
+    // Simulate a run that was ctrl+c'd mid-discussion.
+    const interrupted = new RunStateStore({
+      repoRoot: repo,
+      nodeIds: workflow.nodes.map((n) => n.id),
+    });
+    interrupted.setStatus('talk', 'waiting', 'in discussion');
+    interrupted.appendDiscussMessage('talk', { role: 'assistant', text: 'what should we build?' });
+    interrupted.appendDiscussMessage('talk', { role: 'user', text: 'a blue greeting' });
+    interrupted.setSessionId('talk', 'sess-abc');
+    interrupted.markFinished(true);
+
+    const resumed = new RunStateStore({
+      repoRoot: repo,
+      nodeIds: workflow.nodes.map((n) => n.id),
+      resumeFrom: interrupted.snapshot(),
+    });
+    expect(resumed.node('talk').status).toBe('idle');
+
+    const sentPrompts: string[] = [];
+    const sessions = fakeSessions((req) => {
+      sentPrompts.push(req.prompt);
+      if (req.prompt.includes('JSON object recording')) {
+        return JSON.stringify({ conclusion: 'blue greeting', constraints: [] });
+      }
+      return 'continuing — anything else?';
+    });
+    // Empty queue: the user immediately ends the (resumed) discussion.
+    const ports = fakePorts({ userMessages: [] });
+
+    const { store } = await runReal(DISCUSS_YAML, repo, { store: resumed, sessions, ports });
+
+    // Asked the SDK to resume the prior session, not start a fresh one.
+    expect(sessions.requests[0]!.resumeSessionId).toBe('sess-abc');
+    // No "opening" prompt on resume — only the closing conclusion request.
+    expect(sentPrompts).toHaveLength(1);
+    expect(sentPrompts[0]).toContain('JSON object recording');
+
+    // The UI was seeded with the prior transcript, not a blank panel.
+    expect(ports.beginCalls[0]!.seedTranscript).toEqual([
+      { role: 'assistant', text: 'what should we build?' },
+      { role: 'user', text: 'a blue greeting' },
+    ]);
+
+    expect(store.node('talk').status).toBe('done');
+    expect(store.node('talk').output).toMatchObject({ conclusion: 'blue greeting' });
+  });
+
+  it('a fresh (non-resumed) discussion still sends the opening prompt', async () => {
+    const repo = makeTempGitRepo();
+    const sentPrompts: string[] = [];
+    const sessions = fakeSessions((req) => {
+      sentPrompts.push(req.prompt);
+      if (req.prompt.includes('JSON object recording')) {
+        return JSON.stringify({ conclusion: 'blue greeting', constraints: [] });
+      }
+      return 'what color?';
+    });
+    const ports = fakePorts({ userMessages: [] });
+    const { store } = await runReal(DISCUSS_YAML, repo, { sessions, ports });
+
+    expect(sessions.requests[0]!.resumeSessionId).toBeUndefined();
+    expect(sentPrompts[0]).toContain('Open a discussion');
+    expect(ports.beginCalls[0]!.seedTranscript).toEqual([]);
+    expect(store.node('talk').status).toBe('done');
   });
 });
 
