@@ -12,6 +12,7 @@ import { computeLayout, hitTest, scrollIntoView } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import { createModelListLoader } from './modelListLoader.js';
 import { applyPanelMove, applyPanelResize, dockedLayout, hitTestPanel, pinAfterScroll, MOVE_HANDLE, RESIZE_GRIP, tailWindow, } from './panel.js';
+import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
 import { wrapText } from './textwrap.js';
 /** The header line above the canvas, and the hint line below it when no panel is docked. */
 const HEADER_ROWS = 1;
@@ -219,13 +220,16 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             return [];
         return discussState.transcript.flatMap((entry, entryIdx) => {
             const prefix = entry.role === 'user' ? 'you: ' : 'agent: ';
-            const wrapped = wrapText(entry.text, Math.max(4, discussTranscriptWidth - prefix.length));
+            const body = Math.max(4, discussTranscriptWidth - prefix.length);
+            // The user typed plain text; the agent answers in markdown, so only the
+            // agent's side is parsed — nobody wants their own `*` reinterpreted.
+            const lines = entry.role === 'user' ? renderPlain(entry.text, body) : renderMarkdown(entry.text, body);
             const color = entry.role === 'user' ? 'cyan' : 'green';
-            return wrapped.map((line, lineIdx) => ({
+            return lines.map((line, lineIdx) => ({
                 key: `${entryIdx}-${lineIdx}`,
                 prefix: lineIdx === 0 ? prefix : ' '.repeat(prefix.length),
                 color,
-                text: line,
+                segments: line.segments,
             }));
         });
     }, [discussState, discussTranscriptWidth]);
@@ -556,7 +560,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     };
     return (_jsxs(Box, { flexDirection: "column", width: columns, height: rows, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, color: "cyan", children: "flow-code" }), _jsxs(Text, { dimColor: true, children: [" run ", runState.runId.slice(0, 8), " \u00B7 "] }), _jsx(Text, { children: headerParts.join('  ') }), finished ? _jsx(Text, { color: "green", children: " \u00B7 finished \u2014 press q to exit" }) : null, floating ? _jsx(Text, { dimColor: true, children: " \u00B7 ctrl+p: dock panel" }) : null, pickerMessage ? _jsxs(Text, { color: "yellow", children: [" \u00B7 ", pickerMessage] }) : null] }), _jsx(Box, { flexDirection: "column", height: canvasHeight, children: canvasLines.map((line, i) => (_jsx(Text, { children: line || ' ' }, i))) }), discussActive && discussState ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Discussion \u2014 ", discussState.nodeId, discussState.topic ? `: ${discussState.topic}` : '', !discussWindow.following ? (_jsxs(Text, { dimColor: true, children: [' ', "(", discussWindow.start, " above", discussRows.length - discussWindow.end > 0
                                             ? `, ${discussRows.length - discussWindow.end} below`
-                                            : '', ")"] })) : null] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", overflow: "hidden", children: discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: row.color, children: row.prefix }), row.text] }, row.key))) }), _jsx(Text, { wrap: "truncate-end", children: discussState.awaitingUser ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "cyan", children: '> ' }), inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth)), _jsx(Text, { inverse: true, children: " " })] })) : (_jsx(Text, { dimColor: true, children: "\u2026 agent is thinking" })) }), _jsx(PanelFooter, { hint: "enter: send \u00B7 /done: finish \u00B7 PgUp/PgDn: scroll \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingConvergence ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Convergence \u2014 ", pendingConvergence.req.nodeId, " (", pendingConvergence.req.mode, pendingConvergence.req.mode === 'compare'
+                                            : '', ")"] })) : null] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", overflow: "hidden", children: discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: row.color, children: row.prefix }), row.segments.map((segment, i) => (_jsx(Text, { ...segmentStyle(segment), children: segment.text }, i)))] }, row.key))) }), _jsx(Text, { wrap: "truncate-end", children: discussState.awaitingUser ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "cyan", children: '> ' }), inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth)), _jsx(Text, { inverse: true, children: " " })] })) : (_jsx(Text, { dimColor: true, children: "\u2026 agent is thinking" })) }), _jsx(PanelFooter, { hint: "enter: send \u00B7 /done: finish \u00B7 PgUp/PgDn: scroll \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingConvergence ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Convergence \u2014 ", pendingConvergence.req.nodeId, " (", pendingConvergence.req.mode, pendingConvergence.req.mode === 'compare'
                                     ? ': pick exactly one'
                                     : ': pick one or more', ")"] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: pendingConvergence.req.branches.map((branch, i) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsxs(Text, { ...(i === convCursor ? { color: 'cyan' } : {}), children: [i === convCursor ? '❯ ' : '  ', convSelected.has(branch.instanceId) ? '[x] ' : '[ ] ', branch.instanceId, " (", branch.branch, ") ", branch.status === 'done' ? '●' : '✖', ' '] }), _jsx(Text, { dimColor: true, children: branch.diffSummary.split('\n').at(-1) ?? '' })] }, branch.instanceId))) }), _jsx(PanelFooter, { hint: "\u2191/\u2193: move \u00B7 space: select \u00B7 enter: confirm \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingApproval ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Approval \u2014 ", pendingApproval.req.title] }) }), pendingApproval.req.pushTarget ? (_jsxs(Text, { color: "red", children: ["On approval, `", pendingApproval.req.pushTarget.nodeId, "` will push to", ' ', pendingApproval.req.pushTarget.remote, "/", pendingApproval.req.pushTarget.branch] })) : null, _jsxs(Text, { dimColor: true, children: ["upstream: ", pendingApproval.req.upstreamSummaries.map((u) => u.nodeId).join(', ') || '—'] }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: (() => {
                             const lines = pendingApproval.req.diffs.flatMap((d) => [
@@ -588,7 +592,16 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                     const state = runState.nodes[focusedNode.id];
                     const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
                     const live = store.liveOutputFor(focusedNode.id);
-                    const liveLines = live.length > 0 ? live.trimEnd().split('\n') : [];
+                    // Agent output is prose, not a table: wrap it to the panel's inner
+                    // width (borders + paddingX) so long sentences stay readable
+                    // instead of running past the right edge and being cut off.
+                    const outputWidth = Math.max(10, activeRect.w - 4);
+                    const liveLines = live.length > 0
+                        ? live
+                            .trimEnd()
+                            .split('\n')
+                            .flatMap((line) => wrapText(line.replace(/\t/g, '    '), outputWidth))
+                        : [];
                     // Rows left for output + activity: the panel minus its borders,
                     // title, config line, activity separator and footer.
                     const bodyBudget = Math.max(2, panelHeight - 6);

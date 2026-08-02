@@ -24,6 +24,7 @@ import {
   type PanelRect,
 } from './panel.js';
 import type { UiInteractionPorts } from './ports.js';
+import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
 import { wrapText } from './textwrap.js';
 
 /** Provenance context the run UI needs to distinguish a node's own model
@@ -305,13 +306,17 @@ export function App({
     if (!discussState) return [];
     return discussState.transcript.flatMap((entry, entryIdx) => {
       const prefix = entry.role === 'user' ? 'you: ' : 'agent: ';
-      const wrapped = wrapText(entry.text, Math.max(4, discussTranscriptWidth - prefix.length));
+      const body = Math.max(4, discussTranscriptWidth - prefix.length);
+      // The user typed plain text; the agent answers in markdown, so only the
+      // agent's side is parsed — nobody wants their own `*` reinterpreted.
+      const lines =
+        entry.role === 'user' ? renderPlain(entry.text, body) : renderMarkdown(entry.text, body);
       const color = entry.role === 'user' ? 'cyan' : 'green';
-      return wrapped.map((line, lineIdx) => ({
+      return lines.map((line, lineIdx) => ({
         key: `${entryIdx}-${lineIdx}`,
         prefix: lineIdx === 0 ? prefix : ' '.repeat(prefix.length),
         color,
-        text: line,
+        segments: line.segments,
       }));
     });
   }, [discussState, discussTranscriptWidth]);
@@ -689,7 +694,11 @@ export function App({
             {discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (
               <Text key={row.key} wrap="truncate-end">
                 <Text color={row.color}>{row.prefix}</Text>
-                {row.text}
+                {row.segments.map((segment, i) => (
+                  <Text key={i} {...segmentStyle(segment)}>
+                    {segment.text}
+                  </Text>
+                ))}
               </Text>
             ))}
           </Box>
@@ -855,7 +864,17 @@ export function App({
             const state = runState.nodes[focusedNode.id]!;
             const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
             const live = store.liveOutputFor(focusedNode.id);
-            const liveLines = live.length > 0 ? live.trimEnd().split('\n') : [];
+            // Agent output is prose, not a table: wrap it to the panel's inner
+            // width (borders + paddingX) so long sentences stay readable
+            // instead of running past the right edge and being cut off.
+            const outputWidth = Math.max(10, activeRect.w - 4);
+            const liveLines =
+              live.length > 0
+                ? live
+                    .trimEnd()
+                    .split('\n')
+                    .flatMap((line) => wrapText(line.replace(/\t/g, '    '), outputWidth))
+                : [];
             // Rows left for output + activity: the panel minus its borders,
             // title, config line, activity separator and footer.
             const bodyBudget = Math.max(2, panelHeight - 6);

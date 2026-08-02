@@ -90,6 +90,49 @@ function mountDiscussApp(): {
   return { ports, stdout, stdin, unmount: () => instance.unmount() };
 }
 
+const DETAIL_WF = workflowFromYaml(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+`);
+
+describe('App node-detail panel rendering', () => {
+  it('wraps long agent output instead of cutting it off at the panel edge', async () => {
+    const store = storeFor(DETAIL_WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: DETAIL_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      // One long line, no newlines: it cannot fit on a single terminal row.
+      const sentence = Array.from({ length: 24 }, (_, i) => `word${i}`).join(' ');
+      store.appendLiveOutput('impl', sentence + '\n');
+      stdin.write('\r'); // expand the detail panel for the focused node
+      await settle();
+
+      const lines = lastFrameLines(stdout);
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(COLUMNS);
+      // The tail of the sentence survives on a following row rather than
+      // being truncated away with the rest of the line.
+      const body = lines.join('\n');
+      expect(body).toContain('word0 ');
+      expect(body).toContain('word23');
+    } finally {
+      instance.unmount();
+    }
+  });
+});
+
 describe('App discuss panel rendering', () => {
   it('shows the message the user submits, and the reply that follows', async () => {
     const { ports, stdout, stdin, unmount } = mountDiscussApp();
@@ -111,6 +154,38 @@ describe('App discuss panel rendering', () => {
       const frame = lastFrameLines(stdout).join('\n');
       expect(frame).toContain('you: make it blue');
       expect(frame).toContain('agent: blue it is');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('renders the agent markdown, and echoes the user markers verbatim', async () => {
+    const { ports, stdout, stdin, unmount } = mountDiscussApp();
+    try {
+      ports.discuss.begin('talk', 'colors', []);
+      ports.discuss.postAssistant(
+        'talk',
+        '## Options\n\n- **blue**, the `--blue` flag\n- red\n\n```sh\nrun --blue\n```',
+      );
+      const next = ports.discuss.nextUserMessage('talk');
+      await settle();
+      stdin.write('use **blue**');
+      await settle();
+      stdin.write('\r');
+      await expect(next).resolves.toBe('use **blue**');
+      await settle();
+
+      const frame = lastFrameLines(stdout).join('\n');
+      // Markup is applied, not printed: no hashes, asterisks or backticks left.
+      expect(frame).toContain('agent: Options');
+      expect(frame).toContain('• blue, the --blue flag');
+      expect(frame).toContain('• red');
+      expect(frame).toContain('run --blue');
+      expect(frame).not.toContain('## Options');
+      expect(frame).not.toContain('**blue**, ');
+      expect(frame).not.toContain('```');
+      // The user's own text is never reinterpreted — they typed those stars.
+      expect(frame).toContain('you: use **blue**');
     } finally {
       unmount();
     }

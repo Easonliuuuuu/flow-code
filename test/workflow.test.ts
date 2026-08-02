@@ -308,6 +308,21 @@ describe('default workflow template', () => {
     // Default git-ops config: commit-only, no push.
     expect(gitOps.config).toEqual({});
   });
+
+  it('ships loop-backs enabled, so a failed check iterates instead of stopping the run', async () => {
+    const { DEFAULT_WORKFLOW_YAML } = await import('../src/defaultWorkflow.js');
+    const wf = loadWorkflowFromString(DEFAULT_WORKFLOW_YAML);
+    expect(wf.graph.allLoopbacks()).toEqual([
+      { from: 'test', to: 'implement', maxAttempts: 3 },
+      { from: 'validate', to: 'implement', maxAttempts: 3 },
+      { from: 'review', to: 'implement', maxAttempts: 3 },
+    ]);
+    // A rejected gate still means stop: "no" is a decision, not a retry.
+    expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
+    // Loop-backs are return paths, not dependencies: implement must not wait
+    // on the nodes that can send work back to it.
+    expect(wf.graph.directDependencies('implement')).toEqual(['discuss']);
+  });
 });
 
 describe('node type registry', () => {
@@ -349,5 +364,14 @@ describe('node type registry', () => {
 
   it('git-ops cannot edit', () => {
     expect(nodeTypeRegistry.get('git-ops')!.capabilities).not.toContain('edit');
+  });
+
+  it('tells implement it owns the tests, since the test node cannot write them', () => {
+    // The Test node has no agent session and no `edit` capability, so a change
+    // whose tests implement declines to write has nobody left to write them.
+    const prompt = nodeTypeRegistry.get('implement')!.rolePrompt;
+    expect(prompt).toMatch(/tests/i);
+    expect(prompt).toMatch(/cannot write/i);
+    expect(nodeTypeRegistry.get('test')!.agentDriven).toBe(false);
   });
 });

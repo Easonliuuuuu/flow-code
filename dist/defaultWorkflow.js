@@ -21,7 +21,9 @@ nodes:
   - id: implement
     type: implement
     config:
-      instructions: Implement what was agreed in the discussion.
+      # Implement owns the tests too — the Test node below only *runs* commands,
+      # it has no agent and cannot author a test.
+      instructions: Implement what was agreed in the discussion, including tests covering it.
 
   - id: test
     type: test
@@ -54,10 +56,18 @@ edges:
   - { from: review, to: gate }
   - { from: gate, to: git-ops }
 
-  # A failing Validate or Review stops the run here. To iterate instead, add a
-  # loop-back: when the named node fails, execution returns to the target and
-  # re-runs everything between them, with the failure as context. Bounded by
-  # maxAttempts (default 3) so a loop that never converges still terminates.
-  # - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
+  # Loop-backs: when the \`from\` node fails, execution returns to \`to\` and
+  # re-runs everything between them, with the failure passed in as context —
+  # so a failing test or a rejected review is another iteration, not the end of
+  # the run. maxAttempts is counted on the target and shared across every
+  # loop-back pointing at it, so a loop that never converges still terminates
+  # (after which the failure stands and downstream nodes are skipped).
+  - { from: test, to: implement, loopback: { maxAttempts: 3 } }
+  - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
+  - { from: review, to: implement, loopback: { maxAttempts: 3 } }
+
+  # A rejected approval gate deliberately has no loop-back: "no" means stop.
+  # To send a rejection back for another pass instead, add:
+  # - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
 `;
 //# sourceMappingURL=defaultWorkflow.js.map
