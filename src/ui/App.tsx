@@ -11,7 +11,14 @@ import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
-import { computeLayout, hitTest, scrollIntoView, type PositionOverrides } from './layout.js';
+import {
+  clampOffset,
+  computeLayout,
+  hitTest,
+  offscreenCounts,
+  scrollIntoView,
+  type PositionOverrides,
+} from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import { createModelListLoader, type ModelListLoader } from './modelListLoader.js';
 import {
@@ -54,6 +61,10 @@ const FOOTER_ROWS = 1;
 
 /** Spinner/elapsed-clock cadence: fast enough to read as motion, slow enough not to churn frames. */
 const ANIMATION_INTERVAL_MS = 120;
+
+/** One keypress of pan: a few columns / rows, not a whole screen. */
+const PAN_STEP_X = 4;
+const PAN_STEP_Y = 2;
 
 export interface AppProps {
   workflow: Workflow;
@@ -217,8 +228,24 @@ export function App({
       : Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
   const activeRect = floating ? panelRect! : docked.rect;
   const panelHeight = activeRect.h;
+  const canvasWidth = columns - 2;
 
   const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+  const viewport = { ...offset, width: canvasWidth, height: canvasHeight };
+  // Panning is clamped so it can never leave the graph off-screen entirely,
+  // and goes through one helper so the keyboard and the scroll wheel agree.
+  const panBy = (dx: number, dy: number): void => {
+    setOffset((o) => clampOffset(layout, { ox: o.ox + dx, oy: o.oy + dy, width: canvasWidth, height: canvasHeight }));
+  };
+  const offscreen = offscreenCounts(layout, viewport);
+  const offscreenHint = [
+    offscreen.left > 0 ? `←${offscreen.left}` : '',
+    offscreen.right > 0 ? `→${offscreen.right}` : '',
+    offscreen.up > 0 ? `↑${offscreen.up}` : '',
+    offscreen.down > 0 ? `↓${offscreen.down}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
   const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
 
@@ -348,9 +375,9 @@ export function App({
     const box = layout.boxes.get(focusedId);
     if (!box) return;
     setOffset((prev) =>
-      scrollIntoView(box, { ...prev, width: columns - 2, height: canvasHeight }),
+      scrollIntoView(box, { ...prev, width: canvasWidth, height: canvasHeight }),
     );
-  }, [focusedId, layout, columns, canvasHeight]);
+  }, [focusedId, layout, canvasWidth, canvasHeight]);
 
   // Auto-focus a gate when its approval request arrives.
   useEffect(() => {
@@ -422,6 +449,8 @@ export function App({
     pendingApproval,
     columns,
     rows,
+    canvasWidth,
+    canvasHeight,
     openModelPicker,
     openSkillPicker,
   });
@@ -436,6 +465,8 @@ export function App({
       pendingApproval,
       columns,
       rows,
+      canvasWidth,
+      canvasHeight,
       openModelPicker,
       openSkillPicker,
     };
@@ -463,6 +494,8 @@ export function App({
           pendingApproval,
           columns,
           rows,
+          canvasWidth,
+          canvasHeight,
           openModelPicker,
           openSkillPicker,
         } = mouseStateRef.current;
@@ -537,10 +570,14 @@ export function App({
           } else if (pendingApproval) {
             setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
           } else {
-            setOffset((o) => ({
-              ...o,
-              oy: event.direction === 'down' ? o.oy + 2 : Math.max(0, o.oy - 2),
-            }));
+            setOffset((o) =>
+              clampOffset(layout, {
+                ox: o.ox,
+                oy: o.oy + (event.direction === 'down' ? PAN_STEP_Y : -PAN_STEP_Y),
+                width: canvasWidth,
+                height: canvasHeight,
+              }),
+            );
           }
         }
       }
@@ -574,6 +611,19 @@ export function App({
     // ctrl-combos never collide with typed text.
     if (key.ctrl && input === 'p') {
       setPanelRect(null);
+      return;
+    }
+
+    // Panning the canvas works in every mode, including while Discuss or a
+    // picker holds the keyboard — those return unconditionally below, and a
+    // graph you cannot scroll while the panel that covers it is open is a
+    // graph you cannot read. Shift-modified so it never collides with typed
+    // text or with a picker's own arrow-key cursor.
+    if (key.shift && (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow)) {
+      if (key.leftArrow) panBy(-PAN_STEP_X, 0);
+      else if (key.rightArrow) panBy(PAN_STEP_X, 0);
+      else if (key.upArrow) panBy(0, -PAN_STEP_Y);
+      else panBy(0, PAN_STEP_Y);
       return;
     }
 
@@ -720,13 +770,13 @@ export function App({
     } else if (input === 's') {
       if (focusedNode) openSkillPicker(focusedNode.id);
     } else if (key.leftArrow) {
-      setOffset((o) => ({ ...o, ox: Math.max(0, o.ox - 4) }));
+      panBy(-PAN_STEP_X, 0);
     } else if (key.rightArrow) {
-      setOffset((o) => ({ ...o, ox: o.ox + 4 }));
+      panBy(PAN_STEP_X, 0);
     } else if (key.upArrow) {
-      setOffset((o) => ({ ...o, oy: Math.max(0, o.oy - 2) }));
+      panBy(0, -PAN_STEP_Y);
     } else if (key.downArrow) {
-      setOffset((o) => ({ ...o, oy: o.oy + 2 }));
+      panBy(0, PAN_STEP_Y);
     } else if (input === 'q') {
       onExit();
       exit();
@@ -743,8 +793,8 @@ export function App({
     [workflow, layout, runState, focusedId, modelTick, frame],
   );
   const canvasLines = useMemo(
-    () => gridToLines(grid, { ...offset, width: columns - 2, height: canvasHeight }),
-    [grid, offset, columns, canvasHeight],
+    () => gridToLines(grid, { ...offset, width: canvasWidth, height: canvasHeight }),
+    [grid, offset, canvasWidth, canvasHeight],
   );
 
   const statusCounts = Object.values(runState.nodes).reduce<Record<string, number>>(
@@ -789,6 +839,10 @@ export function App({
           <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
         ) : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
+        {/* Lives in the header rather than the bottom hint line because the
+            hint line disappears behind a docked panel — which is exactly when
+            the canvas is smallest and the most nodes are off-screen. */}
+        {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
       </Text>
@@ -1143,7 +1197,7 @@ export function App({
         </Box>
       ) : (
         <Text dimColor>
-          tab: focus · enter: details · ←→↑↓: pan · q: quit
+          tab: focus · enter: details · ←→↑↓ (⇧ anywhere): pan · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
         </Text>
       )}
