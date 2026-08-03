@@ -70,6 +70,8 @@ export interface ApprovalRequest {
   upstreamSummaries: Array<{ nodeId: string; summary: string }>;
   /** Present when a push-configured Git-ops node is downstream of this gate. */
   pushTarget?: { nodeId: string; remote: string; branch: string };
+  /** Set only when the gate's optional agent step ran (`agent`/`skills` configured). */
+  agentSummary?: string;
 }
 
 export interface ConvergenceRequest {

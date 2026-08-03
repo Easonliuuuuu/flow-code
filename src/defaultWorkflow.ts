@@ -57,8 +57,11 @@ nodes:
       # it has no agent and cannot author a test.
       instructions: Implement what the upstream spec requires, including tests covering it.
 
-  # Test has no agent: it only runs commands, so it takes no \`skills\`. That is
-  # deliberate — it is the one node whose verdict is not a model's opinion.
+  # Test has no agent for its core run: commands, verdict, and exit code are
+  # never a model's opinion. It can optionally carry \`agent: true\` (with
+  # \`instructions\`/\`skills\`) for a read-only-by-default agent pass that runs
+  # once after the commands finish and adds analysis alongside the verdict —
+  # it can never change \`passed\`.
   - id: test
     type: test
     config:

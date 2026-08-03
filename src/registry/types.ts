@@ -65,4 +65,12 @@ export interface NodeTypeDefinition {
    * sever the context chain across it. Context stays bounded by fan-in.
    */
   contextTransparent?: boolean;
+  /**
+   * True when this (non-agent-driven) type's config can also carry
+   * `agent`/`instructions`/`skills`/`capabilities` — an optional, per-node
+   * agent session its core execution doesn't otherwise need. Currently only
+   * Test and Approval-Gate; every `agentDriven: true` type already implies
+   * this, so it's never set there. See `nodeTypeAcceptsAgentStep`.
+   */
+  hasOptionalAgentStep?: boolean;
 }

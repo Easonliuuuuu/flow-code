@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
+import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
 import type { ActivityEntry, RunState } from '../runstate/types.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
@@ -203,6 +204,11 @@ export function App({
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerCursor, setSkillPickerCursor] = useState(0);
   const [skillPickerSelected, setSkillPickerSelected] = useState<Set<string>>(new Set());
+  // Typing narrows the catalog by id/description; space still toggles the
+  // item under the cursor rather than typing a literal space, since ids are
+  // single-word and that keeps the one key that would otherwise be ambiguous
+  // unambiguous.
+  const [skillPickerQuery, setSkillPickerQuery] = useState('');
 
   useEffect(
     () => () => {
@@ -325,6 +331,19 @@ export function App({
       (a, b) => rank[a.source] - rank[b.source] || a.id.localeCompare(b.id),
     );
   }, [runState.repoRoot]);
+  const filteredSkillCatalog = useMemo(() => {
+    const q = skillPickerQuery.trim().toLowerCase();
+    if (!q) return skillCatalog;
+    return skillCatalog.filter(
+      (s) => s.id.toLowerCase().includes(q) || s.description.toLowerCase().includes(q),
+    );
+  }, [skillCatalog, skillPickerQuery]);
+  // The filtered set's length/order changes with every keystroke; a cursor
+  // left pointing at the old index would land on an unrelated row (or past
+  // the end), so it always snaps back to the top of the new result set.
+  useEffect(() => {
+    setSkillPickerCursor(0);
+  }, [skillPickerQuery]);
 
   const showPickerMessage = (text: string): void => {
     setPickerMessage(text);
@@ -364,13 +383,14 @@ export function App({
   const openSkillPicker = (nodeId: string): void => {
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
-    if (!node.type.agentDriven) {
+    if (!nodeTypeAcceptsAgentStep(node.type)) {
       showPickerMessage(`${node.type.displayName} nodes have no skills to attach.`);
       return;
     }
     const catalogIds = new Set(skillCatalog.map((s) => s.id));
     const entries = (node.config as { skills?: string[] }).skills ?? [];
     setSkillPickerCursor(0);
+    setSkillPickerQuery('');
     setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
     setSkillPickerOpen(true);
   };
@@ -957,9 +977,18 @@ export function App({
     }
 
     // Skill picker: same reachable-only-via-`s` guarantee as the model picker
-    // above. Multi-select, so enter confirms the whole set rather than one item.
+    // above. Multi-select, so enter confirms the whole set rather than one
+    // item. Typing filters the catalog by id/description, so j/k aren't
+    // navigation aliases here the way they are elsewhere — a typed "j" is
+    // query text, not a keystroke; only the arrows move the cursor.
     if (skillPickerOpen && focusedNode) {
       if (key.escape) {
+        // Backs out of the query first, then the panel — same shape as the
+        // node-settings editor's escape handling below.
+        if (skillPickerQuery) {
+          setSkillPickerQuery('');
+          return;
+        }
         setSkillPickerOpen(false);
         return;
       }
@@ -969,18 +998,36 @@ export function App({
         return;
       }
       if (skillCatalog.length === 0) return;
-      if (key.upArrow || input === 'k') {
-        setSkillPickerCursor((c) => (c + skillCatalog.length - 1) % skillCatalog.length);
-      } else if (key.downArrow || input === 'j') {
-        setSkillPickerCursor((c) => (c + 1) % skillCatalog.length);
-      } else if (input === ' ') {
-        const id = skillCatalog[skillPickerCursor]!.id;
-        setSkillPickerSelected((prev) => {
-          const next = new Set(prev);
-          if (next.has(id)) next.delete(id);
-          else next.add(id);
-          return next;
-        });
+      if (key.upArrow) {
+        if (filteredSkillCatalog.length > 0) {
+          setSkillPickerCursor((c) => (c + filteredSkillCatalog.length - 1) % filteredSkillCatalog.length);
+        }
+        return;
+      }
+      if (key.downArrow) {
+        if (filteredSkillCatalog.length > 0) {
+          setSkillPickerCursor((c) => (c + 1) % filteredSkillCatalog.length);
+        }
+        return;
+      }
+      if (input === ' ') {
+        const skill = filteredSkillCatalog[skillPickerCursor];
+        if (skill) {
+          setSkillPickerSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(skill.id)) next.delete(skill.id);
+            else next.add(skill.id);
+            return next;
+          });
+        }
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setSkillPickerQuery((q) => q.slice(0, -1));
+        return;
+      }
+      if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+        setSkillPickerQuery((q) => q + input);
       }
       return;
     }
@@ -1218,13 +1265,40 @@ export function App({
           <Text dimColor>
             upstream: {pendingApproval.req.upstreamSummaries.map((u) => u.nodeId).join(', ') || '—'}
           </Text>
+          {(() => {
+            if (!pendingApproval.req.agentSummary) return null;
+            // Capped to a fixed number of lines (not fully dynamic) so a long
+            // critique can't silently eat the diff's viewport the way an
+            // uncapped variable-height block did for the skill picker's
+            // search line earlier — see `visible` below, which reserves
+            // exactly this many rows plus one for the label.
+            const summaryLines = wrapText(pendingApproval.req.agentSummary, Math.max(10, activeRect.w - 4)).slice(
+              0,
+              4,
+            );
+            return (
+              <Box flexDirection="column">
+                <Text color="magenta" bold>
+                  AI critique (from attached skill/instructions):
+                </Text>
+                {summaryLines.map((line, i) => (
+                  <Text key={i} dimColor wrap="truncate-end">
+                    {line || ' '}
+                  </Text>
+                ))}
+              </Box>
+            );
+          })()}
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             {(() => {
               const lines = pendingApproval.req.diffs.flatMap((d) => [
                 ...(d.label ? [`── ${d.label} ──`] : []),
                 ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
               ]);
-              const visible = Math.max(1, panelHeight - 6);
+              const summaryBudget = pendingApproval.req.agentSummary
+                ? Math.min(4, wrapText(pendingApproval.req.agentSummary, Math.max(10, activeRect.w - 4)).length) + 1
+                : 0;
+              const visible = Math.max(1, panelHeight - 6 - summaryBudget);
               const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
               return lines.slice(start, start + visible).map((line, i) => (
                 <Text
@@ -1343,38 +1417,59 @@ export function App({
                       no skills discovered — see `flow-code skills`.
                     </Text>
                   ) : (
-                    (() => {
-                      const { start, end } = windowFor(skillPickerCursor, skillCatalog.length, 10);
-                      return (
-                        <>
-                          {start > 0 ? <Text dimColor> ↑ {start} more above</Text> : null}
-                          {skillCatalog.slice(start, end).map((skill, i) => {
-                            const idx = start + i;
-                            const checked = skillPickerSelected.has(skill.id);
-                            return (
-                              <Text
-                                key={skill.id}
-                                wrap="truncate-end"
-                                {...(idx === skillPickerCursor ? { color: 'cyan', bold: true } : {})}
-                              >
-                                {idx === skillPickerCursor ? '❯ ' : '  '}
-                                {checked ? '[x] ' : '[ ] '}
-                                {skill.id}
-                              </Text>
-                            );
-                          })}
-                          {end < skillCatalog.length ? (
-                            <Text dimColor> ↓ {skillCatalog.length - end} more below</Text>
-                          ) : null}
-                        </>
-                      );
-                    })()
+                    <>
+                      <Text wrap="truncate-end">
+                        <Text dimColor>search: </Text>
+                        {skillPickerQuery}
+                        <Text inverse> </Text>
+                      </Text>
+                      {filteredSkillCatalog.length === 0 ? (
+                        <Text dimColor wrap="truncate-end">
+                          no skill matches "{skillPickerQuery}"
+                        </Text>
+                      ) : (
+                        (() => {
+                          // Borders, title, the search line, footer, and
+                          // (worst case) both scroll indicators — a fixed
+                          // window size taller than what's actually left
+                          // over would silently drop rows rather than
+                          // resize, on a short terminal or a very large
+                          // catalog (a plugin marketplace easily has
+                          // hundreds of skills).
+                          const skillListBudget = Math.max(3, panelHeight - 7);
+                          const { start, end } = windowFor(skillPickerCursor, filteredSkillCatalog.length, skillListBudget);
+                          return (
+                            <>
+                              {start > 0 ? <Text dimColor> ↑ {start} more above</Text> : null}
+                              {filteredSkillCatalog.slice(start, end).map((skill, i) => {
+                                const idx = start + i;
+                                const checked = skillPickerSelected.has(skill.id);
+                                return (
+                                  <Text
+                                    key={skill.id}
+                                    wrap="truncate-end"
+                                    {...(idx === skillPickerCursor ? { color: 'cyan', bold: true } : {})}
+                                  >
+                                    {idx === skillPickerCursor ? '❯ ' : '  '}
+                                    {checked ? '[x] ' : '[ ] '}
+                                    {skill.id}
+                                  </Text>
+                                );
+                              })}
+                              {end < filteredSkillCatalog.length ? (
+                                <Text dimColor> ↓ {filteredSkillCatalog.length - end} more below</Text>
+                              ) : null}
+                            </>
+                          );
+                        })()
+                      )}
+                    </>
                   )}
                 </>
               );
             })()}
           </Box>
-          <PanelFooter hint="↑/↓: move · space: toggle · enter: confirm · esc: cancel" />
+          <PanelFooter hint="type: filter · ↑/↓: move · space: toggle · enter: confirm · esc: clear/cancel" />
         </Box>
       ) : editorOpen && focusedNode ? (
         <Box {...panelBoxProps}>
@@ -1474,7 +1569,7 @@ export function App({
                         : ''}
                     </Text>
                   ) : null}
-                  {focusedNode.type.agentDriven ? (
+                  {nodeTypeAcceptsAgentStep(focusedNode.type) ? (
                     <Text dimColor wrap="truncate-end">
                       skills: {focusedNode.skills.length > 0 ? focusedNode.skills.map((s) => s.id).join(', ') : '(none)'} · s: change
                     </Text>

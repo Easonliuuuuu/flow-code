@@ -1,5 +1,6 @@
 import { render } from 'ink';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
@@ -10,6 +11,23 @@ import { UiInteractionPorts } from '../src/ui/ports.js';
 import type { Workflow } from '../src/workflow/load.js';
 import { WORKFLOW_RELATIVE_PATH } from '../src/workflow/load.js';
 import { makeTempGitRepo, storeFor, workflowFromYaml } from './helpers.js';
+
+/**
+ * The skill picker discovers `~/.claude/skills` via the real `homedir()`, not
+ * an injectable root — so on a machine with any global/plugin skills
+ * installed, these tests would otherwise run against however many hundred
+ * skills happen to be on the developer's machine. Pointing HOME at an empty
+ * directory for the duration of a test keeps its catalog to exactly the
+ * fixture skills it creates.
+ */
+function withEmptyHome<T>(fn: () => Promise<T>): Promise<T> {
+  const original = process.env.HOME;
+  process.env.HOME = mkdtempSync(join(tmpdir(), 'flow-code-empty-home-'));
+  return fn().finally(() => {
+    if (original === undefined) delete process.env.HOME;
+    else process.env.HOME = original;
+  });
+}
 
 /**
  * End-to-end coverage of the skill picker: open it with `s`, toggle a
@@ -179,25 +197,104 @@ describe('skill picker end-to-end', () => {
     }
   });
 
-  it('declines on a node type with no skills field, without opening a panel', async () => {
+  it('opens on the Test node too — its optional agent step can now carry skills', async () => {
     const { repoRoot, workflowPath, workflow } = newRepoWithWorkflow();
-    const before = readFileSync(workflowPath, 'utf8');
     const { stdout, stdin, unmount } = mountApp(workflow, storeFor(workflow, repoRoot), CLAUDE_CONTEXT);
     try {
       await settle();
-      // Move focus to 'rev', then 'imp' -> 't' (test node, agentDriven: false).
+      // Move focus 'impl' -> 'rev' -> 't' (the test node).
       stdin.write('\t');
       await settle();
       stdin.write('\t');
       await settle();
       stdin.write('s');
       await settle();
-      const frame = lastFrameLines(stdout).join('\n');
-      expect(frame).toContain('no skills to attach');
-      expect(frame).not.toContain('Skills — t');
-      expect(readFileSync(workflowPath, 'utf8')).toBe(before);
+      expect(lastFrameLines(stdout).join('\n')).toContain('Skills — t');
+
+      stdin.write(' '); // toggle demo-skill on
+      await settle();
+      stdin.write('\r'); // confirm
+      await settle();
+
+      expect(lastFrameLines(stdout).join('\n')).toContain('»demo-skill');
+      expect(readFileSync(workflowPath, 'utf8')).toMatch(/skills:\n\s+- demo-skill/);
     } finally {
       unmount();
     }
   });
+
+  it('typing filters the catalog by id/description, and picks the filtered one out from a longer list', () =>
+    withEmptyHome(async () => {
+      const repoRoot = makeTempGitRepo();
+      const workflowPath = join(repoRoot, WORKFLOW_RELATIVE_PATH);
+      mkdirSync(join(repoRoot, '.flow-code'), { recursive: true });
+      writeFileSync(workflowPath, WORKFLOW_YAML);
+      const workflow = workflowFromYaml(WORKFLOW_YAML);
+      // Alphabetically, code-review sorts before demo-skill — scrolling to it
+      // isn't what's under test here, filtering by a substring is.
+      for (const [id, description] of [
+        ['demo-skill', 'a fixture skill'],
+        ['code-review', 'reviews a diff for common mistakes'],
+      ] as const) {
+        const dir = join(repoRoot, '.claude', 'skills', id);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'SKILL.md'), `---\ndescription: ${description}\n---\ndo the thing\n`);
+      }
+      const { stdout, stdin, unmount } = mountApp(workflow, storeFor(workflow, repoRoot), CLAUDE_CONTEXT);
+      try {
+        await settle();
+        stdin.write('s');
+        await settle();
+        let frame = lastFrameLines(stdout).join('\n');
+        expect(frame).toContain('code-review');
+        expect(frame).toContain('demo-skill');
+
+        // Typing narrows the list to the one match, by description as well as id.
+        stdin.write('review');
+        await settle();
+        frame = lastFrameLines(stdout).join('\n');
+        expect(frame).toContain('search: review');
+        expect(frame).toContain('code-review');
+        expect(frame).not.toContain('demo-skill');
+
+        // The cursor is on the sole visible match — space toggles it, not
+        // whatever the pre-filter cursor position would have been.
+        stdin.write(' ');
+        await settle();
+        stdin.write('\r');
+        await settle();
+        expect(readFileSync(workflowPath, 'utf8')).toMatch(/skills:\n\s+- code-review/);
+      } finally {
+        unmount();
+      }
+    }));
+
+  it('escape clears the query before closing the panel', () =>
+    withEmptyHome(async () => {
+      const { repoRoot, workflowPath, workflow } = newRepoWithWorkflow();
+      const before = readFileSync(workflowPath, 'utf8');
+      const { stdout, stdin, unmount } = mountApp(workflow, storeFor(workflow, repoRoot), CLAUDE_CONTEXT);
+      try {
+        await settle();
+        stdin.write('s');
+        await settle();
+        stdin.write('zzz-no-match');
+        await settle();
+        expect(lastFrameLines(stdout).join('\n')).toContain('no skill matches "zzz-no-match"');
+
+        stdin.write('\x1b'); // escape: clears the query, panel stays open
+        await settle();
+        let frame = lastFrameLines(stdout).join('\n');
+        expect(frame).toContain('Skills — impl');
+        expect(frame).toContain('demo-skill');
+
+        stdin.write('\x1b'); // escape again: now closes the panel
+        await settle();
+        frame = lastFrameLines(stdout).join('\n');
+        expect(frame).not.toContain('Skills — impl');
+        expect(readFileSync(workflowPath, 'utf8')).toBe(before);
+      } finally {
+        unmount();
+      }
+    }));
 });

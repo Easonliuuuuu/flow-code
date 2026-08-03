@@ -1,3 +1,4 @@
+import type { CapabilitySet } from '../capabilities.js';
 import type { ExecuteContext, UpstreamInput } from '../engine/types.js';
 import type { WorkflowNode } from '../workflow/load.js';
 
@@ -260,6 +261,42 @@ export function acceptanceCriteriaFrom(
 
 export function nodeModel(ctx: ExecuteContext, configModel: string | undefined): string | undefined {
   return configModel ?? ctx.settings.model;
+}
+
+/**
+ * Run one agent session for a node under the harness. Capabilities are an
+ * explicit parameter rather than derived from `ctx.node.type.capabilities` —
+ * that's the node type's *own* permission set (e.g. Test's `['read','exec']`,
+ * informational for its shell commands, which never go through this
+ * function), a different concept from what a *particular call* to this
+ * function is allowed to do. Callers pass exactly the capability set that
+ * call should get.
+ */
+export async function runNodeSession(
+  ctx: ExecuteContext,
+  capabilities: CapabilitySet,
+  prompt: string,
+  model: string | undefined,
+): Promise<string> {
+  const release = await ctx.acquireSessionSlot();
+  try {
+    const { finalText } = await ctx.sessions.run(
+      {
+        nodeId: ctx.node.id,
+        capabilities,
+        rolePrompt: rolePromptFor(ctx),
+        prompt,
+        workingDir: ctx.workingDir,
+        ...(model !== undefined ? { model } : {}),
+        onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
+        signal: ctx.signal,
+      },
+      ctx.store,
+    );
+    return finalText;
+  } finally {
+    release();
+  }
 }
 
 export function truncateText(text: string, limit: number): string {

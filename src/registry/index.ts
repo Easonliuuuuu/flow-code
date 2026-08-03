@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { CAPABILITIES } from '../capabilities.js';
+import type { WorkflowNode } from '../workflow/load.js';
 import type { NodeTypeDefinition, NodeTypeId } from './types.js';
 
 export type { NodeTypeDefinition, NodeTypeId } from './types.js';
@@ -9,12 +11,33 @@ export { NODE_TYPE_IDS } from './types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Skills attached to an agent-driven node: identifiers from a discovery root,
- * or repo-relative paths. Only agent-driven types carry this field — on a type
- * with no session there is no prompt to compose into, so `strictObject`
- * rejecting the key is the whole enforcement.
+ * Skills attached to a node: identifiers from a discovery root, or
+ * repo-relative paths. Carried by every type whose executor can spend an
+ * agent session — either because the type itself is agent-driven, or (Test,
+ * Approval-Gate) because `agent: true` opts that specific node into one
+ * optional, capability-locked-by-default session its core execution doesn't
+ * otherwise need. A type that carries neither rejects the key outright via
+ * `strictObject`.
  */
 const skillsField = z.array(z.string().min(1)).optional();
+
+/**
+ * The optional-agent-step fields spliced into `test`/`approval-gate`'s config
+ * (see `hasOptionalAgentStep`). `agent` gates whether the step runs at all —
+ * it defaults to unset/false, so an existing workflow.yaml is unaffected
+ * until it opts in. `instructions` is task-specific guidance folded into the
+ * step's *prompt* (the "what"), the same role `implement.config.instructions`
+ * already plays; `skills` shapes the step's *role* (the "how"), exactly like
+ * every other type. `capabilities` defaults to read-only when omitted, but is
+ * fully configurable — a deliberate trade-off, not an oversight; see
+ * `cmdDoctor`'s warning when a node configures more than that.
+ */
+const agentStepFields = {
+  agent: z.boolean().optional(),
+  instructions: z.string().min(1).optional(),
+  skills: skillsField,
+  capabilities: z.array(z.enum(CAPABILITIES)).optional(),
+};
 
 const discussConfig = z.strictObject({
   topic: z.string().min(1).optional(),
@@ -62,6 +85,7 @@ export const PLACEHOLDER_TEST_COMMAND = 'echo "replace me with your project\'s t
 
 const testConfig = z.strictObject({
   commands: z.union([z.array(z.string().min(1)).min(1), z.literal(TEST_COMMANDS_AUTO)]),
+  ...agentStepFields,
 });
 
 const validateConfig = z.strictObject({
@@ -125,6 +149,7 @@ const worktreeAgentConfig = z.discriminatedUnion('mode', [
 
 const approvalGateConfig = z.strictObject({
   title: z.string().min(1).optional(),
+  ...agentStepFields,
 });
 
 // ---------------------------------------------------------------------------
@@ -166,6 +191,8 @@ export const testOutput = z.object({
       output: z.string(),
     }),
   ),
+  /** Set only when `agent`/`skills` were configured — never influences `passed`. */
+  analysis: z.string().optional(),
 });
 
 export const validateOutput = z.object({
@@ -331,16 +358,20 @@ const definitions: NodeTypeDefinition[] = [
     displayName: 'Test',
     description:
       'Deterministic command runner: executes configured shell commands with no agent session and no API cost. ' +
-      'It runs tests; it never writes them (the Implement step does).',
+      'It runs tests; it never writes them (the Implement step does). ' +
+      'Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent pass ' +
+      'after the commands finish, for analysis alongside the verdict — it can never change `passed`.',
     capabilities: ['read', 'exec'],
     agentDriven: false,
+    hasOptionalAgentStep: true,
     interactive: false,
     hasModelField: false,
     rolePrompt: '',
     configSchema: testConfig,
     outputSchema: testOutput,
-    configSummary: "commands (string[] min 1, or 'auto' to rediscover each run)",
-    outputSummary: 'passed (boolean), commands ({command, exitStatus, output}[])',
+    configSummary:
+      "commands (string[] min 1, or 'auto' to rediscover each run), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
+    outputSummary: 'passed (boolean), commands ({command, exitStatus, output}[]), analysis? (string)',
   },
   {
     id: 'validate',
@@ -423,15 +454,19 @@ const definitions: NodeTypeDefinition[] = [
     id: 'approval-gate',
     displayName: 'Approval-Gate',
     description:
-      'No agent session: computes the pending diff against the run baseline and waits for explicit user approval.',
+      'No agent session: computes the pending diff against the run baseline and waits for explicit user approval. ' +
+      'Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent critique of ' +
+      "the diff, shown to the approver alongside it — it never affects the decision itself.",
     capabilities: [],
     agentDriven: false,
+    hasOptionalAgentStep: true,
     interactive: false,
     hasModelField: false,
     rolePrompt: '',
     configSchema: approvalGateConfig,
     outputSchema: approvalGateOutput,
-    configSummary: 'title? (string)',
+    configSummary:
+      "title? (string), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
     outputSummary: "decision ('approved'|'rejected'), decidedAt (ISO timestamp)",
     // A gate records a decision, not a result: without transparency every node
     // after a gate would receive `{decision, decidedAt}` and nothing else.
@@ -449,4 +484,22 @@ export function getNodeType(id: string): NodeTypeDefinition | undefined {
 
 export function listNodeTypes(): NodeTypeDefinition[] {
   return [...nodeTypeRegistry.values()];
+}
+
+/** Can this node TYPE'S config even carry the agent-step fields? Drives UI availability (skill picker, detail panel). */
+export function nodeTypeAcceptsAgentStep(type: NodeTypeDefinition): boolean {
+  return type.agentDriven || type.hasOptionalAgentStep === true;
+}
+
+/**
+ * Will THIS node actually spend an agent session? Drives `resolveProvider`/
+ * `preflight` and the executors themselves. `agentDriven` types always have;
+ * for the rest, only when `agent: true` and there's actually something to run
+ * it with (instructions or at least one resolved skill) — `agent: true` with
+ * neither is a no-op, not an error, so it does not count as wanting a step.
+ */
+export function nodeWantsAgentStep(node: WorkflowNode): boolean {
+  if (node.type.agentDriven) return true;
+  const config = node.config as { agent?: boolean; instructions?: string };
+  return config.agent === true && (config.instructions !== undefined || node.skills.length > 0);
 }

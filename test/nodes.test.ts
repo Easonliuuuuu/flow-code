@@ -250,6 +250,73 @@ edges:
     expect(output.commands[1]!.exitStatus).toBe(7);
     expect(store.node('after').status).toBe('skipped');
   });
+
+  it('with `agent: true` and instructions, adds analysis without ever changing the real verdict', async () => {
+    const repo = makeTempGitRepo();
+    // Even a session that reads as "looks fine" cannot flip a failing exit
+    // code to passed — the verdict is fixed before this session ever runs.
+    const sessions = fakeSessions(() => 'looks fine to me, nothing to worry about');
+    const { store } = await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands:
+        - echo before
+        - exit 7
+      agent: true
+      instructions: summarize what broke
+`,
+      repo,
+      { sessions },
+    );
+    expect(sessions.requests).toHaveLength(1);
+    expect([...sessions.requests[0]!.capabilities]).toEqual(['read']);
+    expect(store.node('t').status).toBe('error');
+    const output = store.node('t').output as TestOutput;
+    expect(output.passed).toBe(false);
+    expect(output.analysis).toBe('looks fine to me, nothing to worry about');
+  });
+
+  it('with `agent: true` but nothing to say, spends no session at all', async () => {
+    const repo = makeTempGitRepo();
+    const { store } = await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: ["echo hi"]
+      agent: true
+`,
+      repo,
+    );
+    // throwingSessions is the default in runReal — this would already have
+    // thrown if a session were attempted.
+    expect(store.node('t').status).toBe('done');
+    expect((store.node('t').output as TestOutput).analysis).toBeUndefined();
+  });
+
+  it('an explicit capabilities list overrides the read-only default', async () => {
+    const repo = makeTempGitRepo();
+    const sessions = fakeSessions(() => 'ok');
+    await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: ["echo hi"]
+      agent: true
+      instructions: check for flakiness
+      capabilities: [read, edit]
+`,
+      repo,
+      { sessions },
+    );
+    expect([...sessions.requests[0]!.capabilities].sort()).toEqual(['edit', 'read']);
+  });
 });
 
 describe('Discuss node resume', () => {
@@ -365,9 +432,65 @@ edges:
     expect(req.diffs[0]!.diff).toContain('agent-made.txt');
     expect(req.diffs[0]!.diff).toContain('agent content');
     expect(req.upstreamSummaries.map((u) => u.nodeId)).toEqual(['impl']);
+    // No `agent: true` on this gate — no critique session, no agentSummary.
+    expect(req.agentSummary).toBeUndefined();
     expect(store.node('gate').status).toBe('done');
     expect((store.node('gate').output as ApprovalGateOutput).decision).toBe('approved');
     expect(store.node('after').status).toBe('done');
+  });
+
+  it('with `agent: true`, adds a read-only-by-default critique without touching the decision', async () => {
+    const repo = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: write a file }
+  - id: gate
+    type: approval-gate
+    config:
+      agent: true
+      instructions: point out anything risky
+  - id: after
+    type: test
+    config: { commands: ["echo ran"] }
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: after }
+`;
+    const sessions = fakeSessions((req) => {
+      if (req.nodeId === 'impl') {
+        writeFileSync(join(req.workingDir, 'agent-made.txt'), 'agent content\n');
+        return 'done: wrote agent-made.txt';
+      }
+      return 'looks reasonable; minor risk: no test for the new file';
+    });
+    const { store, ports } = await runReal(yaml, repo, { sessions, portOpts: { approve: 'approve' } });
+
+    expect(sessions.requests).toHaveLength(2);
+    const gateReq = sessions.requests.find((r) => r.nodeId === 'gate')!;
+    expect([...gateReq.capabilities]).toEqual(['read']);
+    expect(ports.approvalRequests[0]!.agentSummary).toBe(
+      'looks reasonable; minor risk: no test for the new file',
+    );
+    // The critique is purely informational: the human's decision still stands.
+    expect((store.node('gate').output as ApprovalGateOutput).decision).toBe('approved');
+  });
+
+  it('an explicit capabilities list overrides the gate critique steps read-only default', async () => {
+    const repo = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: gate
+    type: approval-gate
+    config:
+      agent: true
+      instructions: check for anything risky
+      capabilities: [read, edit]
+`;
+    const sessions = fakeSessions(() => 'ok');
+    await runReal(yaml, repo, { sessions, portOpts: { approve: 'approve' } });
+    expect([...sessions.requests[0]!.capabilities].sort()).toEqual(['edit', 'read']);
   });
 
   it('on reject: gate errors, downstream is skipped, independent branches still run', async () => {

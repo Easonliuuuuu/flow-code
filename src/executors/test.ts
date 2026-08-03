@@ -1,16 +1,17 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { capabilitySet } from '../capabilities.js';
 import type { ExecuteContext, NodeExecutor } from '../engine/types.js';
 import { detectTestCommands } from '../init/testDetect.js';
 import {
   discoverTestCommandsWithAgent,
   type TestCommandProposal,
 } from '../init/testDiscoverAgent.js';
-import { PLACEHOLDER_TEST_COMMAND, TEST_COMMANDS_AUTO, type TestConfig } from '../registry/index.js';
+import { nodeWantsAgentStep, PLACEHOLDER_TEST_COMMAND, TEST_COMMANDS_AUTO, type TestConfig } from '../registry/index.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { setNodeTestCommands } from '../workflow/write.js';
-import { nodeModel } from './helpers.js';
+import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
 
 interface CommandResult {
   command: string;
@@ -144,6 +145,7 @@ export const executeTest: NodeExecutor = async function* (ctx) {
     return;
   }
 
+  let failureDetail: string | undefined;
   for (const command of commands) {
     const toolUseId = randomUUID();
     ctx.store.appendActivity({
@@ -166,18 +168,42 @@ export const executeTest: NodeExecutor = async function* (ctx) {
       text: `$ ${command}\n${result.output}(exit ${result.exitStatus})\n`,
     };
     if (result.exitStatus !== 0) {
-      yield { type: 'result', output: { passed: false, commands: results } };
-      yield {
-        type: 'status',
-        status: 'error',
-        detail: ctx.signal.aborted
-          ? 'interrupted'
-          : `command failed with exit ${result.exitStatus}: ${command}`,
-      };
-      return;
+      failureDetail = ctx.signal.aborted
+        ? 'interrupted'
+        : `command failed with exit ${result.exitStatus}: ${command}`;
+      break;
     }
   }
+  const passed = failureDetail === undefined;
 
-  yield { type: 'result', output: { passed: true, commands: results } };
-  yield { type: 'status', status: 'done' };
+  // Optional, additive-only: runs once after the real commands finish,
+  // regardless of outcome, and can never change `passed` — that verdict is
+  // already fixed above, from real exit codes. Skipped entirely when
+  // interrupted (no point starting a new session moments before teardown).
+  let analysis: string | undefined;
+  if (nodeWantsAgentStep(ctx.node) && !ctx.signal.aborted) {
+    yield { type: 'status', status: 'running', detail: 'analyzing test results' };
+    const capabilities = capabilitySet(...(config.capabilities ?? ['read']));
+    const commandsSummary = results
+      .map((r) => `$ ${r.command}\n${truncateText(r.output, 4000)}\n(exit ${r.exitStatus})`)
+      .join('\n\n');
+    const prompt =
+      `${upstreamPreamble(ctx.upstream)}## Test run\n\nResult: ${passed ? 'PASSED' : 'FAILED'}` +
+      `${!passed ? ` — stopped at: ${failureDetail}` : ''}\n\n${commandsSummary}\n\n` +
+      (config.instructions ? `${config.instructions}\n\n` : '') +
+      'If this passed, briefly note anything worth a human\'s attention. If it failed, analyze the ' +
+      'root cause using the output above and any upstream context. Respond in plain prose, not JSON.';
+    const finalText = await runNodeSession(ctx, capabilities, prompt, nodeModel(ctx, undefined));
+    analysis = truncateText(finalText.trim(), 4000);
+  }
+
+  yield {
+    type: 'result',
+    output: { passed, commands: results, ...(analysis !== undefined ? { analysis } : {}) },
+  };
+  if (failureDetail === undefined) {
+    yield { type: 'status', status: 'done' };
+  } else {
+    yield { type: 'status', status: 'error', detail: failureDetail };
+  }
 };
