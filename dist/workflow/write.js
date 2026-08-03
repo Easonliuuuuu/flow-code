@@ -9,11 +9,14 @@ export class WorkflowWriteError extends Error {
     }
 }
 /**
- * Sets (or, with `model: null`, clears) one node's `config.model` in the
- * workflow file on disk, preserving every comment, blank line, and key order
- * the `yaml` package's Document AST can carry across an edit — this file is
- * checked in and hand-edited, so a writer that re-emits it from a parsed
- * object would destroy that on the first save.
+ * Reads `path`, locates `nodeId`, hands the parsed Document and its index to
+ * `mutate`, then re-validates and atomically writes the result — the shared
+ * skeleton behind every field-level writer below.
+ *
+ * Preserves every comment, blank line, and key order the `yaml` package's
+ * Document AST can carry across an edit — this file is checked in and
+ * hand-edited, so a writer that re-emits it from a parsed object would
+ * destroy that on the first save.
  *
  * Known gap: a comment block at the very end of a sequence with no node
  * after it (a "dangling" comment, e.g. the commented-out loop-back example
@@ -27,7 +30,7 @@ export class WorkflowWriteError extends Error {
  * clobbered. The result is re-validated as a workflow before anything is
  * written; on any failure the file on disk is untouched.
  */
-export function setNodeModel(path, nodeId, model) {
+function editNode(path, nodeId, mutate) {
     let source;
     try {
         source = readFileSync(path, 'utf8');
@@ -41,19 +44,16 @@ export function setNodeModel(path, nodeId, model) {
     if (index < 0) {
         throw new WorkflowWriteError(`no node \`${nodeId}\` in ${path}`);
     }
-    if (model === null) {
-        doc.deleteIn(['nodes', index, 'config', 'model']);
-        const config = doc.getIn(['nodes', index, 'config'], true);
-        if (isMap(config) && config.items.length === 0) {
-            doc.deleteIn(['nodes', index, 'config']);
-        }
-    }
-    else {
-        doc.setIn(['nodes', index, 'config', 'model'], model);
-    }
+    mutate(doc, index);
     const next = doc.toString();
     try {
-        loadWorkflowFromString(next);
+        // `path` is always `<repoRoot>/.flow-code/workflow.yaml` (see
+        // WORKFLOW_RELATIVE_PATH) — anchoring re-validation there, rather than
+        // process.cwd(), matters once a node's config carries `skills:`: a
+        // project-local skill resolves against the repo root, and a caller
+        // running from a subdirectory of the repo would otherwise see a false
+        // "no skill" failure on an edit that never touched skills at all.
+        loadWorkflowFromString(next, { repoRoot: dirname(dirname(path)) });
     }
     catch (err) {
         const reason = err instanceof WorkflowValidationError ? err.message : String(err);
@@ -67,5 +67,31 @@ export function setNodeModel(path, nodeId, model) {
     catch (err) {
         throw new WorkflowWriteError(`could not write ${path}: ${err instanceof Error ? err.message : String(err)}`);
     }
+}
+/** Deletes `config.<field>`, and `config` itself if that empties it. */
+function clearConfigField(doc, index, field) {
+    doc.deleteIn(['nodes', index, 'config', field]);
+    const config = doc.getIn(['nodes', index, 'config'], true);
+    if (isMap(config) && config.items.length === 0) {
+        doc.deleteIn(['nodes', index, 'config']);
+    }
+}
+/** Sets (or, with `model: null`, clears) one node's `config.model` in the workflow file on disk. */
+export function setNodeModel(path, nodeId, model) {
+    editNode(path, nodeId, (doc, index) => {
+        if (model === null)
+            clearConfigField(doc, index, 'model');
+        else
+            doc.setIn(['nodes', index, 'config', 'model'], model);
+    });
+}
+/** Sets (or, with an empty array, clears) one node's `config.skills` in the workflow file on disk. */
+export function setNodeSkills(path, nodeId, skills) {
+    editNode(path, nodeId, (doc, index) => {
+        if (skills.length === 0)
+            clearConfigField(doc, index, 'skills');
+        else
+            doc.setIn(['nodes', index, 'config', 'skills'], skills);
+    });
 }
 //# sourceMappingURL=write.js.map

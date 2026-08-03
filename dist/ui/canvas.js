@@ -34,6 +34,9 @@ const ANSI = {
     // Return paths read as a different kind of line from forward edges.
     loopback: '\x1b[35m',
     'loopback-fired': '\x1b[1;35m',
+    // A skill badge is a standing config choice, not a transient run signal —
+    // dim like the model badge, but yellow so it doesn't read as identical.
+    'skill-badge': '\x1b[33m',
 };
 const RESET = '\x1b[0m';
 /**
@@ -52,6 +55,19 @@ export function nodeModelBadge(workflow, nodeId) {
     if (resolved.model === undefined || resolved.model === workflow.settings.model)
         return null;
     return resolved.model;
+}
+/**
+ * `»name` for one attached skill, `»×n` for several — the full list lives in
+ * the detail panel. `»` rather than an emoji glyph: `put` below lays out one
+ * grid cell per JS character, and most emoji (unlike the box-drawing and
+ * dingbat glyphs used elsewhere on the card) render as two terminal columns,
+ * which pushes the row past the box's right border.
+ */
+export function nodeSkillBadge(workflow, nodeId) {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node || node.skills.length === 0)
+        return null;
+    return node.skills.length === 1 ? `»${node.skills[0].id}` : `»×${node.skills.length}`;
 }
 export function makeGrid(width, height) {
     return Array.from({ length: height }, () => Array.from({ length: width }, () => ({ ch: ' ', style: 'label' })));
@@ -172,6 +188,7 @@ export function renderGraph(workflow, layout, runState, focusedId, anim = { fram
         // visible in the detail view.
         const attempt = state.attempt ?? 1;
         const modelBadge = nodeModelBadge(workflow, node.id);
+        const skillBadge = nodeSkillBadge(workflow, node.id);
         if (attempt > 1) {
             const badge = `↻${attempt}`.slice(0, inner);
             put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
@@ -179,6 +196,10 @@ export function renderGraph(workflow, layout, runState, focusedId, anim = { fram
         else if (modelBadge) {
             const badge = modelBadge.slice(0, inner);
             put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'dim');
+        }
+        else if (skillBadge) {
+            const badge = skillBadge.slice(0, inner);
+            put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'skill-badge');
         }
         put(grid, box.x + box.w - 1, box.y + 2, '│', style);
         // Subtitle: what the node is doing / produced / will do. Never the type

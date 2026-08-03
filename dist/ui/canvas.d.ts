@@ -16,6 +16,14 @@ export declare const STATUS_GLYPHS: Record<NodeStatus, string>;
  * the detail view's origin/provenance line, which the App computes itself.
  */
 export declare function nodeModelBadge(workflow: Workflow, nodeId: string): string | null;
+/**
+ * `»name` for one attached skill, `»×n` for several — the full list lives in
+ * the detail panel. `»` rather than an emoji glyph: `put` below lays out one
+ * grid cell per JS character, and most emoji (unlike the box-drawing and
+ * dingbat glyphs used elsewhere on the card) render as two terminal columns,
+ * which pushes the row past the box's right border.
+ */
+export declare function nodeSkillBadge(workflow: Workflow, nodeId: string): string | null;
 export declare function makeGrid(width: number, height: number): Grid;
 /**
  * Animation inputs, passed in rather than read from the clock so a render is

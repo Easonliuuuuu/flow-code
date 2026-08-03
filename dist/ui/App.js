@@ -4,10 +4,11 @@ import { join } from 'node:path';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { providerInfo } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
+import { defaultSkillRoots, discoverSkills } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import { setNodeModel, WorkflowWriteError } from '../workflow/write.js';
-import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
+import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../workflow/write.js';
+import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import { computeLayout, hitTest, scrollIntoView } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
@@ -90,6 +91,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const [modelTick, setModelTick] = useState(0);
     const modelListLoadersRef = useRef(new Map());
     const [modelListTick, setModelListTick] = useState(0);
+    // Skill picker: opened with `s` on the focused node (or a click on its
+    // skill badge). Multi-select — space toggles, enter confirms — unlike the
+    // model picker, which picks exactly one.
+    const [skillPickerOpen, setSkillPickerOpen] = useState(false);
+    const [skillPickerCursor, setSkillPickerCursor] = useState(0);
+    const [skillPickerSelected, setSkillPickerSelected] = useState(new Set());
     useEffect(() => () => {
         if (pickerMessageTimeoutRef.current)
             clearTimeout(pickerMessageTimeoutRef.current);
@@ -112,7 +119,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const pendingConvergence = ports.pendingConvergence;
     const discussState = ports.discussState;
     const discussActive = discussState?.active ?? false;
-    const panelOpen = expanded || pendingApproval !== null || pendingConvergence !== null || discussActive || pickerOpen;
+    const panelOpen = expanded ||
+        pendingApproval !== null ||
+        pendingConvergence !== null ||
+        discussActive ||
+        pickerOpen ||
+        skillPickerOpen;
     const floating = panelRect !== null;
     const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
     // A docked, open panel reserves flow space below the canvas; a floating one
@@ -127,6 +139,15 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
     const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
     const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
+    // Scanned once per repo root rather than per keystroke — the picker just
+    // filters/indexes into this list, same source `flow-code skills` lists.
+    // Re-sorted project-first: a marketplace with hundreds of plugin skills
+    // would otherwise bury the handful of skills this repo actually declares
+    // under an alphabetically-earlier flood the user almost never wants here.
+    const skillCatalog = useMemo(() => {
+        const rank = { project: 0, user: 1, plugin: 2, path: 3 };
+        return discoverSkills(defaultSkillRoots(runState.repoRoot)).sort((a, b) => rank[a.source] - rank[b.source] || a.id.localeCompare(b.id));
+    }, [runState.repoRoot]);
     const showPickerMessage = (text) => {
         setPickerMessage(text);
         if (pickerMessageTimeoutRef.current)
@@ -159,6 +180,20 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         setPickerOpen(true);
         modelListLoaderFor(modelContext.providerId).ensureLoaded();
     };
+    const openSkillPicker = (nodeId) => {
+        const node = workflow.nodes.find((n) => n.id === nodeId);
+        if (!node)
+            return;
+        if (!node.type.agentDriven) {
+            showPickerMessage(`${node.type.displayName} nodes have no skills to attach.`);
+            return;
+        }
+        const catalogIds = new Set(skillCatalog.map((s) => s.id));
+        const entries = node.config.skills ?? [];
+        setSkillPickerCursor(0);
+        setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
+        setSkillPickerOpen(true);
+    };
     /**
      * Writes `model` to the node's config on disk and, so the current run
      * picks it up without a restart, on the same in-memory `WorkflowNode`
@@ -185,6 +220,39 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         else
             config['model'] = toWrite;
         node.config = config;
+        setModelTick((t) => t + 1);
+    };
+    /**
+     * Writes the selected skill ids to the node's config on disk and, so the
+     * current run picks it up without a restart, on the same in-memory
+     * `WorkflowNode` the engine reads — same pattern as confirmModel. Entries
+     * the picker didn't offer (a hand-edited repo-relative path, say) are left
+     * in place rather than dropped.
+     */
+    const confirmSkills = (nodeId, selected) => {
+        const node = workflow.nodes.find((n) => n.id === nodeId);
+        if (!node)
+            return;
+        const catalogIds = new Set(skillCatalog.map((s) => s.id));
+        const entries = node.config.skills ?? [];
+        const preserved = entries.filter((e) => !catalogIds.has(e));
+        const toWrite = [...preserved, ...selected];
+        try {
+            setNodeSkills(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), nodeId, toWrite);
+        }
+        catch (err) {
+            showPickerMessage(err instanceof WorkflowWriteError ? err.message : `could not save skills: ${String(err)}`);
+            return;
+        }
+        const config = { ...node.config };
+        if (toWrite.length === 0)
+            delete config['skills'];
+        else
+            config['skills'] = toWrite;
+        node.config = config;
+        node.skills = toWrite
+            .map((id) => skillCatalog.find((s) => s.id === id))
+            .filter((s) => s !== undefined);
         setModelTick((t) => t + 1);
     };
     // Focus scrolls into view (keyboard navigation on graphs larger than the terminal).
@@ -263,6 +331,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         columns,
         rows,
         openModelPicker,
+        openSkillPicker,
     });
     useEffect(() => {
         mouseStateRef.current = {
@@ -276,6 +345,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             columns,
             rows,
             openModelPicker,
+            openSkillPicker,
         };
     });
     // A fresh discussion (or re-entering one) starts following the live tail.
@@ -291,7 +361,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         const onData = (data) => {
             const events = parseMouseEvents(data.toString());
             for (const event of events) {
-                const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows, openModelPicker, } = mouseStateRef.current;
+                const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows, openModelPicker, openSkillPicker, } = mouseStateRef.current;
                 const overPanel = panelOpen &&
                     event.x >= activeRect.x &&
                     event.x < activeRect.x + activeRect.w &&
@@ -318,6 +388,9 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                         // other row is unaffected.
                         if (box && canvasY === box.y + 2 && nodeModelBadge(workflow, id) !== null) {
                             openModelPicker(id);
+                        }
+                        else if (box && canvasY === box.y + 2 && nodeSkillBadge(workflow, id) !== null) {
+                            openSkillPicker(id);
                         }
                         else {
                             dragRef.current = { id, lastX: canvasX, lastY: canvasY };
@@ -512,6 +585,39 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             }
             return;
         }
+        // Skill picker: same reachable-only-via-`s` guarantee as the model picker
+        // above. Multi-select, so enter confirms the whole set rather than one item.
+        if (skillPickerOpen && focusedNode) {
+            if (key.escape) {
+                setSkillPickerOpen(false);
+                return;
+            }
+            if (key.return) {
+                setSkillPickerOpen(false);
+                confirmSkills(focusedNode.id, skillPickerSelected);
+                return;
+            }
+            if (skillCatalog.length === 0)
+                return;
+            if (key.upArrow || input === 'k') {
+                setSkillPickerCursor((c) => (c + skillCatalog.length - 1) % skillCatalog.length);
+            }
+            else if (key.downArrow || input === 'j') {
+                setSkillPickerCursor((c) => (c + 1) % skillCatalog.length);
+            }
+            else if (input === ' ') {
+                const id = skillCatalog[skillPickerCursor].id;
+                setSkillPickerSelected((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(id))
+                        next.delete(id);
+                    else
+                        next.add(id);
+                    return next;
+                });
+            }
+            return;
+        }
         // Normal navigation.
         if (key.tab && key.shift) {
             setFocusIdx((i) => (i + workflow.order.length - 1) % workflow.order.length);
@@ -525,6 +631,10 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         else if (input === 'm') {
             if (focusedNode)
                 openModelPicker(focusedNode.id);
+        }
+        else if (input === 's') {
+            if (focusedNode)
+                openSkillPicker(focusedNode.id);
         }
         else if (key.leftArrow) {
             setOffset((o) => ({ ...o, ox: Math.max(0, o.ox - 4) }));
@@ -604,7 +714,18 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                                     })()) : (_jsx(Text, { dimColor: true, children: "loading models\u2026" }))] }));
                         })() }), _jsx(PanelFooter, { hint: pickerFreeText !== null
                             ? 'enter: confirm · esc: cancel'
-                            : '↑/↓: move · enter: select · esc: cancel' })] })) : expanded && focusedNode ? (_jsx(Box, { ...panelBoxProps, children: (() => {
+                            : '↑/↓: move · enter: select · esc: cancel' })] })) : skillPickerOpen && focusedNode ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Skills \u2014 ", focusedNode.id, " (", focusedNode.type.displayName, ")"] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: (() => {
+                            const status = runState.nodes[focusedNode.id]?.status;
+                            const readOnly = status === 'running' || status === 'done';
+                            return (_jsxs(_Fragment, { children: [readOnly ? (_jsxs(Text, { color: "yellow", wrap: "truncate-end", children: [focusedNode.id, " is already ", status, " \u2014 a change here applies the next time it runs, not to ", status === 'running' ? 'the session in flight' : 'this attempt', "."] })) : null, skillCatalog.length === 0 ? (_jsx(Text, { dimColor: true, wrap: "truncate-end", children: "no skills discovered \u2014 see `flow-code skills`." })) : ((() => {
+                                        const { start, end } = windowFor(skillPickerCursor, skillCatalog.length, 10);
+                                        return (_jsxs(_Fragment, { children: [start > 0 ? _jsxs(Text, { dimColor: true, children: [" \u2191 ", start, " more above"] }) : null, skillCatalog.slice(start, end).map((skill, i) => {
+                                                    const idx = start + i;
+                                                    const checked = skillPickerSelected.has(skill.id);
+                                                    return (_jsxs(Text, { wrap: "truncate-end", ...(idx === skillPickerCursor ? { color: 'cyan', bold: true } : {}), children: [idx === skillPickerCursor ? '❯ ' : '  ', checked ? '[x] ' : '[ ] ', skill.id] }, skill.id));
+                                                }), end < skillCatalog.length ? (_jsxs(Text, { dimColor: true, children: [" \u2193 ", skillCatalog.length - end, " more below"] })) : null] }));
+                                    })())] }));
+                        })() }), _jsx(PanelFooter, { hint: "\u2191/\u2193: move \u00B7 space: toggle \u00B7 enter: confirm \u00B7 esc: cancel" })] })) : expanded && focusedNode ? (_jsx(Box, { ...panelBoxProps, children: (() => {
                     const state = runState.nodes[focusedNode.id];
                     const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
                     const live = store.liveOutputFor(focusedNode.id);
@@ -625,7 +746,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                     const activityBudget = Math.max(1, bodyBudget - outputBudget);
                     return (_jsxs(_Fragment, { children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, wrap: "truncate-end", children: [focusedNode.id, " ", _jsxs(Text, { dimColor: true, children: ["(", focusedNode.type.displayName, ")"] }), ' ', STATUS_GLYPHS[state.status], " ", state.status, state.statusDetail ? _jsxs(Text, { dimColor: true, children: [" \u2014 ", state.statusDetail] }) : null, state.denials > 0 ? (_jsxs(Text, { color: "red", bold: true, children: ['  ', "\u26A0 ", state.denials, " blocked action", state.denials > 1 ? 's' : ''] })) : null] }) }), _jsxs(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: [_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["config: ", JSON.stringify(focusedNode.config)] }), focusedNode.type.hasModelField ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["model: ", focusedNodeResolvedModel?.model ?? '(none — provider default)', focusedNodeResolvedModel
                                                 ? ` (from ${{ node: 'this node', settings: 'run settings', provider: 'provider default' }[focusedNodeResolvedModel.origin]}) · m: change`
-                                                : ''] })) : null, focusedNode.skills.length > 0 ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["skills: ", focusedNode.skills.map((s) => s.id).join(', ')] })) : null, state.tokens || state.startedAt ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: [state.tokens
+                                                : ''] })) : null, focusedNode.type.agentDriven ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: ["skills: ", focusedNode.skills.length > 0 ? focusedNode.skills.map((s) => s.id).join(', ') : '(none)', " \u00B7 s: change"] })) : null, state.tokens || state.startedAt ? (_jsxs(Text, { dimColor: true, wrap: "truncate-end", children: [state.tokens
                                                 ? `tokens: ${formatTokens(state.tokens.input)} in` +
                                                     `${state.tokens.cached > 0 ? ` (+${formatTokens(state.tokens.cached)} cached)` : ''}` +
                                                     ` · ${formatTokens(state.tokens.output)} out`

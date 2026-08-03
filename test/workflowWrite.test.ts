@@ -1,16 +1,29 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_WORKFLOW_YAML } from '../src/defaultWorkflow.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
-import { setNodeModel, WorkflowWriteError } from '../src/workflow/write.js';
+import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../src/workflow/write.js';
 
+/**
+ * `<repoRoot>/.flow-code/workflow.yaml` — the real shape (see
+ * WORKFLOW_RELATIVE_PATH), which matters now that re-validation anchors
+ * skill resolution two directories up from the file, not at process.cwd().
+ */
 function tempWorkflowFile(yaml: string): string {
-  const dir = mkdtempSync(join(tmpdir(), 'flow-code-write-test-'));
-  const path = join(dir, 'workflow.yaml');
+  const repoRoot = mkdtempSync(join(tmpdir(), 'flow-code-write-test-'));
+  const path = join(repoRoot, '.flow-code', 'workflow.yaml');
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, yaml);
   return path;
+}
+
+/** Plants a minimal discoverable skill under the workflow's own repo root. */
+function addFixtureSkill(workflowPath: string, id: string): void {
+  const dir = join(dirname(dirname(workflowPath)), '.claude', 'skills', id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), '---\ndescription: fixture skill\n---\ndo the thing\n');
 }
 
 const FIXTURE = `# top-of-file comment
@@ -127,5 +140,77 @@ describe('setNodeModel', () => {
     // Every comment line from the source is still present somewhere in the output.
     const comments = DEFAULT_WORKFLOW_YAML.split('\n').filter((l) => l.trim().startsWith('#'));
     for (const comment of comments) expect(out).toContain(comment);
+  });
+});
+
+describe('setNodeSkills', () => {
+  it('sets config.skills on a node that already has a config block', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    addFixtureSkill(path, 'demo-skill');
+    setNodeSkills(path, 'a', ['demo-skill']);
+    const out = readFileSync(path, 'utf8');
+    expect(out).toContain('instructions: do a');
+    expect(out).toMatch(/skills:\n\s+- demo-skill/);
+    // Untouched node and top-level settings survive.
+    expect(out).toContain('instructions: do b');
+    expect(out).toContain('# top-of-file comment');
+    const node = loadWorkflowFromString(out, { repoRoot: dirname(dirname(path)) }).nodes.find(
+      (n) => n.id === 'a',
+    );
+    expect(node?.config).toMatchObject({ skills: ['demo-skill'] });
+    expect(node?.skills.map((s) => s.id)).toEqual(['demo-skill']);
+  });
+
+  it('creates the config mapping on a node that has none', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    addFixtureSkill(path, 'demo-skill');
+    setNodeSkills(path, 'c', ['demo-skill']);
+    const out = readFileSync(path, 'utf8');
+    expect(out).toMatch(/id: c\n\s+type: review\n\s+config:\n\s+skills:\n\s+- demo-skill/);
+    const workflow = loadWorkflowFromString(out, { repoRoot: dirname(dirname(path)) });
+    expect(workflow.nodes.find((n) => n.id === 'c')?.config).toMatchObject({ skills: ['demo-skill'] });
+  });
+
+  it('clears config.skills, and the config mapping if it becomes empty', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    addFixtureSkill(path, 'demo-skill');
+    setNodeSkills(path, 'b', ['demo-skill']);
+    setNodeSkills(path, 'b', []);
+    const out = readFileSync(path, 'utf8');
+    expect(out).not.toContain('demo-skill');
+    // `model: opus` was already on node b's config, so the mapping survives.
+    expect(out).toContain('instructions: do b');
+    expect(out).toContain('model: opus');
+  });
+
+  it('deletes the config mapping entirely when skills was its only field', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    addFixtureSkill(path, 'demo-skill');
+    setNodeSkills(path, 'c', ['demo-skill']);
+    setNodeSkills(path, 'c', []);
+    // Node c started with no config block at all — round-trips back to that.
+    expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
+  });
+
+  it('throws on an unknown node id and leaves the file untouched', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    addFixtureSkill(path, 'demo-skill');
+    expect(() => setNodeSkills(path, 'nope', ['demo-skill'])).toThrow(WorkflowWriteError);
+    expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
+  });
+
+  it('refuses to write skills onto a node type with no skills field, leaving the file untouched', () => {
+    // Test's config schema is a strictObject with no `skills` field.
+    const yaml = `nodes:\n  - id: t\n    type: test\n    config:\n      commands: [echo hi]\n`;
+    const path = tempWorkflowFile(yaml);
+    addFixtureSkill(path, 'demo-skill');
+    expect(() => setNodeSkills(path, 't', ['demo-skill'])).toThrow(WorkflowWriteError);
+    expect(readFileSync(path, 'utf8')).toBe(yaml);
+  });
+
+  it('refuses to write an undiscoverable skill id, leaving the file untouched', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    expect(() => setNodeSkills(path, 'a', ['no-such-skill'])).toThrow(WorkflowWriteError);
+    expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
   });
 });
