@@ -1,7 +1,10 @@
 import type { Workflow } from '../workflow/load.js';
+import { plannedSummary } from './nodeCard.js';
 
 /** Border, title, type/model, live subtitle, metrics, border — see renderGraph. */
 export const BOX_HEIGHT = 6;
+/** Border, title (with metrics inline), border — the compact card. */
+export const COMPACT_BOX_HEIGHT = 3;
 export const GAP_X = 5;
 export const GAP_Y = 1;
 
@@ -11,6 +14,14 @@ export const GAP_Y = 1;
  * id would truncate all of it away.
  */
 export const MIN_BOX_CONTENT = 22;
+
+/**
+ * Past this, a card stops being a card. A summary longer than this is elided
+ * on the box and read in full in the detail panel; the alternative is one
+ * verbose node stretching its whole layer and pushing everything downstream
+ * off the screen.
+ */
+export const MAX_BOX_CONTENT = 46;
 
 export interface NodeBox {
   id: string;
@@ -30,9 +41,32 @@ export interface Layout {
 /** Session-only position overrides from mouse dragging; never persisted. */
 export type PositionOverrides = Map<string, { dx: number; dy: number }>;
 
-function boxWidth(id: string, typeName: string): number {
+/**
+ * Wide enough for the text the card actually wants to show. The subtitle is
+ * measured from `plannedSummary`, which is a pure function of the node's
+ * config: a width derived from the *live* subtitle instead would resize
+ * boxes — and so reflow the whole graph — every time a running agent
+ * reported a different tool call.
+ */
+function boxWidth(node: Workflow['nodes'][number]): number {
   // +4 on the title row leaves room for the status glyph and the denial bang.
-  return Math.max(id.length + 4, typeName.length + 2, MIN_BOX_CONTENT) + 2;
+  const content = Math.max(
+    node.id.length + 4,
+    node.type.displayName.length + 2,
+    // +1 for the leading space every content row is drawn with.
+    plannedSummary(node).length + 1,
+    MIN_BOX_CONTENT,
+  );
+  return Math.min(content, MAX_BOX_CONTENT) + 2;
+}
+
+export interface LayoutOptions {
+  /**
+   * Collapse every card to title-only. Uniform rather than per-node so the
+   * graph doesn't reflow as focus moves; the full detail of one node is a
+   * keypress away in the detail panel.
+   */
+  compact?: boolean;
 }
 
 /**
@@ -40,7 +74,12 @@ function boxWidth(id: string, typeName: string): number {
  * longest path from any root, so every node is drawn after all of its
  * dependencies.
  */
-export function computeLayout(workflow: Workflow, overrides?: PositionOverrides): Layout {
+export function computeLayout(
+  workflow: Workflow,
+  overrides?: PositionOverrides,
+  options: LayoutOptions = {},
+): Layout {
+  const boxHeight = options.compact ? COMPACT_BOX_HEIGHT : BOX_HEIGHT;
   const layerOf = new Map<string, number>();
   for (const id of workflow.order) {
     const deps = workflow.graph.directDependencies(id);
@@ -57,7 +96,7 @@ export function computeLayout(workflow: Workflow, overrides?: PositionOverrides)
 
   const widths = new Map<string, number>();
   for (const node of workflow.nodes) {
-    widths.set(node.id, boxWidth(node.id, node.type.displayName));
+    widths.set(node.id, boxWidth(node));
   }
 
   const boxes = new Map<string, NodeBox>();
@@ -70,9 +109,9 @@ export function computeLayout(workflow: Workflow, overrides?: PositionOverrides)
       boxes.set(id, {
         id,
         x,
-        y: row * (BOX_HEIGHT + GAP_Y),
+        y: row * (boxHeight + GAP_Y),
         w: widths.get(id)!,
-        h: BOX_HEIGHT,
+        h: boxHeight,
         layer: l,
       });
     });
