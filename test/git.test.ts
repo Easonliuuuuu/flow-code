@@ -70,6 +70,25 @@ nodes:
     });
   });
 
+  it('requires credentials for a workflow with only a Test node that has `agent: true` and instructions', async () => {
+    const repo = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: ["true"]
+      agent: true
+      instructions: look for flaky output
+`;
+    await expect(
+      preflight(workflowFromYaml(yaml), repo, {
+        allowDirty: false,
+        credentialsResolver: () => false,
+      }),
+    ).rejects.toMatchObject({ kind: 'credentials' });
+  });
+
   it('requires credentials for a workflow with only a non-discuss agent-driven node', async () => {
     const repo = makeTempGitRepo();
     const yaml = `

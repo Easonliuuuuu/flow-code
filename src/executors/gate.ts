@@ -1,17 +1,19 @@
+import { capabilitySet } from '../capabilities.js';
 import type { ApprovalRequest, NodeExecutor } from '../engine/types.js';
 import { diffAgainstTree, git } from '../git/ops.js';
-import type { ApprovalGateConfig, GitOpsConfig, WorktreeAgentOutput } from '../registry/index.js';
-import { truncateText } from './helpers.js';
+import { nodeWantsAgentStep, type ApprovalGateConfig, type GitOpsConfig, type WorktreeAgentOutput } from '../registry/index.js';
+import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
 
 /**
- * No agent session: computes the pending diff against the run baseline,
- * renders it via the approval port, and holds `waiting` until the user
- * decides. Reject sets the gate to `error`; the engine then marks every
- * downstream node `skipped`.
+ * No agent session by default: computes the pending diff against the run
+ * baseline, renders it via the approval port, and holds `waiting` until the
+ * user decides. Reject sets the gate to `error`; the engine then marks every
+ * downstream node `skipped`. `agent: true` adds one optional, read-only-by-
+ * default critique of the diff before the human decides — it never touches
+ * the decision itself.
  */
 export const executeApprovalGate: NodeExecutor = async function* (ctx) {
   const config = ctx.node.config as ApprovalGateConfig;
-  yield { type: 'status', status: 'waiting', detail: 'awaiting approval' };
 
   // Diff semantics: on the plain path, the gate's working directory vs. the
   // run baseline. Downstream of a Worktree-Agent convergence, one diff per
@@ -59,12 +61,28 @@ export const executeApprovalGate: NodeExecutor = async function* (ctx) {
     }
   }
 
+  let agentSummary: string | undefined;
+  if (nodeWantsAgentStep(ctx.node)) {
+    yield { type: 'status', status: 'running', detail: 'reviewing pending changes' };
+    const diffText = diffs.map((d) => (d.label ? `── ${d.label} ──\n${d.diff}` : d.diff)).join('\n\n');
+    const capabilities = capabilitySet(...(config.capabilities ?? ['read']));
+    const prompt =
+      `${upstreamPreamble(ctx.upstream)}## Pending diff awaiting approval\n\n${truncateText(diffText, 20_000)}\n\n` +
+      (config.instructions ? `${config.instructions}\n\n` : '') +
+      'Give the person about to approve or reject this a short, plain-text critique: correctness risks, ' +
+      'anything worth double-checking, anything that looks wrong. Respond in plain prose, not JSON.';
+    const finalText = await runNodeSession(ctx, capabilities, prompt, nodeModel(ctx, undefined));
+    agentSummary = truncateText(finalText.trim(), 4000);
+  }
+
+  yield { type: 'status', status: 'waiting', detail: 'awaiting approval' };
   const decision = await ctx.ports.approval.request({
     nodeId: ctx.node.id,
     title: config.title ?? `Approve changes at ${ctx.node.id}`,
     diffs,
     upstreamSummaries,
     ...(pushTarget !== undefined ? { pushTarget } : {}),
+    ...(agentSummary !== undefined ? { agentSummary } : {}),
   });
 
   const decidedAt = new Date().toISOString();

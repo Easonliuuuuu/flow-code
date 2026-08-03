@@ -26,7 +26,7 @@ import { isCliAvailable, runCliInstall } from './init/cliInstall.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
 import { selectFromList } from './init/SelectList.js';
-import { listNodeTypes } from './registry/index.js';
+import { listNodeTypes, nodeWantsAgentStep } from './registry/index.js';
 import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
 import { formatSkillsListing, skillCompatibilityNotes } from './skills/report.js';
 import type { WorkflowPreset } from './presets.js';
@@ -61,9 +61,12 @@ function fail(message: string): never {
  * previously saved per-repo choice (from `flow-code init`), then an
  * already-set env var for any provider, then the Claude Agent SDK's own
  * credential resolution. Never prompts — `flow-code init` is where that
- * happens now; a workflow with agent-driven nodes and nothing configured
- * fails fast with a pointer to it. A workflow with no agent-driven nodes at
- * all returns undefined, since no provider is ever actually needed.
+ * happens now; a workflow with a node that wants an agent session and
+ * nothing configured fails fast with a pointer to it. A workflow with no
+ * node that wants one at all returns undefined, since no provider is ever
+ * actually needed. "Wants one" includes a Test/Approval-Gate node with
+ * `agent: true` and skills/instructions configured, not just the
+ * always-agent-driven types.
  */
 export async function resolveProvider(
   repoRoot: string,
@@ -87,7 +90,7 @@ export async function resolveProvider(
   if (defaultCredentialsResolver()) return { provider: 'claude' };
   if (defaultCodexCredentialsResolver()) return { provider: 'codex' };
 
-  if (workflow.nodes.some((n) => n.type.agentDriven)) {
+  if (workflow.nodes.some(nodeWantsAgentStep)) {
     fail(
       'no provider configured — run `flow-code init` to choose one, or set ' +
         'ANTHROPIC_API_KEY / CODEX_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.',
@@ -416,6 +419,31 @@ async function cmdDoctor(args: string[]): Promise<void> {
     console.log('flow-code: discovered skills declaring an external dependency:');
     for (const note of compatibility) console.log(note);
     console.log('');
+  }
+
+  // Test/Approval-Gate's optional agent step defaults to read-only; a node
+  // that widens it is a real trade-off (a "code-review" skill could now
+  // edit/exec/git-write), not a mistake — so this warns rather than blocks.
+  try {
+    const workflow = loadWorkflow(repoRoot);
+    const capabilityWarnings = workflow.nodes.flatMap((node) => {
+      if (!node.type.hasOptionalAgentStep) return [];
+      const caps = (node.config as { capabilities?: string[] }).capabilities ?? [];
+      const beyondReadOnly = caps.filter((c) => c !== 'read');
+      if (beyondReadOnly.length === 0) return [];
+      return [
+        `  node \`${node.id}\` (${node.type.id}): capabilities [${caps.join(', ')}] — its optional agent ` +
+          `step can ${beyondReadOnly.join('/')}, not just read.`,
+      ];
+    });
+    if (capabilityWarnings.length > 0) {
+      console.log("flow-code: optional agent step(s) configured beyond the read-only default:");
+      for (const warning of capabilityWarnings) console.log(warning);
+      console.log('');
+    }
+  } catch {
+    // No workflow.yaml yet, or it doesn't load — doctor's other checks don't
+    // depend on one either, so this one is just skipped rather than failing.
   }
 
   const orphans = findOrphanedWorktrees(repoRoot);

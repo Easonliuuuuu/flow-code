@@ -95,4 +95,37 @@ describe('resolveProvider', () => {
     const result = await resolveProvider(repo, workflowFromYaml(NO_AGENT_WORKFLOW));
     expect(result).toBeUndefined();
   });
+
+  it('requires a provider for a Test node with `agent: true` and instructions, even with no other agent-driven node', async () => {
+    const repo = tempRepo();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('process.exit called');
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const workflow = workflowFromYaml(`
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: ["true"]
+      agent: true
+      instructions: look for flaky output
+`);
+    await expect(resolveProvider(repo, workflow)).rejects.toThrow('process.exit called');
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it('does not require a provider for a Test node with `agent: true` but nothing configured to run it with', async () => {
+    const repo = tempRepo();
+    const workflow = workflowFromYaml(`
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: ["true"]
+      agent: true
+`);
+    const result = await resolveProvider(repo, workflow);
+    expect(result).toBeUndefined();
+  });
 });

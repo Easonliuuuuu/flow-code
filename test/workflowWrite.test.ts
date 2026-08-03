@@ -205,13 +205,17 @@ describe('setNodeSkills', () => {
     expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
   });
 
-  it('refuses to write skills onto a node type with no skills field, leaving the file untouched', () => {
-    // Test's config schema is a strictObject with no `skills` field.
+  it('writes skills onto a Test node, which now accepts them via its optional agent step', () => {
     const yaml = `nodes:\n  - id: t\n    type: test\n    config:\n      commands: [echo hi]\n`;
     const path = tempWorkflowFile(yaml);
     addFixtureSkill(path, 'demo-skill');
-    expect(() => setNodeSkills(path, 't', ['demo-skill'])).toThrow(WorkflowWriteError);
-    expect(readFileSync(path, 'utf8')).toBe(yaml);
+    setNodeSkills(path, 't', ['demo-skill']);
+    const out = readFileSync(path, 'utf8');
+    expect(out).toMatch(/skills:\n\s+- demo-skill/);
+    const wf = loadWorkflowFromString(out, {
+      repoRoot: dirname(dirname(path)),
+    });
+    expect(wf.nodes[0]!.skills.map((s) => s.id)).toEqual(['demo-skill']);
   });
 
   it('refuses to write an undiscoverable skill id, leaving the file untouched', () => {

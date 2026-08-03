@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
+import { nodeWantsAgentStep } from '../registry/index.js';
 import { skillPortabilityWarnings } from '../skills/report.js';
 import type { Workflow } from '../workflow/load.js';
 import { providerInfo, type ProviderId } from './providers.js';
@@ -71,7 +72,7 @@ export async function preflight(
     for (const warning of skillPortabilityWarnings(workflow)) opts.onWarning(warning);
   }
 
-  const hasAgentNode = workflow.nodes.some((n) => n.type.agentDriven);
+  const hasAgentNode = workflow.nodes.some(nodeWantsAgentStep);
   if (hasAgentNode) {
     const provider = opts.provider ?? 'claude';
     const hasCredentials = (opts.credentialsResolver ?? defaultProviderCredentialsResolver)(provider);

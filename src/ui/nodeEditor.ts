@@ -32,10 +32,14 @@ const EDITABLE_CONFIG: Record<string, Array<{ key: string; label: string }>> = {
   discuss: [{ key: 'topic', label: 'topic' }],
   spec: [{ key: 'title', label: 'title' }],
   implement: [{ key: 'instructions', label: 'instructions' }],
+  test: [{ key: 'instructions', label: 'instructions (optional agent step)' }],
   validate: [{ key: 'instructions', label: 'instructions' }],
   review: [{ key: 'instructions', label: 'instructions' }],
   'git-ops': [{ key: 'commitMessage', label: 'commit message' }],
-  'approval-gate': [{ key: 'title', label: 'title' }],
+  'approval-gate': [
+    { key: 'title', label: 'title' },
+    { key: 'instructions', label: 'instructions (optional agent step)' },
+  ],
 };
 
 /** The fields the editor offers for one node, in the order it shows them. */

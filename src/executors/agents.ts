@@ -15,35 +15,14 @@ import {
   acceptanceCriteriaFrom,
   nodeModel,
   parseNodeOutput,
-  rolePromptFor,
+  runNodeSession,
   truncateText,
   upstreamPreamble,
 } from './helpers.js';
 
-async function runNodeSession(
-  ctx: ExecuteContext,
-  prompt: string,
-  model: string | undefined,
-): Promise<string> {
-  const release = await ctx.acquireSessionSlot();
-  try {
-    const { finalText } = await ctx.sessions.run(
-      {
-        nodeId: ctx.node.id,
-        capabilities: capabilitySet(...(ctx.node.type.capabilities as Capability[])),
-        rolePrompt: rolePromptFor(ctx),
-        prompt,
-        workingDir: ctx.workingDir,
-        ...(model !== undefined ? { model } : {}),
-        onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
-        signal: ctx.signal,
-      },
-      ctx.store,
-    );
-    return finalText;
-  } finally {
-    release();
-  }
+/** Every node type below spends its session with exactly its own declared capability set. */
+function ownCapabilities(ctx: ExecuteContext) {
+  return capabilitySet(...(ctx.node.type.capabilities as Capability[]));
 }
 
 export const executeImplement: NodeExecutor = async function* (ctx) {
@@ -51,7 +30,7 @@ export const executeImplement: NodeExecutor = async function* (ctx) {
   const config = ctx.node.config as ImplementConfig;
   const preTree = await captureTree(ctx.workingDir);
   const prompt = `${upstreamPreamble(ctx.upstream)}## Task\n\n${config.instructions}`;
-  const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
+  const finalText = await runNodeSession(ctx, ownCapabilities(ctx), prompt, nodeModel(ctx, config.model));
   const postTree = await captureTree(ctx.workingDir);
   const diff = await diffTrees(ctx.workingDir, preTree, postTree);
   const changedFiles = await diffNamesBetweenTrees(ctx.workingDir, preTree, postTree);
@@ -89,7 +68,7 @@ export const executeValidate: NodeExecutor = async function* (ctx) {
     `${upstreamPreamble(ctx.upstream)}## Validation task\n\n${task}\n\n` +
     `When you are done, respond with ONLY a JSON object:\n${shape}`;
 
-  const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
+  const finalText = await runNodeSession(ctx, ownCapabilities(ctx), prompt, nodeModel(ctx, config.model));
   const parsed = parseNodeOutput(ctx, validateOutput, finalText);
   // No terminal status here: the type's `failsWhen` predicate decides whether
   // this verdict is a pass or a failure.
@@ -138,7 +117,7 @@ export const executeReview: NodeExecutor = async function* (ctx) {
     `${config.instructions ?? 'Review the pending changes described in the upstream context for correctness, clarity, and risk.'}\n\n` +
     `When you are done, respond with ONLY a JSON object:\n` +
     `{"verdict": "pass" | "fail", "findings": [{"location": "<file:line or area>", "description": "<finding>", "severity": "info" | "minor" | "major"}]}`;
-  const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
+  const finalText = await runNodeSession(ctx, ownCapabilities(ctx), prompt, nodeModel(ctx, config.model));
   const parsed = parseNodeOutput(ctx, reviewOutput, finalText);
   // No terminal status here: see executeValidate.
   yield { type: 'result', output: parsed };
@@ -170,7 +149,7 @@ export const executeGitOps: NodeExecutor = async function* (ctx) {
   }
   const prompt = `${upstreamPreamble(ctx.upstream)}## Git operations\n\n${steps.join('\n')}`;
 
-  await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
+  await runNodeSession(ctx, ownCapabilities(ctx), prompt, nodeModel(ctx, config.model));
 
   let postHead: string;
   try {

@@ -2,9 +2,14 @@ import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { listNodeTypes } from '../../src/registry/index.js';
+import {
+  listNodeTypes,
+  nodeTypeAcceptsAgentStep,
+  nodeWantsAgentStep,
+  type NodeTypeDefinition,
+} from '../../src/registry/index.js';
 import { defaultSkillRoots, type SkillRoots } from '../../src/skills/discover.js';
-import { loadWorkflowFromString, WorkflowValidationError } from '../../src/workflow/load.js';
+import { loadWorkflowFromString, WorkflowValidationError, type WorkflowNode } from '../../src/workflow/load.js';
 
 function fixture(skills: Record<string, string> = {}): { repoRoot: string; roots: SkillRoots } {
   const base = mkdtempSync(join(tmpdir(), 'flow-code-wf-skills-'));
@@ -74,32 +79,39 @@ edges: []
     expect(problems[0]).toContain('plugin:nope');
   });
 
-  it('rejects skills on a Test node', () => {
-    const problems = problemsOf(`
+  it('accepts skills on a Test node — its optional agent step can carry them', () => {
+    const wf = load(
+      `
 nodes:
   - id: check
     type: test
     config:
       commands: ["echo ok"]
+      agent: true
       skills: [anything]
 edges: []
-`);
+`,
+      { anything: 'a body' },
+    );
 
-    expect(problems.join('\n')).toContain('node `check` (test) config');
-    expect(problems.join('\n')).toMatch(/skills/);
+    expect(wf.nodes[0]!.skills.map((s) => s.id)).toEqual(['anything']);
   });
 
-  it('rejects skills on an Approval-Gate node', () => {
-    const problems = problemsOf(`
+  it('accepts skills on an Approval-Gate node — its optional agent step can carry them', () => {
+    const wf = load(
+      `
 nodes:
   - id: gate
     type: approval-gate
     config:
+      agent: true
       skills: [anything]
 edges: []
-`);
+`,
+      { anything: 'a body' },
+    );
 
-    expect(problems.join('\n')).toContain('node `gate` (approval-gate) config');
+    expect(wf.nodes[0]!.skills.map((s) => s.id)).toEqual(['anything']);
   });
 
   it('does not scan the discovery roots when no node names a skill', () => {
@@ -234,5 +246,39 @@ edges: []
 `);
 
     expect(problems.join('\n')).toContain('node `check` (test) config');
+  });
+});
+
+describe('nodeTypeAcceptsAgentStep / nodeWantsAgentStep', () => {
+  const agentDrivenType = { agentDriven: true } as NodeTypeDefinition;
+  const optionalStepType = { agentDriven: false, hasOptionalAgentStep: true } as NodeTypeDefinition;
+  const plainType = { agentDriven: false } as NodeTypeDefinition;
+
+  it('a type accepts the agent-step fields when agent-driven, or explicitly opted in, but not otherwise', () => {
+    expect(nodeTypeAcceptsAgentStep(agentDrivenType)).toBe(true);
+    expect(nodeTypeAcceptsAgentStep(optionalStepType)).toBe(true);
+    expect(nodeTypeAcceptsAgentStep(plainType)).toBe(false);
+  });
+
+  function nodeOf(type: NodeTypeDefinition, config: unknown): WorkflowNode {
+    return { id: 'n', type, config, skills: [] };
+  }
+
+  it('an agent-driven node always wants a session, regardless of its config', () => {
+    expect(nodeWantsAgentStep(nodeOf(agentDrivenType, {}))).toBe(true);
+  });
+
+  it('a non-agent-driven node wants one only when agent:true and it has instructions or a skill', () => {
+    expect(nodeWantsAgentStep(nodeOf(optionalStepType, { agent: true, instructions: 'look for issues' }))).toBe(
+      true,
+    );
+    expect(nodeWantsAgentStep({ ...nodeOf(optionalStepType, { agent: true }), skills: [{ id: 's', description: '', source: 'project', path: '', body: '' }] })).toBe(
+      true,
+    );
+    // agent:true with nothing to say is a no-op, not a want.
+    expect(nodeWantsAgentStep(nodeOf(optionalStepType, { agent: true }))).toBe(false);
+    // Instructions/skills without agent:true don't count either.
+    expect(nodeWantsAgentStep(nodeOf(optionalStepType, { instructions: 'look for issues' }))).toBe(false);
+    expect(nodeWantsAgentStep(nodeOf(optionalStepType, {}))).toBe(false);
   });
 });
