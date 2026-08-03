@@ -17,6 +17,13 @@ export interface WorkflowPreset {
   yaml: string;
   /** Skills the scaffolded graph references, checked after writing. */
   requiredSkills: string[];
+  /** External CLI the preset's skills depend on, if any — checked interactively before scaffolding. */
+  cli?: {
+    /** Binary name checked on PATH. */
+    command: string;
+    /** How to install it; shown to the user and run on confirmation. */
+    install: { command: string; args: string[] };
+  };
 }
 
 const OPENSPEC_YAML = `# flow-code workflow (openspec preset) — checked into your repo, edit as needed.
@@ -184,6 +191,7 @@ const PRESETS: WorkflowPreset[] = [
     summary: 'explore → propose → apply → test → validate → gate → archive',
     yaml: OPENSPEC_YAML,
     requiredSkills: ['openspec-explore', 'openspec-propose', 'openspec-apply-change', 'openspec-archive-change'],
+    cli: { command: 'openspec', install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] } },
   },
   {
     name: 'spec-kit',
@@ -191,6 +199,7 @@ const PRESETS: WorkflowPreset[] = [
     summary: 'specify → plan → implement → test → validate → gate → git-ops',
     yaml: SPEC_KIT_YAML,
     requiredSkills: [],
+    cli: { command: 'specify', install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] } },
   },
 ];
 
