@@ -107,6 +107,64 @@ describe('budgets as stop rules', () => {
     expect(store.node('b').status).toBe('done');
   });
 
+  it("enforces a node's own budget with no run-wide budget declared at all", async () => {
+    const PER_NODE = `
+nodes:
+  - id: a
+    type: implement
+    budget: { tokens: 500 }
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: y }
+edges:
+  - { from: a, to: b }
+`;
+    const { engine, store } = engineWith(PER_NODE, {
+      a: spendsUntilAborted(100),
+      b: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+
+    expect(store.node('a').status).toBe('error');
+    expect(store.node('a').statusDetail).toContain('node token budget exhausted');
+    expect(store.tokensFor('a')).toBeGreaterThan(500);
+  });
+
+  it("lets a node's own budget overrule the run-wide one, tighter or looser", async () => {
+    // `a` is held to its own 500 despite the run-wide 100000; `b` is allowed
+    // its own 100000 despite the run-wide 500 — the override wins in both
+    // directions, not just the more cautious one.
+    const OVERRIDES = `
+settings:
+  budget: { tokensPerNode: 500 }
+nodes:
+  - id: a
+    type: implement
+    budget: { tokens: 100000 }
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: y }
+edges:
+  - { from: a, to: b }
+`;
+    const { engine, store } = engineWith(OVERRIDES, {
+      a: doneAfter(IMPL_OUT, async (ctx) => {
+        ctx.store.addTokens('a', { input: 5_000, output: 0, cached: 0 });
+      }),
+      b: spendsUntilAborted(100),
+    });
+    await engine.run();
+
+    // Well past the run-wide 500, and untouched.
+    expect(store.node('a').status).toBe('done');
+    expect(store.tokensFor('a')).toBe(5_000);
+    // No budget of its own, so it inherits the run-wide ceiling and trips it.
+    expect(store.node('b').status).toBe('error');
+    expect(store.node('b').statusDetail).toContain('node token budget exhausted');
+  });
+
   it('stops the whole run once the run-wide token budget is spent', async () => {
     const { engine, store } = engineWith(CHAIN('  budget: { tokensPerRun: 400 }'), {
       a: spendsUntilAborted(100),

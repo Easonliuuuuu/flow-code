@@ -4,7 +4,13 @@ import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_WORKFLOW_YAML } from '../src/defaultWorkflow.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
-import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../src/workflow/write.js';
+import {
+  setNodeBudgetTokens,
+  setNodeConfigString,
+  setNodeModel,
+  setNodeSkills,
+  WorkflowWriteError,
+} from '../src/workflow/write.js';
 
 /**
  * `<repoRoot>/.flow-code/workflow.yaml` — the real shape (see
@@ -211,6 +217,65 @@ describe('setNodeSkills', () => {
   it('refuses to write an undiscoverable skill id, leaving the file untouched', () => {
     const path = tempWorkflowFile(FIXTURE);
     expect(() => setNodeSkills(path, 'a', ['no-such-skill'])).toThrow(WorkflowWriteError);
+    expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
+  });
+});
+
+describe('setNodeBudgetTokens', () => {
+  it('adds a budget beside config, not inside it', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    setNodeBudgetTokens(path, 'a', 50_000);
+    const out = readFileSync(path, 'utf8');
+    expect(out).toMatch(/id: a\n\s+type: implement\n\s+config:/);
+    expect(out).toMatch(/budget:\n\s+tokens: 50000/);
+    expect(loadWorkflowFromString(out).nodes.find((n) => n.id === 'a')?.budget).toEqual({
+      tokens: 50_000,
+    });
+    // The config block is untouched, comment and all.
+    expect(out).toMatch(/# explains what a does\n\s+instructions: do a/);
+  });
+
+  it('sets a budget on a node with no config block at all', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    setNodeBudgetTokens(path, 'c', 1_000);
+    const out = readFileSync(path, 'utf8');
+    expect(loadWorkflowFromString(out).nodes.find((n) => n.id === 'c')?.budget).toEqual({
+      tokens: 1_000,
+    });
+  });
+
+  it('clearing the tokens removes the empty budget mapping with it', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    setNodeBudgetTokens(path, 'a', 50_000);
+    setNodeBudgetTokens(path, 'a', null);
+    const out = readFileSync(path, 'utf8');
+    expect(out).not.toContain('budget');
+    expect(loadWorkflowFromString(out).nodes.find((n) => n.id === 'a')?.budget).toBeUndefined();
+  });
+
+  it('refuses a budget that would not load, leaving the file untouched', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    expect(() => setNodeBudgetTokens(path, 'a', 0)).toThrow(WorkflowWriteError);
+    expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
+  });
+});
+
+describe('setNodeConfigString', () => {
+  it('sets and clears an arbitrary string config field', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    setNodeConfigString(path, 'a', 'instructions', 'do something else');
+    expect(readFileSync(path, 'utf8')).toContain('instructions: do something else');
+
+    setNodeConfigString(path, 'c', 'instructions', 'review hard');
+    expect(readFileSync(path, 'utf8')).toMatch(/id: c\n\s+type: review\n\s+config:\n\s+instructions: review hard/);
+    setNodeConfigString(path, 'c', 'instructions', null);
+    expect(readFileSync(path, 'utf8')).toMatch(/id: c\n\s+type: review\n/);
+  });
+
+  it('refuses to clear a field the node type requires, leaving the file untouched', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    // Implement's `instructions` is required, so clearing it must not land.
+    expect(() => setNodeConfigString(path, 'a', 'instructions', null)).toThrow(WorkflowWriteError);
     expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
   });
 });

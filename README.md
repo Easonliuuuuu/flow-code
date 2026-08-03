@@ -145,6 +145,20 @@ Focus any node during `flow-code run` and press **`m`** to switch its model on t
 </details>
 
 <details>
+<summary><b>Editing Node Settings Mid-Run</b></summary>
+
+Focus a node and press **`e`** to edit its settings without leaving the canvas — its own token budget, and the type's main text field (a Discuss topic, Implement instructions, a commit message). Changes are written to `.flow-code/workflow.yaml` and picked up by any node that hasn't started yet.
+
+| Key | Action |
+| --- | --- |
+| `tab` | focus the next node |
+| `enter` | open the focused node's details |
+| `e` / `m` / `s` | settings / model / skills |
+| `←→↑↓` | pan the canvas (add `shift` to pan while a panel has the keyboard) |
+| `z` | toggle compact cards — the canvas does this itself once the graph outgrows the terminal |
+</details>
+
+<details>
 <summary><b>Budget Limits</b></summary>
 
 Set token or execution time ceilings in `.flow-code/workflow.yaml`:
@@ -155,6 +169,16 @@ settings:
     tokensPerNode: 300000
     tokensPerRun: 2000000
     minutesPerRun: 60
+```
+
+A single node can overrule `tokensPerNode` with a ceiling of its own — useful when one step is far more (or far less) expensive than the rest:
+
+```yaml
+nodes:
+  - id: implement
+    type: implement
+    budget:
+      tokens: 800000
 ```
 </details>
 

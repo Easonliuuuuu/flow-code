@@ -8,7 +8,13 @@ import type { ActivityEntry, RunState } from '../runstate/types.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../workflow/write.js';
+import {
+  setNodeBudgetTokens,
+  setNodeConfigString,
+  setNodeModel,
+  setNodeSkills,
+  WorkflowWriteError,
+} from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import {
@@ -32,6 +38,7 @@ import {
   tailWindow,
   type PanelRect,
 } from './panel.js';
+import { editableFields, parseFieldValue, type EditorField } from './nodeEditor.js';
 import type { UiInteractionPorts } from './ports.js';
 import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
 import { wrapText } from './textwrap.js';
@@ -180,6 +187,13 @@ export function App({
   // Skill picker: opened with `s` on the focused node (or a click on its
   // skill badge). Multi-select — space toggles, enter confirms — unlike the
   // model picker, which picks exactly one.
+  // Node settings editor: opened with `e` on the focused node. A list of
+  // typed-in fields, unlike the pickers, which choose from a known set.
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorCursor, setEditorCursor] = useState(0);
+  // null = moving between fields; a string = typing into the current one.
+  const [editorBuffer, setEditorBuffer] = useState<string | null>(null);
+
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerCursor, setSkillPickerCursor] = useState(0);
   const [skillPickerSelected, setSkillPickerSelected] = useState<Set<string>>(new Set());
@@ -218,7 +232,8 @@ export function App({
     pendingConvergence !== null ||
     discussActive ||
     pickerOpen ||
-    skillPickerOpen;
+    skillPickerOpen ||
+    editorOpen;
   const floating = panelRect !== null;
   const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
   // A docked, open panel reserves flow space below the canvas; a floating one
@@ -322,6 +337,52 @@ export function App({
     setSkillPickerCursor(0);
     setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
     setSkillPickerOpen(true);
+  };
+
+  const editorFields = focusedNode ? editableFields(focusedNode) : [];
+  const editorField = editorFields[Math.min(editorCursor, editorFields.length - 1)];
+
+  const openEditor = (): void => {
+    setEditorCursor(0);
+    setEditorBuffer(null);
+    setEditorOpen(true);
+  };
+
+  /**
+   * Writes one edited field to disk and to the same in-memory `WorkflowNode`
+   * the engine reads at node-start time, so a node that hasn't run yet picks
+   * the change up without restarting the run — the pattern confirmModel and
+   * confirmSkills already use.
+   */
+  const commitEditorField = (nodeId: string, field: EditorField, input: string): void => {
+    const node = workflow.nodes.find((n) => n.id === nodeId);
+    if (!node) return;
+    const parsed = parseFieldValue(field, input);
+    if (!parsed.ok) {
+      showPickerMessage(parsed.error);
+      return;
+    }
+    const path = join(runState.repoRoot, WORKFLOW_RELATIVE_PATH);
+    try {
+      if (parsed.kind === 'number') setNodeBudgetTokens(path, nodeId, parsed.value);
+      else setNodeConfigString(path, nodeId, field.key, parsed.value);
+    } catch (err) {
+      showPickerMessage(
+        err instanceof WorkflowWriteError ? err.message : `could not save ${field.label}: ${String(err)}`,
+      );
+      return;
+    }
+    if (parsed.kind === 'number') {
+      if (parsed.value === null) delete node.budget;
+      else node.budget = { ...node.budget, tokens: parsed.value };
+    } else {
+      const config = { ...(node.config as Record<string, unknown>) };
+      if (parsed.value === null) delete config[field.key];
+      else config[field.key] = parsed.value;
+      node.config = config;
+    }
+    setModelTick((t) => t + 1);
+    setEditorBuffer(null);
   };
 
   /**
@@ -743,6 +804,42 @@ export function App({
       return;
     }
 
+    // Node settings editor. Two modes: moving between fields, and typing into
+    // one. Enter switches between them — it opens the field under the cursor
+    // and, on the second press, saves it — so there is no separate "edit" key
+    // to learn and no way to be typing without seeing a cursor.
+    if (editorOpen && focusedNode && editorField) {
+      if (key.escape) {
+        // Escape backs out of the field being typed, then out of the panel:
+        // an abandoned edit shouldn't cost you the panel too.
+        if (editorBuffer !== null) setEditorBuffer(null);
+        else setEditorOpen(false);
+        return;
+      }
+      if (editorBuffer === null) {
+        if (key.upArrow || input === 'k') {
+          setEditorCursor((c) => (c + editorFields.length - 1) % editorFields.length);
+        } else if (key.downArrow || input === 'j') {
+          setEditorCursor((c) => (c + 1) % editorFields.length);
+        } else if (key.return) {
+          setEditorBuffer(editorField.value);
+        }
+        return;
+      }
+      if (key.return) {
+        commitEditorField(focusedNode.id, editorField, editorBuffer);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setEditorBuffer((b) => (b ?? '').slice(0, -1));
+        return;
+      }
+      if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+        setEditorBuffer((b) => (b ?? '') + input);
+      }
+      return;
+    }
+
     // Skill picker: same reachable-only-via-`s` guarantee as the model picker
     // above. Multi-select, so enter confirms the whole set rather than one item.
     if (skillPickerOpen && focusedNode) {
@@ -783,6 +880,8 @@ export function App({
       if (focusedNode) openModelPicker(focusedNode.id);
     } else if (input === 's') {
       if (focusedNode) openSkillPicker(focusedNode.id);
+    } else if (input === 'e') {
+      if (focusedNode) openEditor();
     } else if (input === 'z') {
       setCompactOverride(!compact);
     } else if (key.leftArrow) {
@@ -1112,6 +1211,52 @@ export function App({
           </Box>
           <PanelFooter hint="↑/↓: move · space: toggle · enter: confirm · esc: cancel" />
         </Box>
+      ) : editorOpen && focusedNode ? (
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Settings — {focusedNode.id} ({focusedNode.type.displayName})
+            </Text>
+          </PanelTitle>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            {(() => {
+              const status = runState.nodes[focusedNode.id]?.status;
+              const readOnly = status === 'running' || status === 'done';
+              return (
+                <>
+                  {readOnly ? (
+                    <Text color="yellow" wrap="truncate-end">
+                      {focusedNode.id} is already {status} — a change here applies the next time it
+                      runs, not to {status === 'running' ? 'the session in flight' : 'this attempt'}.
+                    </Text>
+                  ) : null}
+                  {editorFields.map((field, idx) => {
+                    const active = idx === editorCursor;
+                    const typing = active && editorBuffer !== null;
+                    const shown = typing ? `${editorBuffer}▌` : field.value;
+                    return (
+                      <Text
+                        key={field.key}
+                        wrap="truncate-end"
+                        {...(active ? { color: 'cyan', bold: true } : {})}
+                      >
+                        {active ? '❯ ' : '  '}
+                        {field.label}: {shown.length > 0 ? shown : <Text dimColor>{field.placeholder}</Text>}
+                      </Text>
+                    );
+                  })}
+                </>
+              );
+            })()}
+          </Box>
+          <PanelFooter
+            hint={
+              editorBuffer !== null
+                ? 'type a value · empty clears it · enter: save · esc: cancel'
+                : '↑/↓: move · enter: edit · m: model · s: skills · esc: close'
+            }
+          />
+        </Box>
       ) : expanded && focusedNode ? (
         <Box {...panelBoxProps}>
           {(() => {
@@ -1213,7 +1358,7 @@ export function App({
         </Box>
       ) : (
         <Text dimColor>
-          tab: focus · enter: details · ←→↑↓ (⇧ anywhere): pan · z:{' '}
+          tab: focus · enter: details · e: settings · ←→↑↓ (⇧ anywhere): pan · z:{' '}
           {compact ? 'full cards' : 'compact'} · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
         </Text>
