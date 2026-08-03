@@ -47,6 +47,9 @@ const ANSI: Record<string, string> = {
   // Return paths read as a different kind of line from forward edges.
   loopback: '\x1b[35m',
   'loopback-fired': '\x1b[1;35m',
+  // A skill badge is a standing config choice, not a transient run signal —
+  // dim like the model badge, but yellow so it doesn't read as identical.
+  'skill-badge': '\x1b[33m',
 };
 const RESET = '\x1b[0m';
 
@@ -64,6 +67,19 @@ export function nodeModelBadge(workflow: Workflow, nodeId: string): string | nul
   const resolved = resolveNodeModel(node.config, workflow.settings.model, workflow.settings.model);
   if (resolved.model === undefined || resolved.model === workflow.settings.model) return null;
   return resolved.model;
+}
+
+/**
+ * `»name` for one attached skill, `»×n` for several — the full list lives in
+ * the detail panel. `»` rather than an emoji glyph: `put` below lays out one
+ * grid cell per JS character, and most emoji (unlike the box-drawing and
+ * dingbat glyphs used elsewhere on the card) render as two terminal columns,
+ * which pushes the row past the box's right border.
+ */
+export function nodeSkillBadge(workflow: Workflow, nodeId: string): string | null {
+  const node = workflow.nodes.find((n) => n.id === nodeId);
+  if (!node || node.skills.length === 0) return null;
+  return node.skills.length === 1 ? `»${node.skills[0]!.id}` : `»×${node.skills.length}`;
 }
 
 export function makeGrid(width: number, height: number): Grid {
@@ -202,12 +218,16 @@ export function renderGraph(
     // visible in the detail view.
     const attempt = state.attempt ?? 1;
     const modelBadge = nodeModelBadge(workflow, node.id);
+    const skillBadge = nodeSkillBadge(workflow, node.id);
     if (attempt > 1) {
       const badge = `↻${attempt}`.slice(0, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
     } else if (modelBadge) {
       const badge = modelBadge.slice(0, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'dim');
+    } else if (skillBadge) {
+      const badge = skillBadge.slice(0, inner);
+      put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'skill-badge');
     }
     put(grid, box.x + box.w - 1, box.y + 2, '│', style);
 

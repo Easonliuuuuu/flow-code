@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { gridToLines, nodeModelBadge, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
+import { defaultSkillRoots } from '../src/skills/discover.js';
+import { loadWorkflowFromString } from '../src/workflow/load.js';
 import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
 import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import {
@@ -33,6 +38,18 @@ edges:
   - { from: impl, to: check }
   - { from: impl, to: rev }
 `);
+
+function load(yaml: string, skills: Record<string, string> = {}) {
+  const base = mkdtempSync(join(tmpdir(), 'flow-code-ui-skills-'));
+  const repoRoot = join(base, 'repo');
+  const roots = defaultSkillRoots(repoRoot, join(base, 'home'));
+  for (const [name, body] of Object.entries(skills)) {
+    const dir = join(roots.project, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n${body}\n`);
+  }
+  return loadWorkflowFromString(yaml, { repoRoot, skillRoots: roots });
+}
 
 describe('graph auto-layout', () => {
   it('places every node after all of its dependencies, left to right', () => {
@@ -230,6 +247,85 @@ edges:
       .replace(/\x1b\[[0-9;]*m/g, '');
     expect(after).toContain('↻2');
     expect(after).not.toContain('opus');
+  });
+});
+
+describe('nodeSkillBadge / skill badge rendering', () => {
+  it('badges a node with one attached skill by name, several by count', () => {
+    const wf = load(
+      `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x, skills: [my-skill] }
+  - id: rev
+    type: review
+    config: { skills: [one, two] }
+  - id: check
+    type: test
+    config: { commands: ["true"] }
+edges:
+  - { from: impl, to: rev }
+  - { from: impl, to: check }
+`,
+      { 'my-skill': 'body', one: 'body', two: 'body' },
+    );
+
+    expect(nodeSkillBadge(wf, 'impl')).toBe('»my-skill');
+    expect(nodeSkillBadge(wf, 'rev')).toBe('»×2');
+    expect(nodeSkillBadge(wf, 'check')).toBeNull();
+    expect(nodeSkillBadge(wf, 'nope')).toBeNull();
+  });
+
+  it('draws the skill badge on the box, and yields the corner to the model badge on collision', () => {
+    const wf = load(
+      `
+settings:
+  model: sonnet
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x, model: opus, skills: [my-skill] }
+edges: []
+`,
+      { 'my-skill': 'body' },
+    );
+    const store = storeFor(wf, '/tmp');
+    const layout = computeLayout(wf);
+    const text = gridToLines(renderGraph(wf, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+    expect(text).toContain('opus');
+    expect(text).not.toContain('»');
+  });
+
+  it('draws the skill badge when there is no model override to collide with', () => {
+    const wf = load(
+      `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x, skills: [my-skill] }
+edges: []
+`,
+      { 'my-skill': 'body' },
+    );
+    const store = storeFor(wf, '/tmp');
+    const layout = computeLayout(wf);
+    const text = gridToLines(renderGraph(wf, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+    expect(text).toContain('»my-skill');
   });
 });
 
