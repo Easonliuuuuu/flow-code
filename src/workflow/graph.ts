@@ -1,3 +1,4 @@
+import { parseCondition, type Condition } from './condition.js';
 import type { WorkflowEdge } from './schema.js';
 
 /** A return path: when `from` fails, execution resumes at `to`. */
@@ -5,6 +6,13 @@ export interface Loopback {
   from: string;
   to: string;
   maxAttempts: number;
+}
+
+/** A forward edge that only carries when its condition holds. */
+export interface ConditionalEdge {
+  from: string;
+  to: string;
+  condition: Condition;
 }
 
 /**
@@ -21,6 +29,7 @@ export class Graph {
   private readonly out = new Map<string, string[]>();
   private readonly in_ = new Map<string, string[]>();
   private readonly loopbacks: Loopback[] = [];
+  private readonly conditionals: ConditionalEdge[] = [];
 
   constructor(nodeIds: string[], edges: WorkflowEdge[]) {
     this.nodeIds = nodeIds;
@@ -35,7 +44,22 @@ export class Graph {
       }
       this.out.get(e.from)!.push(e.to);
       this.in_.get(e.to)!.push(e.from);
+      // A conditional edge is a dependency like any other — the target still
+      // waits for the source. The condition decides whether reaching that
+      // point means "run" or "skip", never whether to wait.
+      if (e.when !== undefined) {
+        this.conditionals.push({ from: e.from, to: e.to, condition: parseCondition(e.when) });
+      }
     }
+  }
+
+  /** Conditions guarding entry to `id` — all must hold for it to run. */
+  conditionsInto(id: string): ConditionalEdge[] {
+    return this.conditionals.filter((c) => c.to === id);
+  }
+
+  allConditionals(): ConditionalEdge[] {
+    return [...this.conditionals];
   }
 
   /** Loop-back edges whose source is `id` — i.e. that fire when `id` fails. */

@@ -1,6 +1,6 @@
 import type { ZodType } from 'zod';
 import type { Capability } from '../capabilities.js';
-export declare const NODE_TYPE_IDS: readonly ["discuss", "implement", "test", "validate", "review", "git-ops", "worktree-agent", "approval-gate"];
+export declare const NODE_TYPE_IDS: readonly ["discuss", "spec", "implement", "test", "validate", "review", "git-ops", "worktree-agent", "approval-gate"];
 export type NodeTypeId = (typeof NODE_TYPE_IDS)[number];
 /**
  * A built-in node type is defined by the triple (capability set, default role

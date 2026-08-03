@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { getNodeType, type NodeTypeDefinition } from '../registry/index.js';
+import { parseCondition } from './condition.js';
 import { Graph, GraphCycleError } from './graph.js';
 import {
   DEFAULT_SETTINGS,
@@ -115,6 +116,22 @@ export function loadWorkflowFromString(source: string): Workflow {
         );
       }
     }
+    // A `when:` is parsed here so a typo fails the load rather than becoming an
+    // edge that quietly never carries.
+    if (edge.when !== undefined) {
+      if (edge.loopback) {
+        problems.push(
+          `edge ${edge.from} -> ${edge.to}: a loop-back cannot carry a \`when\` — a return path is taken because \`${edge.from}\` failed, and that is its condition`,
+        );
+      }
+      try {
+        parseCondition(edge.when);
+      } catch (err) {
+        problems.push(
+          `edge ${edge.from} -> ${edge.to} (\`when\`): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 
   if (problems.length > 0) throw new WorkflowValidationError(problems);
@@ -150,6 +167,24 @@ export function loadWorkflowFromString(source: string): Workflow {
     }
   }
   if (loopbackProblems.length > 0) throw new WorkflowValidationError(loopbackProblems);
+
+  // A condition may only read a node whose output is guaranteed to exist by
+  // the time the edge is evaluated: the edge's own source, or an ancestor of
+  // it. Anything else is a race the graph cannot honour.
+  const conditionProblems: string[] = [];
+  for (const { from, to, condition } of graph.allConditionals()) {
+    const label = `edge ${from} -> ${to} (\`when: ${condition.source}\`)`;
+    if (!seenIds.has(condition.nodeId)) {
+      conditionProblems.push(`${label}: references unknown node \`${condition.nodeId}\``);
+      continue;
+    }
+    if (condition.nodeId !== from && !graph.ancestorsOf(from).has(condition.nodeId)) {
+      conditionProblems.push(
+        `${label}: can only read \`${from}\` or a node upstream of it, and \`${condition.nodeId}\` is neither — its output may not exist yet when this edge is evaluated`,
+      );
+    }
+  }
+  if (conditionProblems.length > 0) throw new WorkflowValidationError(conditionProblems);
 
   return {
     settings: file.settings ?? DEFAULT_SETTINGS,

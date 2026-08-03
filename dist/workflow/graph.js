@@ -1,3 +1,4 @@
+import { parseCondition } from './condition.js';
 /**
  * Pure graph structure over node ids. Built after schema validation; assumes
  * every edge references a known node (checked by the loader).
@@ -12,6 +13,7 @@ export class Graph {
     out = new Map();
     in_ = new Map();
     loopbacks = [];
+    conditionals = [];
     constructor(nodeIds, edges) {
         this.nodeIds = nodeIds;
         for (const id of nodeIds) {
@@ -25,7 +27,20 @@ export class Graph {
             }
             this.out.get(e.from).push(e.to);
             this.in_.get(e.to).push(e.from);
+            // A conditional edge is a dependency like any other — the target still
+            // waits for the source. The condition decides whether reaching that
+            // point means "run" or "skip", never whether to wait.
+            if (e.when !== undefined) {
+                this.conditionals.push({ from: e.from, to: e.to, condition: parseCondition(e.when) });
+            }
         }
+    }
+    /** Conditions guarding entry to `id` — all must hold for it to run. */
+    conditionsInto(id) {
+        return this.conditionals.filter((c) => c.to === id);
+    }
+    allConditionals() {
+        return [...this.conditionals];
     }
     /** Loop-back edges whose source is `id` — i.e. that fire when `id` fails. */
     loopbacksFrom(id) {

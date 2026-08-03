@@ -146,6 +146,62 @@ describe('capability enforcement per node type', () => {
   });
 });
 
+describe('the control directory is an anchor no node can move', () => {
+  it('refuses every write into .flow-code, however it is spelled', () => {
+    const { interceptor, store } = harnessFor('implement', '/repo');
+    for (const target of [
+      '.flow-code/workflow.yaml',
+      '/repo/.flow-code/workflow.yaml',
+      '.flow-code/specs/run-1.md',
+      'src/../.flow-code/credentials.json',
+    ]) {
+      expect(interceptor.check('Write', { file_path: target }).behavior, target).toBe('deny');
+    }
+    const denials = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denials).toHaveLength(4);
+    expect(denials.every((e) => e.missingCapability === 'control-directory')).toBe(true);
+  });
+
+  it('refuses shell commands that name a control artifact, whatever they do to it', () => {
+    const { interceptor } = harnessFor('implement', '/repo');
+    for (const command of [
+      "sed -i 's/maxAttempts: 3/maxAttempts: 99/' .flow-code/workflow.yaml",
+      'echo "commands: [true]" > .flow-code/workflow.yaml',
+      'cat .flow-code/credentials.json | tee /tmp/stolen',
+      'rm .flow-code/specs/run-1.md',
+    ]) {
+      expect(interceptor.check('Bash', { command }).behavior, command).toBe('deny');
+    }
+  });
+
+  it('still lets a node read the control directory, and work everywhere else', () => {
+    const { interceptor } = harnessFor('implement', '/repo');
+    // Reading is fine: the spec is meant to be read.
+    expect(interceptor.check('Read', { file_path: '.flow-code/specs/run-1.md' }).behavior).toBe(
+      'allow',
+    );
+    // A file that merely mentions the name is not the control directory.
+    expect(interceptor.check('Write', { file_path: 'src/flow-code-notes.md' }).behavior).toBe(
+      'allow',
+    );
+    expect(interceptor.check('Bash', { command: 'npm test' }).behavior).toBe('allow');
+  });
+
+  it('leaves a Worktree-Agent instance free inside its own worktree', () => {
+    // A worktree lives *under* the repo's .flow-code, so an absolute-path rule
+    // would condemn everything the instance does. The rule is relative to the
+    // node's own working directory instead.
+    const workingDir = '/repo/.flow-code/worktrees/run-a-impl-1';
+    const { interceptor } = harnessFor('implement', workingDir);
+    expect(interceptor.check('Write', { file_path: 'src/a.ts' }).behavior).toBe('allow');
+    expect(interceptor.check('Bash', { command: 'npm test' }).behavior).toBe('allow');
+    // Its own checkout's control directory is still off-limits.
+    expect(interceptor.check('Write', { file_path: '.flow-code/workflow.yaml' }).behavior).toBe(
+      'deny',
+    );
+  });
+});
+
 describe('denials are events, not silence', () => {
   it('records every denial in the activity log and bumps the node denial count', () => {
     const { interceptor, store } = harnessFor('review');

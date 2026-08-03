@@ -42,4 +42,28 @@ export interface Interceptor {
     }): void;
 }
 export declare function outsideWorkingDir(workingDir: string, candidate: string): boolean;
+/**
+ * True when a path lands inside the control directory of the node's own
+ * working tree — the workflow file, credentials, specs and run-state.
+ *
+ * Deliberately computed *relative to the working directory* rather than
+ * against an absolute repo root: a Worktree-Agent instance works inside
+ * `<repo>/.flow-code/worktrees/<id>`, so an absolute containment test would
+ * condemn everything it does, while the relative test correctly protects that
+ * instance's own `.flow-code` and leaves the rest of its checkout writable.
+ */
+export declare function insideControlDir(workingDir: string, candidate: string): boolean;
+/**
+ * Shell commands that name a control artifact. Blunter than the path check —
+ * a command string can reach a file in ways no argument parser will catch
+ * (`sed -i`, redirection, `tee`) — so the artifacts that anchor the run are
+ * named directly and any mention of them in a command is refused. Reading
+ * them is still available through the Read tool.
+ *
+ * `.flow-code/runs` and `.flow-code/worktrees` are deliberately absent: those
+ * are working data, and a worktree's own path legitimately appears in the
+ * commands run inside it.
+ */
+export declare const CONTROL_ARTIFACT_IN_COMMAND: RegExp;
+export declare const CONTROL_DIR_DENIAL: string;
 export declare function createInterceptor(opts: InterceptorOptions): Interceptor;

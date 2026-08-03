@@ -42,6 +42,7 @@ describe('writeTestCommands', () => {
     const workflow = loadWorkflowFromString(text);
     expect(workflow.order).toEqual([
       'discuss',
+      'spec',
       'implement',
       'test',
       'validate',

@@ -20,6 +20,37 @@ export function outsideWorkingDir(workingDir, candidate) {
     const rel = relative(resolve(workingDir), resolved);
     return rel === '..' || rel.startsWith('../') || isAbsolute(rel);
 }
+/** The control directory, named relative to whatever tree a node works in. */
+const CONTROL_DIR = '.flow-code';
+/**
+ * True when a path lands inside the control directory of the node's own
+ * working tree — the workflow file, credentials, specs and run-state.
+ *
+ * Deliberately computed *relative to the working directory* rather than
+ * against an absolute repo root: a Worktree-Agent instance works inside
+ * `<repo>/.flow-code/worktrees/<id>`, so an absolute containment test would
+ * condemn everything it does, while the relative test correctly protects that
+ * instance's own `.flow-code` and leaves the rest of its checkout writable.
+ */
+export function insideControlDir(workingDir, candidate) {
+    const resolved = isAbsolute(candidate) ? candidate : resolve(workingDir, candidate);
+    const rel = relative(resolve(workingDir), resolved);
+    return rel === CONTROL_DIR || rel.startsWith(`${CONTROL_DIR}/`);
+}
+/**
+ * Shell commands that name a control artifact. Blunter than the path check —
+ * a command string can reach a file in ways no argument parser will catch
+ * (`sed -i`, redirection, `tee`) — so the artifacts that anchor the run are
+ * named directly and any mention of them in a command is refused. Reading
+ * them is still available through the Read tool.
+ *
+ * `.flow-code/runs` and `.flow-code/worktrees` are deliberately absent: those
+ * are working data, and a worktree's own path legitimately appears in the
+ * commands run inside it.
+ */
+export const CONTROL_ARTIFACT_IN_COMMAND = /\.flow-code[/\\](workflow\.ya?ml|credentials\.json|specs)/i;
+export const CONTROL_DIR_DENIAL = 'flow-code: the `.flow-code` control directory (workflow, credentials, specs) is not writable by a node — ' +
+    'it is what defines and verifies this run, and a node that could edit it could grade its own homework.';
 const READ_SET = new Set(READ_TOOLS);
 const EDIT_SET = new Set(EDIT_TOOLS);
 const EXEC_SET = new Set(EXEC_TOOLS);
@@ -59,6 +90,14 @@ export function createInterceptor(opts) {
                     message: `flow-code: ${target} resolves outside this node's working directory (${workingDir}).`,
                 };
             }
+            // Reading the control directory is fine; writing to it is never.
+            if (needed === 'edit' && target !== undefined && insideControlDir(workingDir, target)) {
+                return {
+                    behavior: 'deny',
+                    missingCapability: 'control-directory',
+                    message: CONTROL_DIR_DENIAL,
+                };
+            }
             return { behavior: 'allow' };
         }
         if (EXEC_SET.has(toolName)) {
@@ -80,6 +119,13 @@ export function createInterceptor(opts) {
                 };
             }
             const command = typeof input['command'] === 'string' ? input['command'] : '';
+            if (CONTROL_ARTIFACT_IN_COMMAND.test(command)) {
+                return {
+                    behavior: 'deny',
+                    missingCapability: 'control-directory',
+                    message: CONTROL_DIR_DENIAL,
+                };
+            }
             for (const segment of classifyCommand(command)) {
                 if (segment.kind === 'git-write' && !caps.has('git-write')) {
                     return {

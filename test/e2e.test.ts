@@ -86,10 +86,21 @@ function defaultWorkflowScript(req: AgentSessionRequest, tools: HarnessTools): s
         });
       }
       return 'Understood — what color should the greeting be?';
-    case 'implement': {
-      // The conclusion from Discuss must be visible to Implement.
+    case 'spec': {
+      // The conclusion from Discuss must reach the Spec node.
       if (!req.prompt.includes('greeting file')) {
-        throw new Error('implement did not receive the discussion conclusion');
+        throw new Error('spec did not receive the discussion conclusion');
+      }
+      return JSON.stringify({
+        title: 'Blue greeting file',
+        requirements: ['one file only'],
+        acceptanceCriteria: ['greeting.txt exists and says hello in blue'],
+      });
+    }
+    case 'implement': {
+      // The spec — not the raw transcript — is what Implement works from.
+      if (!req.prompt.includes('greeting.txt exists and says hello in blue')) {
+        throw new Error('implement did not receive the spec acceptance criteria');
       }
       tools.write('greeting.txt', 'hello (blue)\n');
       // A well-intentioned overstep: the harness must block this and log it.
@@ -98,7 +109,15 @@ function defaultWorkflowScript(req: AgentSessionRequest, tools: HarnessTools): s
       return 'Created greeting.txt; my push attempt was denied by the harness.';
     }
     case 'validate':
-      return JSON.stringify({ verdict: 'pass', notes: 'greeting.txt exists with expected content' });
+      // Criteria arrive from the Spec node, and are answered one by one.
+      if (!req.prompt.includes('AC1')) {
+        throw new Error('validate did not receive the acceptance criteria checklist');
+      }
+      return JSON.stringify({
+        verdict: 'pass',
+        notes: 'greeting.txt exists with expected content',
+        criteria: [{ id: 'AC1', met: true, evidence: 'greeting.txt line 1 reads "hello (blue)"' }],
+      });
     case 'review':
       return JSON.stringify({
         verdict: 'pass',
@@ -146,7 +165,7 @@ describe('end-to-end: default workflow on a sample repo', () => {
   it('runs discuss → implement → test → validate → review → gate → git-ops to completion', async () => {
     const { repo, store, ports } = await runDefaultWorkflow('approve');
 
-    for (const id of ['discuss', 'implement', 'test', 'validate', 'review', 'gate', 'git-ops']) {
+    for (const id of ['discuss', 'spec', 'implement', 'test', 'validate', 'review', 'gate', 'git-ops']) {
       expect(store.node(id).status, id).toBe('done');
     }
 
@@ -210,9 +229,11 @@ const LOOPING_WORKFLOW_YAML = DEFAULT_WORKFLOW_YAML;
 function loopingScript(passOnImplementRun: number): {
   script: (req: AgentSessionRequest, tools: HarnessTools) => string;
   implementRuns: () => number;
+  specRuns: () => number;
   retryPrompts: () => string[];
 } {
   let implementRuns = 0;
+  let specRuns = 0;
   const retryPrompts: string[] = [];
   const script = (req: AgentSessionRequest, tools: HarnessTools): string => {
     switch (req.nodeId) {
@@ -220,15 +241,28 @@ function loopingScript(passOnImplementRun: number): {
         return req.prompt.includes('JSON object recording')
           ? JSON.stringify({ conclusion: 'Add a greeting file.', constraints: [] })
           : 'Understood.';
+      case 'spec':
+        specRuns++;
+        return JSON.stringify({
+          title: 'Greeting file',
+          requirements: [],
+          acceptanceCriteria: ['greeting.txt exists with the right content'],
+        });
       case 'implement':
         implementRuns++;
         if (req.prompt.includes('running again because')) retryPrompts.push(req.prompt);
         tools.write('greeting.txt', `hello (attempt ${implementRuns})\n`);
         return `Wrote greeting.txt on attempt ${implementRuns}.`;
-      case 'validate':
-        return implementRuns >= passOnImplementRun
-          ? JSON.stringify({ verdict: 'pass', notes: 'greeting.txt is correct' })
-          : JSON.stringify({ verdict: 'fail', notes: 'greeting.txt has the wrong content' });
+      case 'validate': {
+        const met = implementRuns >= passOnImplementRun;
+        return JSON.stringify({
+          verdict: met ? 'pass' : 'fail',
+          notes: met ? 'greeting.txt is correct' : 'greeting.txt has the wrong content',
+          criteria: [
+            { id: 'AC1', met, evidence: met ? 'content matches' : 'content does not match' },
+          ],
+        });
+      }
       case 'review':
         return JSON.stringify({ verdict: 'pass', findings: [] });
       case 'git-ops':
@@ -239,7 +273,12 @@ function loopingScript(passOnImplementRun: number): {
         throw new Error(`unexpected agent session for node ${req.nodeId}`);
     }
   };
-  return { script, implementRuns: () => implementRuns, retryPrompts: () => retryPrompts };
+  return {
+    script,
+    implementRuns: () => implementRuns,
+    specRuns: () => specRuns,
+    retryPrompts: () => retryPrompts,
+  };
 }
 
 async function runLoopingWorkflow(passOnImplementRun: number) {
@@ -274,6 +313,10 @@ describe('end-to-end: iterating on a failed verdict', () => {
     // The retry was told what went wrong.
     expect(scripted.retryPrompts()).toHaveLength(1);
     expect(scripted.retryPrompts()[0]).toContain('wrong content');
+    // The contract was written once and never rewritten: the second attempt
+    // is judged against the same acceptance criteria as the first.
+    expect(scripted.specRuns()).toBe(1);
+    expect(store.attemptOf('spec')).toBe(1);
 
     for (const id of ['implement', 'validate', 'review', 'gate', 'git-ops']) {
       expect(store.node(id).status, id).toBe('done');

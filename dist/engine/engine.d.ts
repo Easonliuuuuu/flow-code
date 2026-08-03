@@ -33,12 +33,48 @@ export declare class Engine {
     private readonly running;
     /** Pending "why you are running again" context, keyed by loop-back target. */
     private readonly retryReasons;
+    /**
+     * One abort controller per in-flight node, so a per-node budget can stop
+     * that node's session without taking down the rest of the run. Each is
+     * chained to the run-wide signal, so ctrl+c still stops everything.
+     */
+    private readonly nodeAborts;
+    /** Nodes stopped by their own budget, with the message explaining it. */
+    private readonly nodeBudgetStops;
+    /** Set once a run-wide budget is spent; no further node ever starts. */
+    private runBudgetStop;
+    private runStartedAt;
     constructor(opts: EngineOptions);
+    /**
+     * Enforce the run's stop rules. Called on every run-state change (token
+     * counts move there) and on a timer while a wall-clock budget is set.
+     *
+     * A run-wide breach stops everything; a per-node breach stops only the node
+     * that overspent, so the rest of the graph can still finish and report. In
+     * both cases the stop is an abort of a live session, not a polite request:
+     * the point of a ceiling is that it holds.
+     */
+    private checkBudgets;
+    private stopRun;
     private nodeById;
     /** Worktree-Agent orchestrates isolated dirs; the gate only waits and reads. */
     private takesMainTreeLock;
     private discussActive;
+    /**
+     * A dependency stops holding a node back once it is `done` — or once it was
+     * skipped because a routing condition took the run down a different branch.
+     * A branch that was never taken is not a failure and must not block the
+     * node the branches rejoin at; a branch that *failed* still does.
+     */
+    private depCleared;
     private depsSatisfied;
+    /**
+     * True when every path into a node came from a branch that was not taken —
+     * nothing upstream of it actually ran, so there is nothing for it to do.
+     * This is what makes a skip cascade down its own arm of the graph while a
+     * node with a live path into it still runs.
+     */
+    private onlyUntakenBranchesInto;
     /**
      * The dependency ids whose outputs a starting node receives: its direct
      * dependencies, plus — through any dependency whose type is
@@ -83,6 +119,13 @@ export declare class Engine {
      */
     private fireLoopback;
     private markDownstreamSkipped;
+    /**
+     * The first incoming condition that does not hold, once every dependency is
+     * done. All of them must hold for a node to run — a conditional edge is a
+     * dependency that also has an opinion, and an unmet opinion means this
+     * branch is not the one being taken.
+     */
+    private unmetCondition;
     private runNode;
     private startEligible;
     run(): Promise<void>;
