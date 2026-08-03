@@ -1,5 +1,6 @@
 import { Text, render, useInput } from 'ink';
 import React, { useState } from 'react';
+import { selectFromList } from './SelectList.js';
 
 // These used to be implemented with node:readline and manual raw-mode stdin
 // reads, interleaved with Ink components like the provider/model SelectList.
@@ -34,43 +35,29 @@ function useSubmittableLine(onSubmit: (value: string) => void): string {
   return value;
 }
 
-function ConfirmPrompt({
-  question,
-  defaultAnswer,
-  onSubmit,
-}: {
-  question: string;
-  defaultAnswer: boolean;
-  onSubmit: (value: boolean) => void;
-}): React.ReactElement {
-  const value = useSubmittableLine((raw) => {
-    const trimmed = raw.trim().toLowerCase();
-    onSubmit(trimmed === '' ? defaultAnswer : trimmed === 'y' || trimmed === 'yes');
-  });
-  const suffix = defaultAnswer ? '[Y/n]' : '[y/N]';
-  return (
-    <Text>
-      {question} {suffix} {value}
-    </Text>
-  );
-}
-
-export function confirm(question: string, opts: { defaultAnswer?: boolean } = {}): Promise<boolean> {
+/**
+ * A Yes/No choice as a two-item selectable list rather than a typed `[Y/n]`
+ * line — consistent with every other choice in this CLI (preset picker,
+ * provider picker, the openspec/spec-kit CLI-install prompt), all of which
+ * are pick-from-a-list, not type-an-answer. The default sorts first so
+ * Enter alone still picks it; Escape/Ctrl+C resolves to `false`, matching
+ * `SelectList`'s existing cancel behavior rather than hard-exiting the
+ * process the way the old typed prompt did on Ctrl+C.
+ */
+export async function confirm(question: string, opts: { defaultAnswer?: boolean } = {}): Promise<boolean> {
   const defaultAnswer = opts.defaultAnswer ?? false;
-  if (!process.stdin.isTTY) return Promise.resolve(defaultAnswer);
-  return new Promise((resolve) => {
-    const instance = render(
-      React.createElement(ConfirmPrompt, {
-        question,
-        defaultAnswer,
-        onSubmit: (value: boolean) => {
-          instance.unmount();
-          resolve(value);
-        },
-      }),
-      { exitOnCtrlC: false },
-    );
-  });
+  if (!process.stdin.isTTY) return defaultAnswer;
+  const items = defaultAnswer
+    ? [
+        { label: 'Yes', value: true },
+        { label: 'No', value: false },
+      ]
+    : [
+        { label: 'No', value: false },
+        { label: 'Yes', value: true },
+      ];
+  const chosen = await selectFromList(items, { prompt: question });
+  return chosen ?? false;
 }
 
 function TextPrompt({
