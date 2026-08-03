@@ -12,6 +12,7 @@ import { ensureGitExclude } from './git/exclude.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
+import { selectFromList } from './init/SelectList.js';
 import { runTestSetupWizard } from './init/testWizard.js';
 import { listNodeTypes } from './registry/index.js';
 import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
@@ -19,7 +20,7 @@ import { formatSkillsListing, skillCompatibilityNotes } from './skills/report.js
 import { FileRunStatePersister, findInterruptedRun, findLatestInterruptedRun, } from './runstate/persist.js';
 import { RunStateStore } from './runstate/store.js';
 import { runUi, UiInteractionPorts } from './ui/index.js';
-import { DEFAULT_PRESET, getPreset, presetNames } from './presets.js';
+import { DEFAULT_PRESET, getPreset, listPresets, presetNames } from './presets.js';
 import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError } from './workflow/load.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from './worktrees/reconcile.js';
 async function repoRootFromCwd() {
@@ -100,6 +101,50 @@ function missingPresetSkills(preset, repoRoot) {
         '    Install them, or edit the `skills:` entries in the scaffolded file.',
     ];
 }
+/**
+ * Writes the preset's workflow.yaml when the repo has none yet, or when the
+ * caller explicitly named `--preset` on an already-scaffolded repo and
+ * `confirmOverwrite` approves replacing it. A bare `init` re-run (no
+ * `--preset`) never overwrites — that's most often just "reconfigure the
+ * provider," and this repo's workflow.yaml may carry manual edits.
+ * `confirmOverwrite` is only invoked when there's actually a decision to
+ * make, so a caller that always answers "no" never sees a prompt on a fresh
+ * repo.
+ */
+export async function scaffoldWorkflow(repoRoot, path, preset, presetExplicit, confirmOverwrite) {
+    const alreadyScaffolded = existsSync(path);
+    let overwrite = false;
+    if (alreadyScaffolded && presetExplicit) {
+        console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists.`);
+        overwrite = await confirmOverwrite();
+    }
+    const justScaffolded = !alreadyScaffolded || overwrite;
+    if (justScaffolded) {
+        mkdirSync(dirname(path), { recursive: true });
+        writeFileSync(path, preset.yaml);
+        ensureGitExclude(repoRoot);
+        console.log(`flow-code: ${overwrite ? 'overwrote' : 'created'} ${WORKFLOW_RELATIVE_PATH}`);
+        console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
+        for (const line of missingPresetSkills(preset, repoRoot))
+            console.log(line);
+    }
+    else {
+        console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
+    }
+    return { justScaffolded, overwrote: overwrite };
+}
+/**
+ * Shown only when there's an actual choice to make: no `--preset` flag and no
+ * workflow.yaml yet. An already-scaffolded repo is left untouched by a bare
+ * `init` regardless of TTY, so this never fires on a reconfigure-only run.
+ */
+async function selectPresetInteractively() {
+    const presets = [DEFAULT_PRESET, ...listPresets()];
+    return selectFromList(presets.map((p) => ({
+        label: p.name === 'default' ? `${p.name} — ${p.summary} (customize afterward)` : `${p.name} — ${p.summary}`,
+        value: p,
+    })), { prompt: 'Starting workflow:' });
+}
 async function cmdInit(args) {
     const presetIdx = args.indexOf('--preset');
     const presetName = presetIdx >= 0 ? args[presetIdx + 1] : undefined;
@@ -108,22 +153,24 @@ async function cmdInit(args) {
     if (presetIdx >= 0 && (!presetName || !getPreset(presetName))) {
         fail(`unknown preset \`${presetName ?? ''}\` — available: ${presetNames().join(', ')}`);
     }
-    const preset = presetName ? getPreset(presetName) : DEFAULT_PRESET;
     const repoRoot = await repoRootFromCwd();
     const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
-    const justScaffolded = !existsSync(path);
-    if (justScaffolded) {
-        mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, preset.yaml);
-        ensureGitExclude(repoRoot);
-        console.log(`flow-code: created ${WORKFLOW_RELATIVE_PATH}`);
-        console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
-        for (const line of missingPresetSkills(preset, repoRoot))
-            console.log(line);
+    let preset;
+    if (presetName) {
+        preset = getPreset(presetName);
+    }
+    else if (!existsSync(path) && process.stdin.isTTY) {
+        const chosen = await selectPresetInteractively();
+        if (!chosen) {
+            console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
+            process.exit(0);
+        }
+        preset = chosen;
     }
     else {
-        console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
+        preset = DEFAULT_PRESET;
     }
+    const { justScaffolded } = await scaffoldWorkflow(repoRoot, path, preset, presetIdx >= 0, () => confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`));
     // Provider setup comes before the test-command step: when the heuristics
     // find nothing, that step falls back to a read-only agent session, which
     // needs a configured provider to exist.
