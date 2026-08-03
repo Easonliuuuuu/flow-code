@@ -14,7 +14,7 @@ import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
 import { selectFromList } from './init/SelectList.js';
 import { runTestSetupWizard } from './init/testWizard.js';
-import { listNodeTypes } from './registry/index.js';
+import { listNodeTypes, PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
 import { formatSkillsListing, skillCompatibilityNotes } from './skills/report.js';
 import { FileRunStatePersister, findInterruptedRun, findLatestInterruptedRun, } from './runstate/persist.js';
@@ -171,16 +171,12 @@ async function cmdInit(args) {
         preset = DEFAULT_PRESET;
     }
     const { justScaffolded } = await scaffoldWorkflow(repoRoot, path, preset, presetIdx >= 0, () => confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`));
-    // Provider setup comes before the test-command step: when the heuristics
-    // find nothing, that step falls back to a read-only agent session, which
-    // needs a configured provider to exist.
     const existing = loadCredentials(repoRoot);
     let runWizard = !existing;
     if (existing) {
         console.log(`flow-code: provider already configured (${providerInfo(existing.provider).label}, model ${existing.model}).`);
         runWizard = await confirm('  Reconfigure the provider/model?');
     }
-    let configured = existing;
     if (runWizard) {
         if (!process.stdin.isTTY) {
             console.log('flow-code: no TTY detected — skipping interactive provider setup.');
@@ -192,18 +188,16 @@ async function cmdInit(args) {
             console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
             process.exit(0);
         }
-        configured = result;
         console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
     }
+    // The test command is deliberately not asked about here: `flow-code run`
+    // offers to detect it the first time it actually finds the placeholder in
+    // place, which is also the first point a provider is guaranteed resolved
+    // for the agent fallback — asking twice (or asking before there's even a
+    // codebase shape to detect against) would just be front-loaded busywork.
     if (justScaffolded) {
-        if (process.stdin.isTTY) {
-            await runTestSetupWizard(repoRoot, path, {
-                ...(configured ? { sessions: buildRunner(configured.provider), model: configured.model } : {}),
-            });
-        }
-        else {
-            console.log('  No TTY detected — leaving the placeholder test command in .flow-code/workflow.yaml; edit it directly, or re-run `flow-code init` from an interactive terminal.');
-        }
+        console.log("  Test command: left as the scaffolded placeholder — `flow-code run` will offer to detect it " +
+            'on first run, or edit `nodes: test: config: commands` in .flow-code/workflow.yaml directly.');
     }
     console.log('  Start a run with: flow-code run');
     // Explicit rather than relying on the event loop draining naturally: see
@@ -266,6 +260,37 @@ async function cmdDoctor(args) {
         console.log(`  FAILED ${failure.dir}: ${failure.error}`);
     process.exit(0);
 }
+/**
+ * A Test node still carrying the scaffolded placeholder means nobody has
+ * ever filled one in — `init` no longer asks (see cmdInit), so this is the
+ * first, and only, place that offers to. Reuses the exact wizard `init`
+ * used to run: heuristics first, an agent fallback if a provider is
+ * configured and heuristics found nothing, then free-text entry, writing
+ * whatever was chosen back to workflow.yaml. Returns whether anything may
+ * have been written, so the caller knows to reload the workflow it already
+ * parsed. Skipped entirely on a non-TTY run — with no one to ask, the
+ * options are silently guessing at commands or hanging on a prompt that can
+ * never be answered, and neither is better than failing with a pointer to
+ * fix it once from an interactive terminal.
+ */
+export async function resolveTestPlaceholder(repoRoot, workflowPath, workflow, provider) {
+    const unresolved = workflow.nodes.some((n) => {
+        if (n.type.id !== 'test')
+            return false;
+        const commands = n.config.commands;
+        return Array.isArray(commands) && commands.length === 1 && commands[0] === PLACEHOLDER_TEST_COMMAND;
+    });
+    if (!unresolved)
+        return false;
+    if (!process.stdin.isTTY) {
+        fail('a Test node still has the placeholder command — run `flow-code run` once from an ' +
+            'interactive terminal to fill it in, or edit `commands:` in .flow-code/workflow.yaml directly.');
+    }
+    await runTestSetupWizard(repoRoot, workflowPath, {
+        ...(provider ? { sessions: buildRunner(provider.provider), model: provider.model } : {}),
+    });
+    return true;
+}
 async function cmdRun(args) {
     const allowDirty = args.includes('--allow-dirty');
     const resumeIdx = args.indexOf('--resume');
@@ -294,6 +319,19 @@ async function cmdRun(args) {
     const resolved = await resolveProvider(repoRoot, workflow);
     if (resolved?.model && !workflow.settings.model) {
         workflow.settings.model = resolved.model;
+    }
+    // Skipped while resuming: a resume continues one specific interrupted
+    // attempt rather than starting a fresh setup pass, and if that attempt's
+    // Test node hasn't run yet its placeholder is no different from any other
+    // config carried over from the original run.
+    if (!resuming) {
+        const workflowPath = join(repoRoot, WORKFLOW_RELATIVE_PATH);
+        if (await resolveTestPlaceholder(repoRoot, workflowPath, workflow, resolved)) {
+            workflow = loadWorkflow(repoRoot);
+            if (resolved?.model && !workflow.settings.model) {
+                workflow.settings.model = resolved.model;
+            }
+        }
     }
     let resumeState;
     if (resuming) {
