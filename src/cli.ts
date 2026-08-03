@@ -22,6 +22,7 @@ import {
 import { builtinExecutors } from './executors/index.js';
 import { ensureGitExclude } from './git/exclude.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
+import { isCliAvailable, runCliInstall } from './init/cliInstall.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
 import { selectFromList } from './init/SelectList.js';
@@ -171,20 +172,70 @@ export async function scaffoldWorkflow(
   return { justScaffolded, overwrote: overwrite };
 }
 
+export type CliInstallAction = 'install' | 'back';
+
+/**
+ * True if `preset` is ready to scaffold: it has no external CLI dependency,
+ * that CLI is already on PATH, or the user just installed it successfully.
+ * Takes its I/O as injected deps so it's testable without spawning a real
+ * process or mounting Ink — the same seam `scaffoldWorkflow` uses for
+ * `confirmOverwrite`.
+ */
+export async function resolvePresetCli(
+  preset: WorkflowPreset,
+  deps: {
+    isCliAvailable: (command: string) => Promise<boolean>;
+    runInstall: (install: { command: string; args: string[] }) => Promise<boolean>;
+    promptAction: (preset: WorkflowPreset) => Promise<CliInstallAction | undefined>;
+  },
+): Promise<boolean> {
+  if (!preset.cli) return true;
+  if (await deps.isCliAvailable(preset.cli.command)) return true;
+
+  const action = await deps.promptAction(preset);
+  if (action !== 'install') return false; // 'back', or Esc/Ctrl+C on the prompt
+
+  const installed = await deps.runInstall(preset.cli.install);
+  return installed && (await deps.isCliAvailable(preset.cli.command));
+}
+
+/** Yes/No picker (not a `[Y/n]` text prompt) for installing a preset's missing CLI dependency. */
+function promptCliInstallAction(preset: WorkflowPreset): Promise<CliInstallAction | undefined> {
+  const { command, install } = preset.cli!;
+  const installCmd = `${install.command} ${install.args.join(' ')}`;
+  return selectFromList(
+    [
+      { label: `Install now (${installCmd})`, value: 'install' as const },
+      { label: 'Go back', value: 'back' as const },
+    ],
+    { prompt: `\`${command}\` CLI not found on PATH — the \`${preset.name}\` preset needs it.` },
+  );
+}
+
 /**
  * Shown only when there's an actual choice to make: no `--preset` flag and no
  * workflow.yaml yet. An already-scaffolded repo is left untouched by a bare
  * `init` regardless of TTY, so this never fires on a reconfigure-only run.
+ *
+ * Loops back to the same list on "Go back" (or an install that still leaves
+ * the CLI missing) rather than bailing out of `init` — the user just picks
+ * again, same as if that preset had no CLI dependency at all.
  */
 async function selectPresetInteractively(): Promise<WorkflowPreset | undefined> {
   const presets = [DEFAULT_PRESET, ...listPresets()];
-  return selectFromList(
-    presets.map((p) => ({
-      label: p.name === 'default' ? `${p.name} — ${p.summary} (customize afterward)` : `${p.name} — ${p.summary}`,
-      value: p,
-    })),
-    { prompt: 'Starting workflow:' },
-  );
+  for (;;) {
+    const chosen = await selectFromList(
+      presets.map((p) => ({
+        label: p.name === 'default' ? `${p.name} — ${p.summary} (customize afterward)` : `${p.name} — ${p.summary}`,
+        value: p,
+      })),
+      { prompt: 'Starting workflow:' },
+    );
+    if (!chosen) return undefined; // Esc/Ctrl+C on the picker itself still cancels init
+    const ready = await resolvePresetCli(chosen, { isCliAvailable, runInstall: runCliInstall, promptAction: promptCliInstallAction });
+    if (ready) return chosen;
+    console.log(`flow-code: \`${chosen.cli!.command}\` still not found on PATH — pick another preset or install it manually.`);
+  }
 }
 
 async function cmdInit(args: string[]): Promise<void> {

@@ -26,6 +26,24 @@ describe('preset registry', () => {
     expect(getPreset('openspec')?.summary).toContain('explore');
   });
 
+  it('declares how to check for and install the openspec CLI', () => {
+    expect(getPreset('openspec')?.cli).toEqual({
+      command: 'openspec',
+      install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] },
+    });
+  });
+
+  it('declares how to check for and install the spec-kit CLI', () => {
+    expect(getPreset('spec-kit')?.cli).toEqual({
+      command: 'specify',
+      install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] },
+    });
+  });
+
+  it('has no CLI dependency for the default preset', () => {
+    expect(DEFAULT_PRESET.cli).toBeUndefined();
+  });
+
   it('returns nothing for an unknown name', () => {
     expect(getPreset('nope')).toBeUndefined();
   });
