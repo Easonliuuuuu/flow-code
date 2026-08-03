@@ -6,6 +6,15 @@ import type { ProviderId } from '../engine/providers.js';
 /** No live model catalog for Claude at picker time — see CLAUDE_MODELS below. */
 const CLAUDE_MODELS = ['claude-sonnet-5', 'claude-opus-5', 'claude-haiku-4-5-20251001'];
 
+/**
+ * Same story as Claude: Codex runs through a CLI subprocess, not a queryable
+ * /v1/models endpoint. Model naming in this family moves fast — this list is
+ * a rough starting point, not authoritative; the picker's free-text entry is
+ * the real escape hatch, and omitting `model` in ThreadOptions lets the CLI
+ * pick its own current default anyway.
+ */
+const CODEX_MODELS = ['gpt-5.1-codex', 'gpt-5.1-codex-mini'];
+
 const MODEL_LIST_TIMEOUT_MS = 10_000;
 
 /** OpenAI's /v1/models lists every model family, not just chat — trim the obvious non-chat ones. */
@@ -27,6 +36,8 @@ function baseUrlFor(provider: ProviderId): string {
       return OPENROUTER_BASE_URL;
     case 'claude':
       throw new Error('claude has no /v1/models endpoint here — use the static list instead');
+    case 'codex':
+      throw new Error('codex has no /v1/models endpoint here — use the static list instead');
   }
 }
 
@@ -41,6 +52,7 @@ function baseUrlFor(provider: ProviderId): string {
  */
 export async function fetchModelIds(provider: ProviderId, apiKey: string | undefined): Promise<ModelListResult> {
   if (provider === 'claude') return { models: CLAUDE_MODELS };
+  if (provider === 'codex') return { models: CODEX_MODELS };
 
   try {
     const res = await fetch(`${baseUrlFor(provider)}/models`, {

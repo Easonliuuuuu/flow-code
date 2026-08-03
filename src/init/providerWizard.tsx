@@ -1,6 +1,6 @@
 import { ensureGitExclude } from '../git/exclude.js';
 import { credentialsPath, saveCredentials } from '../engine/credentials.js';
-import { defaultCredentialsResolver } from '../engine/preflight.js';
+import { defaultCredentialsResolver, defaultCodexCredentialsResolver } from '../engine/preflight.js';
 import { PROVIDERS, providerInfo, type ProviderId } from '../engine/providers.js';
 import { fetchModelIds } from './modelList.js';
 import { confirm, promptSecret, promptText } from './prompts.js';
@@ -35,10 +35,15 @@ export async function runProviderWizard(
     if (await confirm('Add a second key (a different account) to rotate onto under rate limits?')) {
       apiKey2 = await promptSecret(`Second ${info.label} API key: `);
     }
-  } else if (!defaultCredentialsResolver()) {
+  } else if (provider === 'claude' && !defaultCredentialsResolver()) {
     console.log(
       '  No Claude credentials detected yet (ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or a `claude` CLI ' +
         'login). `flow-code run` will need one of those before this works.',
+    );
+  } else if (provider === 'codex' && !defaultCodexCredentialsResolver()) {
+    console.log(
+      '  No Codex credentials detected yet (OPENAI_API_KEY, CODEX_API_KEY, or a `codex` CLI login). ' +
+        '`flow-code run` will need one of those before this works.',
     );
   }
 

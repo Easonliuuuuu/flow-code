@@ -55,7 +55,7 @@ node dist/cli.js run
 | Feature | Description |
 |---|---|
 | 📺 **Live Graph UI** | Watch `discuss → implement → test → validate → review → git-ops` light up in real-time. |
-| 🤖 **Multi-Provider Support** | Use Claude, OpenAI, NVIDIA NIM, or OpenRouter with per-node model overrides. |
+| 🤖 **Multi-Provider Support** | Use Claude, Codex, OpenAI, NVIDIA NIM, or OpenRouter with per-node model overrides. |
 | 🔄 **Self-Healing Loops** | Failing `test` or `validate` nodes automatically route back upstream to auto-fix issues. |
 | 🌳 **Safe Git Worktrees** | Parallel agent nodes run inside isolated git worktrees to prevent code conflicts. |
 | 🚀 **Headless & CI Ready** | Zero interactive prompts in CI — seamless credential fallback via environment variables. |
@@ -70,10 +70,13 @@ node dist/cli.js run
 
 Skip the wizard by setting any standard API key:
 
-* **Claude**: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
+* **Claude**: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (falls back to a `claude` CLI login)
+* **Codex**: `OPENAI_API_KEY` or `CODEX_API_KEY` (falls back to a `codex` CLI login)
 * **OpenAI**: `OPENAI_API_KEY`
 * **NVIDIA NIM**: `NVIDIA_API_KEY`
 * **OpenRouter**: `OPENROUTER_API_KEY`
+
+Claude and Codex both authenticate through their own CLI/subscription login when no key is set — consuming a ChatGPT/Claude subscription's usage rather than metered API billing. OpenAI, NVIDIA NIM, and OpenRouter are always metered against the key provided.
 
 ---
 
