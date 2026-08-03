@@ -120,6 +120,48 @@ function missingPresetSkills(preset: WorkflowPreset, repoRoot: string): string[]
   ];
 }
 
+export interface ScaffoldResult {
+  justScaffolded: boolean;
+  overwrote: boolean;
+}
+
+/**
+ * Writes the preset's workflow.yaml when the repo has none yet, or when the
+ * caller explicitly named `--preset` on an already-scaffolded repo and
+ * `confirmOverwrite` approves replacing it. A bare `init` re-run (no
+ * `--preset`) never overwrites — that's most often just "reconfigure the
+ * provider," and this repo's workflow.yaml may carry manual edits.
+ * `confirmOverwrite` is only invoked when there's actually a decision to
+ * make, so a caller that always answers "no" never sees a prompt on a fresh
+ * repo.
+ */
+export async function scaffoldWorkflow(
+  repoRoot: string,
+  path: string,
+  preset: WorkflowPreset,
+  presetExplicit: boolean,
+  confirmOverwrite: () => Promise<boolean>,
+): Promise<ScaffoldResult> {
+  const alreadyScaffolded = existsSync(path);
+  let overwrite = false;
+  if (alreadyScaffolded && presetExplicit) {
+    console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists.`);
+    overwrite = await confirmOverwrite();
+  }
+  const justScaffolded = !alreadyScaffolded || overwrite;
+  if (justScaffolded) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, preset.yaml);
+    ensureGitExclude(repoRoot);
+    console.log(`flow-code: ${overwrite ? 'overwrote' : 'created'} ${WORKFLOW_RELATIVE_PATH}`);
+    console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
+    for (const line of missingPresetSkills(preset, repoRoot)) console.log(line);
+  } else {
+    console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
+  }
+  return { justScaffolded, overwrote: overwrite };
+}
+
 async function cmdInit(args: string[]): Promise<void> {
   const presetIdx = args.indexOf('--preset');
   const presetName = presetIdx >= 0 ? args[presetIdx + 1] : undefined;
@@ -134,17 +176,9 @@ async function cmdInit(args: string[]): Promise<void> {
 
   const repoRoot = await repoRootFromCwd();
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
-  const justScaffolded = !existsSync(path);
-  if (justScaffolded) {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, preset.yaml);
-    ensureGitExclude(repoRoot);
-    console.log(`flow-code: created ${WORKFLOW_RELATIVE_PATH}`);
-    console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
-    for (const line of missingPresetSkills(preset, repoRoot)) console.log(line);
-  } else {
-    console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
-  }
+  const { justScaffolded } = await scaffoldWorkflow(repoRoot, path, preset, presetIdx >= 0, () =>
+    confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`),
+  );
 
   // Provider setup comes before the test-command step: when the heuristics
   // find nothing, that step falls back to a read-only agent session, which
