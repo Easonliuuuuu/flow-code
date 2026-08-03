@@ -23,6 +23,12 @@ export interface WorkflowPreset {
     command: string;
     /** How to install it; shown to the user and run on confirmation. */
     install: { command: string; args: string[] };
+    /**
+     * Command that scaffolds `requiredSkills` into the current project (e.g.
+     * `openspec init`), offered when the CLI is available but the skills
+     * still aren't. The repo root is appended as the final argument.
+     */
+    scaffoldSkills?: { command: string; args: string[] };
   };
 }
 
@@ -191,7 +197,11 @@ const PRESETS: WorkflowPreset[] = [
     summary: 'explore → propose → apply → test → validate → gate → archive',
     yaml: OPENSPEC_YAML,
     requiredSkills: ['openspec-explore', 'openspec-propose', 'openspec-apply-change', 'openspec-archive-change'],
-    cli: { command: 'openspec', install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] } },
+    cli: {
+      command: 'openspec',
+      install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] },
+      scaffoldSkills: { command: 'openspec', args: ['init', '--tools', 'claude'] },
+    },
   },
   {
     name: 'spec-kit',
