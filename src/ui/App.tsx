@@ -138,6 +138,9 @@ export function App({
   const [expanded, setExpanded] = useState(false);
   const [offset, setOffset] = useState({ ox: 0, oy: 0 });
   const [overrides, setOverrides] = useState<PositionOverrides>(new Map());
+  // null = follow the auto rule (compact once the graph outgrows the canvas);
+  // a boolean is the user overruling it with `z`.
+  const [compactOverride, setCompactOverride] = useState<boolean | null>(null);
   const [inputBuffer, setInputBuffer] = useState('');
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
@@ -230,7 +233,18 @@ export function App({
   const panelHeight = activeRect.h;
   const canvasWidth = columns - 2;
 
-  const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+  // Full cards first, then compact ones if they don't fit: the decision is
+  // made from the full layout's height so it can't oscillate (compacting
+  // never makes the graph taller, so a graph that fits compact and triggered
+  // the switch stays switched).
+  const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+  const compactLayout = useMemo(
+    () => computeLayout(workflow, overrides, { compact: true }),
+    [workflow, overrides],
+  );
+  const autoCompact = fullLayout.height > canvasHeight;
+  const compact = compactOverride ?? autoCompact;
+  const layout = compact ? compactLayout : fullLayout;
   const viewport = { ...offset, width: canvasWidth, height: canvasHeight };
   // Panning is clamped so it can never leave the graph off-screen entirely,
   // and goes through one helper so the keyboard and the scroll wheel agree.
@@ -769,6 +783,8 @@ export function App({
       if (focusedNode) openModelPicker(focusedNode.id);
     } else if (input === 's') {
       if (focusedNode) openSkillPicker(focusedNode.id);
+    } else if (input === 'z') {
+      setCompactOverride(!compact);
     } else if (key.leftArrow) {
       panBy(-PAN_STEP_X, 0);
     } else if (key.rightArrow) {
@@ -1197,7 +1213,8 @@ export function App({
         </Box>
       ) : (
         <Text dimColor>
-          tab: focus · enter: details · ←→↑↓ (⇧ anywhere): pan · q: quit
+          tab: focus · enter: details · ←→↑↓ (⇧ anywhere): pan · z:{' '}
+          {compact ? 'full cards' : 'compact'} · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
         </Text>
       )}

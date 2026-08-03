@@ -1,8 +1,9 @@
 import type { ActivityEntry, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import type { Layout, Viewport } from './layout.js';
+import { BOX_HEIGHT, type Layout, type Viewport } from './layout.js';
 import { nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
+import { fitText as fit } from './textwrap.js';
 
 export interface Cell {
   ch: string;
@@ -194,13 +195,16 @@ export function renderGraph(
     const focused = node.id === focusedId;
     const style = focused ? 'focus' : STATUS_STYLES[state.status];
     const inner = box.w - 2;
+    // A card too short for the type/subtitle/metrics rows is a compact card:
+    // border, title, border. See COMPACT_BOX_HEIGHT.
+    const compact = box.h < BOX_HEIGHT;
 
     put(grid, box.x, box.y, `╭${'─'.repeat(inner)}╮`, style);
     // A running node's glyph animates, so a stalled node is visibly distinct
     // from a working one without reading anything else on the card.
     const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
     const blocked = state.denials > 0 ? ' !' : '';
-    const title = ` ${glyph} ${node.id}${blocked}`.slice(0, inner).padEnd(inner);
+    const title = fit(` ${glyph} ${node.id}${blocked}`, inner).padEnd(inner);
     put(grid, box.x, box.y + 1, '│', style);
     put(grid, box.x + 1, box.y + 1, title, style);
     if (state.denials > 0) {
@@ -208,7 +212,31 @@ export function renderGraph(
       put(grid, bangAt, box.y + 1, '!', 'blocked');
     }
     put(grid, box.x + box.w - 1, box.y + 1, '│', style);
-    const typeLabel = ` ${node.type.displayName}`.slice(0, inner).padEnd(inner);
+
+    if (compact) {
+      // The rows that carried tokens and elapsed time are gone, so the
+      // metrics ride on the right of the title row instead — a compact graph
+      // still has to show which node is burning the run's budget.
+      // Tokens and the clock if both fit, tokens alone if they don't — an
+      // elided `↑1.2k ↓340 · …` would spend the row saying nothing.
+      const room = inner - title.trimEnd().length - 1;
+      const text = [nodeMetrics(state, anim.now), nodeMetrics(state, anim.now, { clock: false })].find(
+        (m) => m.length > 0 && m.length <= room,
+      );
+      if (text) {
+        put(
+          grid,
+          box.x + box.w - 1 - text.length,
+          box.y + 1,
+          text,
+          state.status === 'running' ? 'meter' : 'dim',
+        );
+      }
+      put(grid, box.x, box.y + box.h - 1, `╰${'─'.repeat(inner)}╯`, style);
+      continue;
+    }
+
+    const typeLabel = fit(` ${node.type.displayName}`, inner).padEnd(inner);
     put(grid, box.x, box.y + 2, '│', style);
     put(grid, box.x + 1, box.y + 2, typeLabel, focused ? 'focus' : 'dim');
     // Only a node a loop-back has re-run carries a retry badge; a first
@@ -220,24 +248,24 @@ export function renderGraph(
     const modelBadge = nodeModelBadge(workflow, node.id);
     const skillBadge = nodeSkillBadge(workflow, node.id);
     if (attempt > 1) {
-      const badge = `↻${attempt}`.slice(0, inner);
+      const badge = fit(`↻${attempt}`, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
     } else if (modelBadge) {
-      const badge = modelBadge.slice(0, inner);
+      const badge = fit(modelBadge, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'dim');
     } else if (skillBadge) {
-      const badge = skillBadge.slice(0, inner);
+      const badge = fit(skillBadge, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'skill-badge');
     }
     put(grid, box.x + box.w - 1, box.y + 2, '│', style);
 
     // Subtitle: what the node is doing / produced / will do. Never the type
     // name again — that's the row above.
-    const subtitle = nodeSubtitle(node, state, activityByNode.get(node.id) ?? [], anim.frame);
+    const subtitle = nodeSubtitle(node, state, activityByNode.get(node.id) ?? [], anim.frame, inner - 1);
     const subtitleStyle =
       state.status === 'error' ? 'red' : state.status === 'running' ? 'label' : 'dim';
     put(grid, box.x, box.y + 3, '│', style);
-    put(grid, box.x + 1, box.y + 3, ` ${subtitle}`.slice(0, inner).padEnd(inner), focused ? 'focus' : subtitleStyle);
+    put(grid, box.x + 1, box.y + 3, fit(` ${subtitle}`, inner).padEnd(inner), focused ? 'focus' : subtitleStyle);
     put(grid, box.x + box.w - 1, box.y + 3, '│', style);
 
     // Metrics: tokens burned and time spent, live while running.
@@ -247,7 +275,7 @@ export function renderGraph(
       grid,
       box.x + 1,
       box.y + 4,
-      ` ${metrics}`.slice(0, inner).padEnd(inner),
+      fit(` ${metrics}`, inner).padEnd(inner),
       state.status === 'running' ? 'meter' : 'dim',
     );
     put(grid, box.x + box.w - 1, box.y + 4, '│', style);

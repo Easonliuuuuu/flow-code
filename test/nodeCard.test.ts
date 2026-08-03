@@ -140,6 +140,29 @@ describe('nodeSubtitle', () => {
       'boom',
     );
   });
+
+  it('elides to the width the card actually has, marking the cut', () => {
+    const detail = 'node token budget exhausted: 12000 tokens spent of 10000 allowed';
+    const narrow = nodeSubtitle(node('impl'), state({ status: 'error', statusDetail: detail }), [], 0, 20);
+    expect(narrow.length).toBeLessThanOrEqual(20);
+    expect(narrow.endsWith('…')).toBe(true);
+    // A wider card is given the whole line rather than the old fixed 44.
+    expect(nodeSubtitle(node('impl'), state({ status: 'error', statusDetail: detail }), [], 0, 80)).toBe(
+      detail,
+    );
+  });
+
+  it('keeps the tool name of a running node and elides its argument, not the reverse', () => {
+    const subtitle = nodeSubtitle(
+      node('impl'),
+      state({ status: 'running' }),
+      [{ ts: '', nodeId: 'impl', tool: 'Edit', summary: 'src/ui/some/deeply/nested/file.ts', decision: 'allowed' }],
+      0,
+      20,
+    );
+    expect(subtitle.startsWith('Edit ')).toBe(true);
+    expect(subtitle.endsWith('…')).toBe(true);
+  });
 });
 
 describe('nodeMetrics', () => {

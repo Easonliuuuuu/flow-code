@@ -7,8 +7,10 @@ import { defaultSkillRoots } from '../src/skills/discover.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
 import {
   clampOffset,
+  COMPACT_BOX_HEIGHT,
   computeLayout,
   hitTest,
+  MAX_BOX_CONTENT,
   offscreenCounts,
   scrollIntoView,
 } from '../src/ui/layout.js';
@@ -90,6 +92,36 @@ describe('graph auto-layout', () => {
     expect(rev.x).toBeGreaterThanOrEqual(ox);
     expect(rev.x + rev.w).toBeLessThanOrEqual(ox + 30);
     expect(rev.y + rev.h).toBeLessThanOrEqual(oy + 8);
+  });
+
+  it('widens a box to fit the summary it will draw, up to a ceiling', () => {
+    const wf = workflowFromYaml(`
+nodes:
+  - id: spec
+    type: spec
+    config:
+      acceptanceCriteria: ["a", "b", "c"]
+  - id: verbose
+    type: implement
+    config:
+      instructions: ${'x'.repeat(200)}
+`);
+    const layout = computeLayout(wf);
+    // "3 acceptance criteria (given)" used to be cut to "3 acceptance criteri".
+    const spec = layout.boxes.get('spec')!;
+    expect(spec.w - 2).toBeGreaterThanOrEqual('3 acceptance criteria (given)'.length + 1);
+    // One long-winded node can't stretch its layer off the screen.
+    expect(layout.boxes.get('verbose')!.w - 2).toBe(MAX_BOX_CONTENT);
+  });
+
+  it('compact layout keeps the columns and shortens every card', () => {
+    const full = computeLayout(WF);
+    const compact = computeLayout(WF, undefined, { compact: true });
+    expect(compact.boxes.get('impl')!.h).toBe(COMPACT_BOX_HEIGHT);
+    expect(compact.height).toBeLessThan(full.height);
+    // Widths and columns are unchanged — only the vertical footprint shrinks.
+    expect(compact.width).toBe(full.width);
+    expect(compact.boxes.get('rev')!.x).toBe(full.boxes.get('rev')!.x);
   });
 
   it('clampOffset stops panning at the far edge of the graph', () => {
@@ -208,6 +240,44 @@ describe('canvas rendering', () => {
     store.setStatus('impl', 'done');
     store.setOutput('impl', { changedFiles: ['a.ts', 'b.ts'], diff: '' });
     expect(text()).toContain('2 files changed');
+  });
+
+  it('draws a compact card as title plus metrics, with no rows past the border', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'running');
+    store.addTokens('impl', { input: 1_200, output: 340, cached: 0 });
+    const layout = computeLayout(WF, undefined, { compact: true });
+    const started = Date.parse(store.snapshot().nodes['impl']!.startedAt!);
+    const lines = gridToLines(
+      renderGraph(WF, layout, store.snapshot(), null, { frame: 0, now: started + 5_000 }),
+      { ox: 0, oy: 0, width: layout.width + 2, height: layout.height + 1 },
+    ).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    const text = lines.join('\n');
+
+    expect(text).toContain('impl');
+    // Tokens move onto the title row, since the metrics row is gone — the
+    // clock is dropped rather than eliding both into uselessness.
+    expect(lines.find((l) => l.includes('impl'))).toContain('↑1.2k ↓340');
+    // The type name and subtitle rows aren't drawn at all.
+    expect(text).not.toContain('Implement');
+    // Three rows per card, and every one of them closed by a border.
+    expect(layout.boxes.get('impl')!.h).toBe(3);
+    expect(lines[2]!.startsWith('╰')).toBe(true);
+  });
+
+  it('marks an elided card line with an ellipsis rather than cutting it dead', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'error', 'node token budget exhausted: 12000 tokens spent of 10000 allowed');
+    const layout = computeLayout(WF);
+    const text = gridToLines(renderGraph(WF, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+    expect(text).toContain('node token budget ex…');
   });
 
   it('shows a blocked-action indicator on nodes with denials', () => {
