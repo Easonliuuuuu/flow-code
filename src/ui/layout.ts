@@ -115,6 +115,51 @@ export function scrollIntoView(box: NodeBox, viewport: Viewport): { ox: number; 
   return { ox: Math.max(0, ox), oy: Math.max(0, oy) };
 }
 
+/**
+ * Hold the viewport over the graph. Panning is otherwise unbounded in the
+ * positive direction, and a canvas panned into empty space gives no clue
+ * which way the graph went — the offsets stop one screen short of the far
+ * edge so there is always something drawn.
+ */
+export function clampOffset(
+  layout: Layout,
+  viewport: { ox: number; oy: number; width: number; height: number },
+): { ox: number; oy: number } {
+  const maxOx = Math.max(0, layout.width - viewport.width);
+  const maxOy = Math.max(0, layout.height - viewport.height);
+  return {
+    ox: Math.min(Math.max(0, viewport.ox), maxOx),
+    oy: Math.min(Math.max(0, viewport.oy), maxOy),
+  };
+}
+
+/** Boxes lying outside the viewport, per direction — for the header's hints. */
+export interface OffscreenCounts {
+  left: number;
+  right: number;
+  up: number;
+  down: number;
+}
+
+/**
+ * How many nodes sit off each edge of the viewport. Counted per box rather
+ * than derived from the layout bounds so the hint says "3 more that way"
+ * instead of merely "there is more canvas".
+ */
+export function offscreenCounts(
+  layout: Layout,
+  viewport: { ox: number; oy: number; width: number; height: number },
+): OffscreenCounts {
+  const counts: OffscreenCounts = { left: 0, right: 0, up: 0, down: 0 };
+  for (const box of layout.boxes.values()) {
+    if (box.x + box.w <= viewport.ox) counts.left++;
+    else if (box.x >= viewport.ox + viewport.width) counts.right++;
+    if (box.y + box.h <= viewport.oy) counts.up++;
+    else if (box.y >= viewport.oy + viewport.height) counts.down++;
+  }
+  return counts;
+}
+
 export function hitTest(layout: Layout, x: number, y: number): string | null {
   for (const box of layout.boxes.values()) {
     if (x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h) return box.id;

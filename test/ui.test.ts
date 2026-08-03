@@ -5,7 +5,13 @@ import { join } from 'node:path';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { defaultSkillRoots } from '../src/skills/discover.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
-import { computeLayout, hitTest, scrollIntoView } from '../src/ui/layout.js';
+import {
+  clampOffset,
+  computeLayout,
+  hitTest,
+  offscreenCounts,
+  scrollIntoView,
+} from '../src/ui/layout.js';
 import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import {
   applyPanelMove,
@@ -84,6 +90,44 @@ describe('graph auto-layout', () => {
     expect(rev.x).toBeGreaterThanOrEqual(ox);
     expect(rev.x + rev.w).toBeLessThanOrEqual(ox + 30);
     expect(rev.y + rev.h).toBeLessThanOrEqual(oy + 8);
+  });
+
+  it('clampOffset stops panning at the far edge of the graph', () => {
+    const layout = computeLayout(WF);
+    const viewport = { width: 30, height: 8 };
+    const far = clampOffset(layout, { ox: 9999, oy: 9999, ...viewport });
+    expect(far.ox).toBe(layout.width - 30);
+    expect(far.oy).toBe(layout.height - 8);
+    expect(clampOffset(layout, { ox: -5, oy: -5, ...viewport })).toEqual({ ox: 0, oy: 0 });
+  });
+
+  it('clampOffset pins a graph smaller than its viewport to the origin', () => {
+    const layout = computeLayout(WF);
+    expect(clampOffset(layout, { ox: 20, oy: 20, width: 500, height: 200 })).toEqual({
+      ox: 0,
+      oy: 0,
+    });
+  });
+
+  it('offscreenCounts counts the nodes outside the viewport per direction', () => {
+    const layout = computeLayout(WF);
+    // Narrow enough to hold only the first layer: impl is visible, the two
+    // nodes that depend on it are off to the right.
+    const narrow = offscreenCounts(layout, { ox: 0, oy: 0, width: 26, height: 50 });
+    expect(narrow.right).toBe(2);
+    expect(narrow.left).toBe(0);
+
+    // Short enough to hold only the top row of the second layer.
+    const short = offscreenCounts(layout, { ox: 0, oy: 0, width: 500, height: 6 });
+    expect(short.down).toBe(1);
+    expect(short.up).toBe(0);
+
+    expect(offscreenCounts(layout, { ox: 0, oy: 0, width: 500, height: 200 })).toEqual({
+      left: 0,
+      right: 0,
+      up: 0,
+      down: 0,
+    });
   });
 
   it('hitTest maps canvas coordinates to node ids', () => {
