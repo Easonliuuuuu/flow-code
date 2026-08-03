@@ -1,7 +1,7 @@
 import type { ActivityEntry, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import { BOX_HEIGHT, type Layout, type Viewport } from './layout.js';
+import { BOX_HEIGHT, MINI_BOX_HEIGHT, type Layout, type Viewport } from './layout.js';
 import { nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
 import { fitText as fit } from './textwrap.js';
 
@@ -139,9 +139,10 @@ export function renderGraph(
     const from = layout.boxes.get(edge.from)!;
     const to = layout.boxes.get(edge.to)!;
     const sx = from.x + from.w;
-    const sy = from.y + 1;
+    // The title row for a full/compact card, or its only row for a mini one.
+    const sy = from.y + Math.min(1, from.h - 1);
     const tx = to.x - 1;
-    const ty = to.y + 1;
+    const ty = to.y + Math.min(1, to.h - 1);
     const mid = sx + Math.max(1, Math.floor((tx - sx) / 2));
     for (let x = sx; x < mid; x++) put(grid, x, sy, '─', 'edge');
     if (sy !== ty) {
@@ -195,9 +196,17 @@ export function renderGraph(
     const focused = node.id === focusedId;
     const style = focused ? 'focus' : STATUS_STYLES[state.status];
     const inner = box.w - 2;
+    // A single borderless row: status glyph + id, nothing else. See MINI_BOX_HEIGHT.
+    const mini = box.h <= MINI_BOX_HEIGHT;
     // A card too short for the type/subtitle/metrics rows is a compact card:
     // border, title, border. See COMPACT_BOX_HEIGHT.
-    const compact = box.h < BOX_HEIGHT;
+    const compact = !mini && box.h < BOX_HEIGHT;
+
+    if (mini) {
+      const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
+      put(grid, box.x, box.y, fit(`${glyph} ${node.id}`, box.w).padEnd(box.w), style);
+      continue;
+    }
 
     put(grid, box.x, box.y, `╭${'─'.repeat(inner)}╮`, style);
     // A running node's glyph animates, so a stalled node is visibly distinct

@@ -5,8 +5,23 @@ import { plannedSummary } from './nodeCard.js';
 export const BOX_HEIGHT = 6;
 /** Border, title (with metrics inline), border — the compact card. */
 export const COMPACT_BOX_HEIGHT = 3;
+/** A single borderless row: status glyph + id — the overview-mode card. */
+export const MINI_BOX_HEIGHT = 1;
 export const GAP_X = 5;
 export const GAP_Y = 1;
+
+/** Mini-card width bounds — much narrower than a full/compact card's, since it holds no subtitle or metrics. */
+export const MINI_MIN_BOX_CONTENT = 6;
+export const MINI_MAX_BOX_CONTENT = 16;
+
+/**
+ * Where a hard-centered focused box lands in Focus mode: left-of-center
+ * horizontally, so more of the downstream (rightward) graph stays visible —
+ * the way editors keep the cursor left-of-center rather than dead-center —
+ * and a couple of rows down from the top.
+ */
+export const FOCUS_ANCHOR_X_FRACTION = 0.3;
+export const FOCUS_ANCHOR_Y_ROWS = 2;
 
 /**
  * Boxes are sized for their content rows, not just their title: the subtitle
@@ -48,7 +63,12 @@ export type PositionOverrides = Map<string, { dx: number; dy: number }>;
  * boxes — and so reflow the whole graph — every time a running agent
  * reported a different tool call.
  */
-function boxWidth(node: Workflow['nodes'][number]): number {
+function boxWidth(node: Workflow['nodes'][number], density: 'full' | 'compact' | 'mini' = 'full'): number {
+  if (density === 'mini') {
+    // No border, no denial bang, no summary — just "glyph id".
+    const content = Math.max(node.id.length + 2, MINI_MIN_BOX_CONTENT);
+    return Math.min(content, MINI_MAX_BOX_CONTENT);
+  }
   // +4 on the title row leaves room for the status glyph and the denial bang.
   const content = Math.max(
     node.id.length + 4,
@@ -62,11 +82,11 @@ function boxWidth(node: Workflow['nodes'][number]): number {
 
 export interface LayoutOptions {
   /**
-   * Collapse every card to title-only. Uniform rather than per-node so the
-   * graph doesn't reflow as focus moves; the full detail of one node is a
-   * keypress away in the detail panel.
+   * Card density. Uniform rather than per-node so the graph doesn't reflow
+   * as focus moves; the full detail of one node is a keypress away in the
+   * detail panel. Defaults to 'full'.
    */
-  compact?: boolean;
+  density?: 'full' | 'compact' | 'mini';
 }
 
 /**
@@ -79,7 +99,8 @@ export function computeLayout(
   overrides?: PositionOverrides,
   options: LayoutOptions = {},
 ): Layout {
-  const boxHeight = options.compact ? COMPACT_BOX_HEIGHT : BOX_HEIGHT;
+  const boxHeight =
+    options.density === 'mini' ? MINI_BOX_HEIGHT : options.density === 'compact' ? COMPACT_BOX_HEIGHT : BOX_HEIGHT;
   const layerOf = new Map<string, number>();
   for (const id of workflow.order) {
     const deps = workflow.graph.directDependencies(id);
@@ -96,7 +117,7 @@ export function computeLayout(
 
   const widths = new Map<string, number>();
   for (const node of workflow.nodes) {
-    widths.set(node.id, boxWidth(node));
+    widths.set(node.id, boxWidth(node, options.density ?? 'full'));
   }
 
   const boxes = new Map<string, NodeBox>();
@@ -152,6 +173,19 @@ export function scrollIntoView(box: NodeBox, viewport: Viewport): { ox: number; 
   if (box.y < oy) oy = box.y;
   if (box.y + box.h > oy + viewport.height) oy = box.y + box.h - viewport.height;
   return { ox: Math.max(0, ox), oy: Math.max(0, oy) };
+}
+
+/**
+ * Focus-mode centering: unlike scrollIntoView's minimal nudge, this always
+ * repositions the viewport so the focused box lands at a fixed anchor point.
+ * Deliberately unclamped — the caller composes this with clampOffset (see
+ * panBy) so a box near the graph's edge still just stops at the edge.
+ */
+export function centerOnBox(box: NodeBox, viewport: { width: number; height: number }): { ox: number; oy: number } {
+  return {
+    ox: box.x - Math.round(viewport.width * FOCUS_ANCHOR_X_FRACTION),
+    oy: box.y - FOCUS_ANCHOR_Y_ROWS,
+  };
 }
 
 /**

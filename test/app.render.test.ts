@@ -133,6 +133,63 @@ describe('App node-detail panel rendering', () => {
   });
 });
 
+const CANVAS_WF = workflowFromYaml(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: test
+    config: { commands: ["true"] }
+  - id: rev
+    type: review
+edges:
+  - { from: impl, to: check }
+  - { from: impl, to: rev }
+`);
+
+describe('App view-mode toggle', () => {
+  it('o switches to overview (denser, borderless cards) and back to focus', async () => {
+    const store = storeFor(CANVAS_WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: CANVAS_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      const focusFrame = lastFrameLines(stdout).join('\n');
+      expect(focusFrame).not.toContain(' · overview');
+      expect(focusFrame).toMatch(/[╭╰]/);
+
+      stdin.write('o');
+      await settle();
+      const overviewFrame = lastFrameLines(stdout).join('\n');
+      // A node further down the graph is still visible, and the header says
+      // which mode is active now.
+      expect(overviewFrame).toContain('rev');
+      expect(overviewFrame).toContain(' · overview');
+      // Denser: no card borders anywhere in the frame.
+      expect(overviewFrame).not.toMatch(/[╭╰]/);
+
+      stdin.write('o');
+      await settle();
+      const backFrame = lastFrameLines(stdout).join('\n');
+      expect(backFrame).not.toContain(' · overview');
+      expect(backFrame).toMatch(/[╭╰]/);
+    } finally {
+      instance.unmount();
+    }
+  });
+});
+
 describe('App discuss panel rendering', () => {
   it('shows the message the user submits, and the reply that follows', async () => {
     const { ports, stdout, stdin, unmount } = mountDiscussApp();
