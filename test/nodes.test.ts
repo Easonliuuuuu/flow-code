@@ -68,6 +68,51 @@ nodes:
     expect(activity.every((e) => e.decision === 'allowed' && e.exitStatus === 0)).toBe(true);
   });
 
+  it('rediscovers its commands under `commands: auto`, then runs them', async () => {
+    const repo = makeTempGitRepo();
+    const sessions = fakeSessions(() =>
+      JSON.stringify({ commands: [{ command: 'echo discovered', rationale: 'a package script' }] }),
+    );
+    const { store } = await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: auto
+`,
+      repo,
+      { sessions },
+    );
+
+    expect(store.node('t').status).toBe('done');
+    const output = store.node('t').output as TestOutput;
+    expect(output.commands.map((c) => c.command)).toEqual(['echo discovered']);
+    expect(output.commands[0]!.output).toContain('discovered');
+    // Exactly one session, and it asked for nothing but read access.
+    expect(sessions.requests).toHaveLength(1);
+    expect([...sessions.requests[0]!.capabilities]).toEqual(['read']);
+  });
+
+  it('errors under `commands: auto` when no command can be determined', async () => {
+    const repo = makeTempGitRepo();
+    const { store } = await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands: auto
+`,
+      repo,
+      { sessions: fakeSessions(() => '{"commands": []}') },
+    );
+
+    expect(store.node('t').status).toBe('error');
+    expect(store.node('t').statusDetail).toContain('no test command');
+    expect((store.node('t').output as TestOutput).passed).toBe(false);
+  });
+
   it('errors on a failing command, identifying it and its exit status, and skips downstream', async () => {
     const repo = makeTempGitRepo();
     const { store } = await runReal(

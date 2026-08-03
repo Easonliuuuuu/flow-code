@@ -108,6 +108,11 @@ export interface NodeRunState {
   discussTranscript?: DiscussTranscriptEntry[];
   /** Underlying agent session id, so `--resume` can continue it with full context. */
   sessionId?: string;
+  /**
+   * Ids of the skills this node ran with, so its behavior can be attributed to
+   * the instructions it was actually given rather than to its node type alone.
+   */
+  skills?: string[];
 }
 
 export interface RunState {

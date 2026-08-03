@@ -76,6 +76,8 @@ export declare class RunStateStore {
     liveOutputFor(nodeId: string): string;
     appendDiscussMessage(nodeId: string, entry: DiscussTranscriptEntry): void;
     setSessionId(nodeId: string, sessionId: string): void;
+    /** Record which skills a node ran with; idempotent across re-attempts. */
+    setSkills(nodeId: string, skills: string[]): void;
     /** Tokens one node has consumed so far, across every attempt. */
     tokensFor(nodeId: string): number;
     /** Tokens the whole run has consumed so far. */

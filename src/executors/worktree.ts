@@ -10,7 +10,7 @@ import {
   removeWorktree,
 } from '../git/ops.js';
 import type { WorktreeAgentConfig } from '../registry/index.js';
-import { nodeModel, truncateText, upstreamPreamble } from './helpers.js';
+import { nodeModel, rolePromptFor, truncateText, upstreamPreamble } from './helpers.js';
 
 interface InstanceResult {
   instanceId: string;
@@ -90,7 +90,7 @@ export const executeWorktreeAgent: NodeExecutor = async function* (ctx) {
           nodeId: ctx.node.id,
           instanceId,
           capabilities: capabilitySet(...(ctx.node.type.capabilities as Capability[])),
-          rolePrompt: ctx.node.type.rolePrompt,
+          rolePrompt: rolePromptFor(ctx),
           prompt,
           workingDir: dir,
           ...(model !== undefined ? { model } : {}),

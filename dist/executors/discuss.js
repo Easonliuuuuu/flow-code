@@ -1,6 +1,6 @@
 import { capabilitySet } from '../capabilities.js';
 import { discussOutput } from '../registry/index.js';
-import { extractJson, nodeModel, upstreamPreamble } from './helpers.js';
+import { nodeModel, parseNodeOutput, rolePromptFor, upstreamPreamble } from './helpers.js';
 /**
  * Interactive sub-panel flow: the node holds at `waiting` until the user
  * explicitly signals completion (the port resolves null). The engine starts
@@ -18,7 +18,7 @@ export const executeDiscuss = async function* (ctx) {
         const session = await ctx.sessions.openInteractive({
             nodeId: ctx.node.id,
             capabilities: capabilitySet(...ctx.node.type.capabilities),
-            rolePrompt: ctx.node.type.rolePrompt,
+            rolePrompt: rolePromptFor(ctx),
             prompt: '',
             workingDir: ctx.workingDir,
             ...(nodeModel(ctx, config.model) !== undefined
@@ -53,7 +53,7 @@ export const executeDiscuss = async function* (ctx) {
             '{"conclusion": "<what should be done>", "constraints": ["<agreed constraint>", …]}');
         await session.end();
         ctx.ports.discuss.end(ctx.node.id);
-        const parsed = discussOutput.parse(extractJson(conclusionText));
+        const parsed = parseNodeOutput(ctx, discussOutput, conclusionText);
         yield { type: 'result', output: parsed };
         yield { type: 'status', status: 'done' };
     }

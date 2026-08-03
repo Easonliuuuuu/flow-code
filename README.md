@@ -26,7 +26,7 @@ node dist/cli.js init   # scaffold .flow-code/workflow.yaml and pick a provider/
 node dist/cli.js run    # run the workflow graph
 ```
 
-Once installed globally or linked (`npm link`), the same commands are available as `flow-code init` / `flow-code run`. Run `flow-code help` for the full command list (`init`, `run`, `node-types`, `doctor`).
+Once installed globally or linked (`npm link`), the same commands are available as `flow-code init` / `flow-code run`. Run `flow-code help` for the full command list (`init`, `run`, `node-types`, `skills`, `doctor`).
 
 ## Why flow-code
 
@@ -40,7 +40,7 @@ Once installed globally or linked (`npm link`), the same commands are available 
 
 ## Test command setup
 
-Right after scaffolding `.flow-code/workflow.yaml`, `flow-code init` looks for how this project runs its tests — `package.json` scripts, a `Makefile` target, `pytest`/`go test`/`cargo test` markers — and offers each one it finds for you to accept or skip:
+After scaffolding `.flow-code/workflow.yaml` and picking a provider, `flow-code init` looks for how this project runs its tests — `package.json` scripts, a `Makefile` target, `pytest`/`go test`/`cargo test` markers — and offers each one it finds for you to accept or skip:
 
 ```
 flow-code: created .flow-code/workflow.yaml
@@ -55,7 +55,41 @@ flow-code: set up the command(s) the Test node runs.
 flow-code: saved 2 test commands to .flow-code/workflow.yaml.
 ```
 
-Nothing detected (a brand-new project with no tests yet) just skips straight through, leaving the scaffolded placeholder (`echo "replace me with your project's test command"`) in place — a harmless no-op until you're ready to fill it in, by hand or by re-running `flow-code init`. Multiple commands run in order in the Test node; the first failing one stops it, so unit/integration/e2e levels can each be their own entry.
+Multiple commands run in order in the Test node; the first failing one stops it, so unit/integration/e2e levels can each be their own entry.
+
+Those heuristics are deliberately simple, and they miss real projects — monorepos, `tox.ini`, a suite that only exists in `.github/workflows/`. When they find nothing, or you decline everything they found, `init` offers to work it out by reading the repo:
+
+```
+  No test command detected by inspection.
+  Have flow-code read the repo and work out the test command(s)? [Y/n]
+  Reading the repository…
+  Proposed 2 test commands:
+    tox.ini declares a py311 env
+  Include `tox -e py311`? [Y/n]
+    .github/workflows/ci.yml runs the e2e suite separately
+  Include `pytest tests/e2e`? [Y/n]
+```
+
+That session gets the `read` capability and nothing else, so it can inspect the repo but cannot edit a file or run a command — including the ones it proposes. Nothing is executed to check it, and nothing reaches your workflow file without an explicit yes. This matters more than it might look: the Test node runs its commands through `sh -c` **outside** the capability harness, so a command string there is not sandboxed by anything. A human sees every one before it is frozen into the file.
+
+If no provider is configured yet, the fallback is skipped with a note rather than failing `init`. Nothing detected and nothing proposed just leaves the scaffolded placeholder (`echo "replace me with your project's test command"`) in place — a harmless no-op until you're ready to fill it in, by hand or by re-running `flow-code init`.
+
+### Why the Test node never picks its own commands at run time
+
+Discovery happens once, in `init`, and is written into `workflow.yaml`. Execution stays a dumb command runner: no agent, no session slot, no tokens, and the same commands for every run of the same file.
+
+That split is load-bearing. The Test node is the only step in the graph whose verdict is not a model's opinion — Validate and Review are judgements, Test is `exit 0`. The default graph loops back from Test to Implement on failure, so a Test node that re-derived its own commands each run would turn the retry loop into: the suite fails → loop back → the same agent now also chooses which commands count as "the suite", with three attempts to find an easier one. The thing being graded would be picking its own exam.
+
+You can opt out with `commands: auto`, which rediscovers the commands at the start of each execution:
+
+```yaml
+  - id: test
+    type: test
+    config:
+      commands: auto   # trades the deterministic verdict for convenience
+```
+
+flow-code refuses to load a workflow that combines `auto` with a loop-back able to re-run that node — that one combination is the closed loop above, and it is rejected before the run starts rather than debugged after it.
 
 ## Provider & model setup
 
@@ -123,6 +157,65 @@ A node running on something other than the project default carries a small badge
 ## Configuring a workflow
 
 Workflows are defined per-project in `.flow-code/workflow.yaml`. The full schema — node types, capabilities, edges, and run settings — is documented in [`openspec/specs/workflow-graph/spec.md`](openspec/specs/workflow-graph/spec.md), which is the source of truth for the config format.
+
+### Attaching skills to a node
+
+Every agent-driven node runs on its type's built-in role prompt. To give one your team's own instructions — how you review code, how you write a spec — attach a **skill**: a directory with a `SKILL.md`, the same format Claude Code uses.
+
+```yaml
+  - id: review
+    type: review
+    config:
+      skills: [house-review]          # discovered by name
+  - id: implement
+    type: implement
+    config:
+      instructions: Build what the spec requires.
+      skills: [team:standards, ./skills/migrations]   # a plugin skill, and a path
+```
+
+Skills are discovered from three roots, in this precedence:
+
+| root | addressed as | travels with the repo |
+| --- | --- | --- |
+| `.claude/skills/` in this repo | `name` | yes |
+| `~/.claude/skills/` | `name` (shadowed by the project root) | no |
+| installed plugin marketplaces | `plugin:name` | no |
+
+A path entry (anything containing a `/`) is resolved relative to the repo root and skips discovery entirely. `flow-code skills` lists everything attachable and where each was found.
+
+Skills are read at **load time**, not when the node runs, so a name that resolves to nothing fails the whole workflow before anything starts, with the roots it searched. Because `workflow.yaml` is checked in but `~/.claude/skills/` is not, preflight warns when a node depends on a skill that will not exist on someone else's clone — a warning, not a refusal.
+
+Two things a skill deliberately cannot do:
+
+- **Widen what a node may touch.** The capability set comes from the node type alone and compiles into the same enforced tool policy either way. A skill that tells a Review node to run a linter gets a denial, logged on the node like any other.
+- **Change what a node must return.** The type's output-shape instruction is composed *after* the skill text, so output schemas, failure predicates, and loop-back routing behave exactly as they do without skills. A skill says how the work is done; the node type still says what comes back.
+
+Skills are composed by inlining `SKILL.md` into the system prompt, so they work identically on every provider. Bundled scripts are not executed, and skills that spawn subagents will not work — `Task`/`Agent` are denied for every node.
+
+### Which nodes can stop and ask you something
+
+There are three interaction modes, and they are structural rather than configurable:
+
+| mode | node types | stops for |
+| --- | --- | --- |
+| conversational | Discuss | open-ended dialogue |
+| decision | Approval-Gate | approve / reject a diff |
+| none | Spec, Implement, Test, Validate, Review, Git-ops, Worktree-Agent | nothing |
+
+A non-interactive node is given no channel to receive user input, so it cannot block waiting for one. If you want to intervene mid-implementation, insert an Approval-Gate after the node — don't reach for an interactive Implement, which would cost Implement its one-session, one-output contract.
+
+This matters when attaching skills: many skills are written for interactive use and end by asking a clarifying question. On a headless node that does not hang — it simply never produces the node's output, and the node fails with a message naming that cause, routable by any loop-back you already have. Put conversational skills on a Discuss node, which front-loads the questions so the headless nodes below it consume the answers.
+
+### Starting from a preset
+
+`flow-code init --preset openspec` scaffolds a graph built around the openspec workflow instead of the default one:
+
+```
+explore (discuss) → propose (spec) → apply (implement) → test → validate → gate → archive (git-ops)
+```
+
+Each agent-driven node carries the matching openspec skill. `explore` is the Discuss node — the only one that can ask you anything — so the questions land there and `propose` runs headless off what was agreed. If the preset's skills aren't installed, `init` still writes the file and tells you which are missing and where it looked.
 
 ### Iterating on failure
 

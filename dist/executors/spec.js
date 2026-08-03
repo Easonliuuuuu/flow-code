@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { capabilitySet } from '../capabilities.js';
-import { extractJson, nodeModel, upstreamPreamble } from './helpers.js';
+import { nodeModel, parseNodeOutput, rolePromptFor, upstreamPreamble } from './helpers.js';
 import { z } from 'zod';
 /** Where a run's spec lives, relative to the repository root. */
 export function specRelativePath(runId) {
@@ -79,7 +79,7 @@ export const executeSpec = async function* (ctx) {
             const result = await ctx.sessions.run({
                 nodeId: ctx.node.id,
                 capabilities: capabilitySet(...ctx.node.type.capabilities),
-                rolePrompt: ctx.node.type.rolePrompt,
+                rolePrompt: rolePromptFor(ctx),
                 prompt,
                 workingDir: ctx.workingDir,
                 ...(nodeModel(ctx, config.model) !== undefined
@@ -93,7 +93,7 @@ export const executeSpec = async function* (ctx) {
         finally {
             release();
         }
-        const parsed = agentSpec.parse(extractJson(finalText));
+        const parsed = parseNodeOutput(ctx, agentSpec, finalText);
         title = config.title ?? parsed.title;
         // Fixed requirements stay first and stay verbatim; the agent's additions
         // follow. Config is the author's word and outranks the model's.

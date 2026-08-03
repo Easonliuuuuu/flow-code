@@ -20,6 +20,9 @@ import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
 import { runTestSetupWizard } from './init/testWizard.js';
 import { listNodeTypes } from './registry/index.js';
+import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
+import { formatSkillsListing, skillCompatibilityNotes } from './skills/report.js';
+import type { WorkflowPreset } from './presets.js';
 import {
   FileRunStatePersister,
   findInterruptedRun,
@@ -28,7 +31,7 @@ import {
 import { RunStateStore } from './runstate/store.js';
 import type { RunState } from './runstate/types.js';
 import { runUi, UiInteractionPorts } from './ui/index.js';
-import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
+import { DEFAULT_PRESET, getPreset, presetNames } from './presets.js';
 import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError, type Workflow } from './workflow/load.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from './worktrees/reconcile.js';
 
@@ -98,30 +101,54 @@ export function buildRunner(provider: ProviderId): SessionRunner {
   }
 }
 
-async function cmdInit(): Promise<void> {
+/**
+ * A preset references skills by name; whether they are installed is a property
+ * of the machine, not of the preset. Report what is missing and where it is
+ * expected rather than refusing to scaffold — the file is still the right
+ * starting point, and the run would fail with the same names anyway.
+ */
+function missingPresetSkills(preset: WorkflowPreset, repoRoot: string): string[] {
+  if (preset.requiredSkills.length === 0) return [];
+  const roots = defaultSkillRoots(repoRoot);
+  const available = new Set(discoverSkills(roots).map((s) => s.id));
+  const missing = preset.requiredSkills.filter((name) => !available.has(name));
+  if (missing.length === 0) return [];
+  return [
+    `  Warning: ${missing.length} skill(s) this preset uses are not installed: ${missing.join(', ')}`,
+    `    Expected in ${roots.project}, ${roots.user}, or an installed plugin.`,
+    '    Install them, or edit the `skills:` entries in the scaffolded file.',
+  ];
+}
+
+async function cmdInit(args: string[]): Promise<void> {
+  const presetIdx = args.indexOf('--preset');
+  const presetName = presetIdx >= 0 ? args[presetIdx + 1] : undefined;
+  // An unknown preset fails before anything is written: a half-scaffolded repo
+  // is worse than no scaffold at all.
+  if (presetIdx >= 0 && (!presetName || !getPreset(presetName))) {
+    fail(
+      `unknown preset \`${presetName ?? ''}\` — available: ${presetNames().join(', ')}`,
+    );
+  }
+  const preset = presetName ? getPreset(presetName)! : DEFAULT_PRESET;
+
   const repoRoot = await repoRootFromCwd();
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
   const justScaffolded = !existsSync(path);
   if (justScaffolded) {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, DEFAULT_WORKFLOW_YAML);
+    writeFileSync(path, preset.yaml);
     ensureGitExclude(repoRoot);
     console.log(`flow-code: created ${WORKFLOW_RELATIVE_PATH}`);
-    console.log('  Default graph: discuss → implement → test → validate → review → gate → git-ops');
+    console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
+    for (const line of missingPresetSkills(preset, repoRoot)) console.log(line);
   } else {
     console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
   }
 
-  if (justScaffolded) {
-    if (process.stdin.isTTY) {
-      await runTestSetupWizard(repoRoot, path);
-    } else {
-      console.log(
-        '  No TTY detected — leaving the placeholder test command in .flow-code/workflow.yaml; edit it directly, or re-run `flow-code init` from an interactive terminal.',
-      );
-    }
-  }
-
+  // Provider setup comes before the test-command step: when the heuristics
+  // find nothing, that step falls back to a read-only agent session, which
+  // needs a configured provider to exist.
   const existing = loadCredentials(repoRoot);
   let runWizard = !existing;
   if (existing) {
@@ -131,28 +158,39 @@ async function cmdInit(): Promise<void> {
     runWizard = await confirm('  Reconfigure the provider/model?');
   }
 
-  if (!runWizard) {
-    console.log('  Start a run with: flow-code run');
-    // Explicit rather than relying on the event loop draining naturally: see
-    // the comment atop prompts.ts on why these two don't mix reliably.
-    process.exit(0);
+  let configured = existing;
+  if (runWizard) {
+    if (!process.stdin.isTTY) {
+      console.log('flow-code: no TTY detected — skipping interactive provider setup.');
+      console.log(
+        '  Set ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
+      );
+      process.exit(0);
+    }
+    const result = await runProviderWizard(repoRoot);
+    if (!result) {
+      console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
+      process.exit(0);
+    }
+    configured = result;
+    console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
   }
 
-  if (!process.stdin.isTTY) {
-    console.log('flow-code: no TTY detected — skipping interactive provider setup.');
-    console.log(
-      '  Set ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
-    );
-    process.exit(0);
+  if (justScaffolded) {
+    if (process.stdin.isTTY) {
+      await runTestSetupWizard(repoRoot, path, {
+        ...(configured ? { sessions: buildRunner(configured.provider), model: configured.model } : {}),
+      });
+    } else {
+      console.log(
+        '  No TTY detected — leaving the placeholder test command in .flow-code/workflow.yaml; edit it directly, or re-run `flow-code init` from an interactive terminal.',
+      );
+    }
   }
 
-  const result = await runProviderWizard(repoRoot);
-  if (!result) {
-    console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
-    process.exit(0);
-  }
-  console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
   console.log('  Start a run with: flow-code run');
+  // Explicit rather than relying on the event loop draining naturally: see
+  // the comment atop prompts.ts on why these two don't mix reliably.
   process.exit(0);
 }
 
@@ -161,7 +199,10 @@ function cmdNodeTypes(): void {
     console.log(`${type.id}  (${type.displayName})`);
     console.log(`  ${type.description}`);
     console.log(`  capabilities: ${type.capabilities.length > 0 ? type.capabilities.join(', ') : '(none)'}`);
-    console.log(`  agent session: ${type.agentDriven ? 'yes' : 'no'}`);
+    console.log(
+      `  agent session: ${type.agentDriven ? 'yes' : 'no'}` +
+        (type.agentDriven ? ` · interactive: ${type.interactive ? 'yes' : 'no'}` : ''),
+    );
     console.log(`  config: ${type.configSummary}`);
     console.log(`  output: ${type.outputSummary}`);
     if (type.failsWhen) {
@@ -174,8 +215,22 @@ function cmdNodeTypes(): void {
   }
 }
 
+async function cmdSkills(): Promise<void> {
+  const repoRoot = await repoRootFromCwd();
+  const skills = discoverSkills(defaultSkillRoots(repoRoot));
+  for (const line of formatSkillsListing(skills, repoRoot)) console.log(line);
+}
+
 async function cmdDoctor(args: string[]): Promise<void> {
   const repoRoot = await repoRootFromCwd();
+
+  const compatibility = skillCompatibilityNotes(discoverSkills(defaultSkillRoots(repoRoot)));
+  if (compatibility.length > 0) {
+    console.log('flow-code: discovered skills declaring an external dependency:');
+    for (const note of compatibility) console.log(note);
+    console.log('');
+  }
+
   const orphans = findOrphanedWorktrees(repoRoot);
   if (orphans.length === 0) {
     console.log('flow-code: no orphaned worktrees.');
@@ -274,6 +329,7 @@ async function cmdRun(args: string[]): Promise<void> {
     await preflight(workflow, repoRoot, {
       allowDirty: allowDirty || resuming,
       ...(resolved ? { provider: resolved.provider } : {}),
+      onWarning: (message) => console.warn(`flow-code: ${message}`),
     });
   } catch (err) {
     if (err instanceof PreflightError) fail(err.message);
@@ -413,7 +469,8 @@ async function cmdRun(args: string[]): Promise<void> {
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
 
 Usage:
-  flow-code init              Scaffold .flow-code/workflow.yaml with the default graph, set up
+  flow-code init [--preset <name>]
+                              Scaffold .flow-code/workflow.yaml with the default graph, set up
                               its test command(s), and pick the provider/model for the project
                               (re-run any time — already-configured steps ask before redoing)
   flow-code run [--allow-dirty]
@@ -424,6 +481,7 @@ Usage:
                               and an interrupted Discuss conversation picks back up with
                               full history
   flow-code node-types        List built-in node types, capabilities, config and output shapes
+  flow-code skills            List skills attachable to a node, and where each was found
   flow-code doctor [--yes]    List/remove orphaned worktrees from crashed runs
 `;
 
@@ -431,11 +489,13 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'init':
-      return cmdInit();
+      return cmdInit(args);
     case 'run':
       return cmdRun(args);
     case 'node-types':
       return cmdNodeTypes();
+    case 'skills':
+      return cmdSkills();
     case 'doctor':
       return cmdDoctor(args);
     case undefined:

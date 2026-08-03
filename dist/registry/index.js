@@ -3,9 +3,17 @@ export { NODE_TYPE_IDS } from './types.js';
 // ---------------------------------------------------------------------------
 // Config schemas
 // ---------------------------------------------------------------------------
+/**
+ * Skills attached to an agent-driven node: identifiers from a discovery root,
+ * or repo-relative paths. Only agent-driven types carry this field — on a type
+ * with no session there is no prompt to compose into, so `strictObject`
+ * rejecting the key is the whole enforcement.
+ */
+const skillsField = z.array(z.string().min(1)).optional();
 const discussConfig = z.strictObject({
     topic: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    skills: skillsField,
 });
 /**
  * A Spec node either derives the spec from upstream context (no fields set,
@@ -18,21 +26,33 @@ const specConfig = z.strictObject({
     requirements: z.array(z.string().min(1)).optional(),
     acceptanceCriteria: z.array(z.string().min(1)).optional(),
     model: z.string().min(1).optional(),
+    skills: skillsField,
 });
 const implementConfig = z.strictObject({
     instructions: z.string().min(1),
     model: z.string().min(1).optional(),
+    skills: skillsField,
 });
+/**
+ * Either an explicit command list or `auto`. `auto` opts the node into
+ * rediscovering its commands at the start of each execution, trading the
+ * deterministic-verdict guarantee for convenience; the loader rejects it in
+ * combination with a loop-back that can re-run the node, which is the
+ * combination that lets a retry loop shop for an easier suite.
+ */
+export const TEST_COMMANDS_AUTO = 'auto';
 const testConfig = z.strictObject({
-    commands: z.array(z.string().min(1)).min(1),
+    commands: z.union([z.array(z.string().min(1)).min(1), z.literal(TEST_COMMANDS_AUTO)]),
 });
 const validateConfig = z.strictObject({
     instructions: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    skills: skillsField,
 });
 const reviewConfig = z.strictObject({
     instructions: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    skills: skillsField,
 });
 /**
  * Git-ops config: commit-only by default. Pushing is opt-in and requires an
@@ -42,6 +62,7 @@ const reviewConfig = z.strictObject({
 const gitOpsConfig = z.strictObject({
     commitMessage: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    skills: skillsField,
     push: z
         .strictObject({
         remote: z.string().min(1),
@@ -53,6 +74,7 @@ const worktreeAgentConfig = z.discriminatedUnion('mode', [
     z.strictObject({
         mode: z.literal('compare'),
         task: z.string().min(1),
+        skills: skillsField,
         instances: z
             .array(z.strictObject({
             id: z.string().min(1).optional(),
@@ -64,6 +86,7 @@ const worktreeAgentConfig = z.discriminatedUnion('mode', [
     z.strictObject({
         mode: z.literal('parallelize'),
         model: z.string().min(1).optional(),
+        skills: skillsField,
         instances: z
             .array(z.strictObject({
             id: z.string().min(1).optional(),
@@ -177,13 +200,14 @@ const definitions = [
         description: 'Interactive discussion with the user to settle intent and constraints.',
         capabilities: ['read'],
         agentDriven: true,
+        interactive: true,
         hasModelField: true,
         rolePrompt: 'You are the discussion partner at the start of a coding workflow. ' +
             'Help the user clarify what should be built and which constraints apply. ' +
             'You may read the repository to inform the discussion, but you must not change anything.',
         configSchema: discussConfig,
         outputSchema: discussOutput,
-        configSummary: 'topic? (string), model? (string)',
+        configSummary: 'topic? (string), model? (string), skills? (string[])',
         outputSummary: 'conclusion (string), constraints (string[])',
     },
     {
@@ -193,6 +217,7 @@ const definitions = [
             'The file is written by flow-code itself, not by an agent, and no node can edit it afterwards.',
         capabilities: ['read'],
         agentDriven: true,
+        interactive: false,
         hasModelField: true,
         rolePrompt: 'You are the specification step of a coding workflow. ' +
             'Turn the intent in your context into a short, concrete spec: what must be true when this change is done. ' +
@@ -201,7 +226,7 @@ const definitions = [
             'You may read the repository to ground the spec in what actually exists, but you must not change anything.',
         configSchema: specConfig,
         outputSchema: specOutput,
-        configSummary: 'title? (string), requirements? (string[]), acceptanceCriteria? (string[]), model? (string)',
+        configSummary: 'title? (string), requirements? (string[]), acceptanceCriteria? (string[]), model? (string), skills? (string[])',
         outputSummary: 'specPath (string), title (string), requirements (string[]), acceptanceCriteria ({id, text}[])',
     },
     {
@@ -210,6 +235,7 @@ const definitions = [
         description: 'Agent session that writes code for the configured task.',
         capabilities: ['read', 'edit', 'exec'],
         agentDriven: true,
+        interactive: false,
         hasModelField: true,
         rolePrompt: 'You are the implementation step of a coding workflow. ' +
             'Carry out the configured task by reading and editing files and running commands. ' +
@@ -220,7 +246,7 @@ const definitions = [
             'Do not perform any git operation that mutates history or remotes; a later, dedicated step handles git.',
         configSchema: implementConfig,
         outputSchema: implementOutput,
-        configSummary: 'instructions (string, required), model? (string)',
+        configSummary: 'instructions (string, required), model? (string), skills? (string[])',
         outputSummary: 'changedFiles (string[]), diff (string), summary? (string)',
     },
     {
@@ -230,11 +256,12 @@ const definitions = [
             'It runs tests; it never writes them (the Implement step does).',
         capabilities: ['read', 'exec'],
         agentDriven: false,
+        interactive: false,
         hasModelField: false,
         rolePrompt: '',
         configSchema: testConfig,
         outputSchema: testOutput,
-        configSummary: 'commands (string[], required, min 1)',
+        configSummary: "commands (string[] min 1, or 'auto' to rediscover each run)",
         outputSummary: 'passed (boolean), commands ({command, exitStatus, output}[])',
     },
     {
@@ -243,13 +270,14 @@ const definitions = [
         description: 'Agent-driven conformance check: does the work satisfy the task intent? Cannot edit, so it cannot fix its way to passing.',
         capabilities: ['read', 'exec'],
         agentDriven: true,
+        interactive: false,
         hasModelField: true,
         rolePrompt: 'You are the validation step of a coding workflow. ' +
             'Check whether the work done so far satisfies the task intent described in your context. ' +
             'You may read files and run read-only commands, but you cannot and must not modify anything — report what you find.',
         configSchema: validateConfig,
         outputSchema: validateOutput,
-        configSummary: 'instructions? (string), model? (string)',
+        configSummary: 'instructions? (string), model? (string), skills? (string[])',
         outputSummary: "verdict ('pass'|'fail'), notes (string), criteria ({id, met, evidence}[])",
         failsWhen: failsOnFailVerdict,
     },
@@ -259,13 +287,14 @@ const definitions = [
         description: 'Agent-driven quality critique: findings only, no edit, no exec.',
         capabilities: ['read'],
         agentDriven: true,
+        interactive: false,
         hasModelField: true,
         rolePrompt: 'You are the code review step of a coding workflow. ' +
             'Critique the pending changes for correctness, clarity, and risk. ' +
             'You can only read; you cannot edit files or run commands. Report findings with locations.',
         configSchema: reviewConfig,
         outputSchema: reviewOutput,
-        configSummary: 'instructions? (string), model? (string)',
+        configSummary: 'instructions? (string), model? (string), skills? (string[])',
         outputSummary: "verdict ('pass'|'fail'), findings ({location, description, severity?}[])",
         failsWhen: failsOnFailVerdict,
     },
@@ -275,6 +304,7 @@ const definitions = [
         description: 'Commits (and optionally pushes) what exists. Cannot edit files: it records changes, it does not author them.',
         capabilities: ['read', 'git-read', 'git-write'],
         agentDriven: true,
+        interactive: false,
         hasModelField: true,
         rolePrompt: 'You are the git operations step of a coding workflow. ' +
             'Commit the pending changes exactly as they exist, with a clear commit message. ' +
@@ -282,7 +312,7 @@ const definitions = [
             'You cannot edit files — only git commands are available to you.',
         configSchema: gitOpsConfig,
         outputSchema: gitOpsOutput,
-        configSummary: 'commitMessage? (string), push? ({remote, branch} — both required to push)',
+        configSummary: 'commitMessage? (string), push? ({remote, branch} — both required to push), skills? (string[])',
         outputSummary: 'committed (boolean), commit? (sha), pushed (boolean), remote?, branch?',
     },
     {
@@ -291,13 +321,14 @@ const definitions = [
         description: 'Fans out N agent instances, each in an isolated git worktree/branch; converges by user selection.',
         capabilities: ['read', 'edit', 'exec'],
         agentDriven: true,
+        interactive: false,
         hasModelField: false,
         rolePrompt: 'You are one of several parallel implementation agents, each working in an isolated git worktree. ' +
             'Carry out your assigned task within your own working directory. ' +
             'Do not perform any git operation that mutates history or remotes.',
         configSchema: worktreeAgentConfig,
         outputSchema: worktreeAgentOutput,
-        configSummary: "mode ('compare': task + instances[{instructions?, model?}] | 'parallelize': instances[{task}])",
+        configSummary: "mode ('compare': task + instances[{instructions?, model?}] | 'parallelize': instances[{task}]), skills? (string[])",
         outputSummary: 'mode, branches ({instanceId, branch, status, summary, diffSummary}[]), selected (string[]), convergedDir (string)',
     },
     {
@@ -306,6 +337,7 @@ const definitions = [
         description: 'No agent session: computes the pending diff against the run baseline and waits for explicit user approval.',
         capabilities: [],
         agentDriven: false,
+        interactive: false,
         hasModelField: false,
         rolePrompt: '',
         configSchema: approvalGateConfig,

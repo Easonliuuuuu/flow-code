@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
+import { skillPortabilityWarnings } from '../skills/report.js';
 import type { Workflow } from '../workflow/load.js';
 import { providerInfo, type ProviderId } from './providers.js';
 
@@ -36,6 +37,8 @@ export interface PreflightOptions {
   provider?: ProviderId;
   /** Injectable for tests. */
   credentialsResolver?: (provider: ProviderId) => boolean;
+  /** Non-fatal findings — currently skills that will not resolve elsewhere. */
+  onWarning?: (message: string) => void;
 }
 
 /**
@@ -48,6 +51,12 @@ export async function preflight(
   repoRoot: string,
   opts: PreflightOptions,
 ): Promise<void> {
+  // Reported before the credential check so the user sees every portability
+  // problem in one pass, rather than one per failed start.
+  if (opts.onWarning) {
+    for (const warning of skillPortabilityWarnings(workflow)) opts.onWarning(warning);
+  }
+
   const hasAgentNode = workflow.nodes.some((n) => n.type.agentDriven);
   if (hasAgentNode) {
     const provider = opts.provider ?? 'claude';

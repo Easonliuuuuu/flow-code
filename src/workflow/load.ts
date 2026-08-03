@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { getNodeType, type NodeTypeDefinition } from '../registry/index.js';
+import { getNodeType, TEST_COMMANDS_AUTO, type NodeTypeDefinition } from '../registry/index.js';
+import {
+  defaultSkillRoots,
+  discoverSkills,
+  resolveSkillEntry,
+  type DiscoveredSkill,
+  type SkillRoots,
+} from '../skills/discover.js';
 import { parseCondition } from './condition.js';
 import { Graph, GraphCycleError } from './graph.js';
 import {
@@ -19,6 +26,26 @@ export interface WorkflowNode {
   type: NodeTypeDefinition;
   /** Config validated against the type's schema (defaults applied). */
   config: unknown;
+  /**
+   * Skills named in `config.skills`, resolved at load time in declaration
+   * order. Resolution happens here, once, so an unresolvable skill is a
+   * validation error before the run starts rather than a failure raised when
+   * the node executes.
+   */
+  skills: DiscoveredSkill[];
+}
+
+export interface LoadOptions {
+  /** Anchors repo-relative skill paths and the project skill root. */
+  repoRoot?: string;
+  /** Overrides the discovery roots; tests point this at a fixture tree. */
+  skillRoots?: SkillRoots;
+}
+
+/** `skills` sits at the top level of every config shape that carries it. */
+function skillEntriesOf(config: unknown): string[] {
+  const entries = (config as { skills?: unknown } | null)?.skills;
+  return Array.isArray(entries) ? (entries as string[]) : [];
 }
 
 export interface Workflow {
@@ -44,7 +71,9 @@ function describeZodIssues(prefix: string, error: z.ZodError): string[] {
   });
 }
 
-export function loadWorkflowFromString(source: string): Workflow {
+export function loadWorkflowFromString(source: string, options: LoadOptions = {}): Workflow {
+  const repoRoot = options.repoRoot ?? process.cwd();
+  const skillRoots = options.skillRoots ?? defaultSkillRoots(repoRoot);
   let raw: unknown;
   try {
     raw = parseYaml(source);
@@ -104,7 +133,27 @@ export function loadWorkflowFromString(source: string): Workflow {
       );
       continue;
     }
-    nodes.push({ id: node.id, type, config: configResult.data });
+    nodes.push({ id: node.id, type, config: configResult.data, skills: [] });
+  }
+
+  // Skills resolve once, here. Discovery is done lazily and only when some node
+  // actually names a skill, so the common workflow scans no directories.
+  const entriesByNode = nodes.map((n) => ({ node: n, entries: skillEntriesOf(n.config) }));
+  if (entriesByNode.some(({ entries }) => entries.length > 0)) {
+    const discovered = discoverSkills(skillRoots);
+    for (const { node, entries } of entriesByNode) {
+      for (const entry of entries) {
+        const { skill, searched } = resolveSkillEntry(entry, skillRoots, repoRoot, discovered);
+        if (!skill) {
+          problems.push(
+            `node \`${node.id}\` (${node.type.id}) config at \`skills\`: no skill \`${entry}\` — searched:\n` +
+              searched.map((s) => `      ${s}`).join('\n'),
+          );
+          continue;
+        }
+        node.skills.push(skill);
+      }
+    }
   }
 
   // Edges must reference declared nodes.
@@ -168,6 +217,26 @@ export function loadWorkflowFromString(source: string): Workflow {
   }
   if (loopbackProblems.length > 0) throw new WorkflowValidationError(loopbackProblems);
 
+  // A Test node that rediscovers its own commands and can be re-run by a
+  // loop-back is a node that grades work with an exam it also chooses, and gets
+  // several attempts to choose an easier one. Reject the combination, not
+  // either half of it.
+  const autoProblems: string[] = [];
+  for (const node of nodes) {
+    if (node.type.id !== 'test') continue;
+    if ((node.config as { commands?: unknown }).commands !== TEST_COMMANDS_AUTO) continue;
+    for (const loop of graph.allLoopbacks()) {
+      if (!graph.nodesBetween(loop.to, loop.from).has(node.id)) continue;
+      autoProblems.push(
+        `node \`${node.id}\` (test): \`commands: ${TEST_COMMANDS_AUTO}\` cannot be combined with retry — ` +
+          `the loop-back ${loop.from} -> ${loop.to} re-runs this node, which would let it rediscover an easier ` +
+          `set of commands on each attempt. Use an explicit command list, or remove that loop-back.`,
+      );
+      break;
+    }
+  }
+  if (autoProblems.length > 0) throw new WorkflowValidationError(autoProblems);
+
   // A condition may only read a node whose output is guaranteed to exist by
   // the time the edge is evaluated: the edge's own source, or an ancestor of
   // it. Anything else is a race the graph cannot honour.
@@ -195,7 +264,7 @@ export function loadWorkflowFromString(source: string): Workflow {
   };
 }
 
-export function loadWorkflow(repoRoot: string): Workflow {
+export function loadWorkflow(repoRoot: string, options: LoadOptions = {}): Workflow {
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
   let source: string;
   try {
@@ -205,5 +274,5 @@ export function loadWorkflow(repoRoot: string): Workflow {
       `no workflow file found at ${path} — run \`flow-code init\` to scaffold one`,
     ]);
   }
-  return loadWorkflowFromString(source);
+  return loadWorkflowFromString(source, { repoRoot, ...options });
 }
