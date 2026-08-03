@@ -7,13 +7,14 @@ import { windowFor } from '../init/SelectList.js';
 import { defaultSkillRoots, discoverSkills } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import { setNodeModel, setNodeSkills, WorkflowWriteError } from '../workflow/write.js';
+import { setNodeBudgetTokens, setNodeConfigString, setNodeModel, setNodeSkills, WorkflowWriteError, } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
-import { computeLayout, hitTest, scrollIntoView } from './layout.js';
+import { clampOffset, computeLayout, hitTest, offscreenCounts, scrollIntoView, } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
 import { createModelListLoader } from './modelListLoader.js';
 import { applyPanelMove, applyPanelResize, dockedLayout, hitTestPanel, pinAfterScroll, MOVE_HANDLE, RESIZE_GRIP, tailWindow, } from './panel.js';
+import { editableFields, parseFieldValue } from './nodeEditor.js';
 import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
 import { wrapText } from './textwrap.js';
 /** The header line above the canvas, and the hint line below it when no panel is docked. */
@@ -21,6 +22,9 @@ const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
 /** Spinner/elapsed-clock cadence: fast enough to read as motion, slow enough not to churn frames. */
 const ANIMATION_INTERVAL_MS = 120;
+/** One keypress of pan: a few columns / rows, not a whole screen. */
+const PAN_STEP_X = 4;
+const PAN_STEP_Y = 2;
 function formatActivityRow(entry) {
     const time = entry.ts.slice(11, 19);
     const summary = entry.summary.length > 42 ? `${entry.summary.slice(0, 42)}…` : entry.summary;
@@ -57,9 +61,18 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const [expanded, setExpanded] = useState(false);
     const [offset, setOffset] = useState({ ox: 0, oy: 0 });
     const [overrides, setOverrides] = useState(new Map());
+    // null = follow the auto rule (compact once the graph outgrows the canvas);
+    // a boolean is the user overruling it with `z`.
+    const [compactOverride, setCompactOverride] = useState(null);
     const [inputBuffer, setInputBuffer] = useState('');
     const [convCursor, setConvCursor] = useState(0);
     const [convSelected, setConvSelected] = useState(new Set());
+    // Test-command prompt: which candidates are checked, which commands the
+    // user typed in themselves, and (when not null) the one being typed.
+    const [testCommandCursor, setTestCommandCursor] = useState(0);
+    const [testCommandSelected, setTestCommandSelected] = useState(new Set());
+    const [testCommandExtra, setTestCommandExtra] = useState([]);
+    const [testCommandInput, setTestCommandInput] = useState(null);
     const [diffScroll, setDiffScroll] = useState(0);
     // null = following the live tail; a number pins the transcript to that
     // absolute row so new messages don't disturb a mid-scroll read.
@@ -94,6 +107,12 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     // Skill picker: opened with `s` on the focused node (or a click on its
     // skill badge). Multi-select — space toggles, enter confirms — unlike the
     // model picker, which picks exactly one.
+    // Node settings editor: opened with `e` on the focused node. A list of
+    // typed-in fields, unlike the pickers, which choose from a known set.
+    const [editorOpen, setEditorOpen] = useState(false);
+    const [editorCursor, setEditorCursor] = useState(0);
+    // null = moving between fields; a string = typing into the current one.
+    const [editorBuffer, setEditorBuffer] = useState(null);
     const [skillPickerOpen, setSkillPickerOpen] = useState(false);
     const [skillPickerCursor, setSkillPickerCursor] = useState(0);
     const [skillPickerSelected, setSkillPickerSelected] = useState(new Set());
@@ -117,14 +136,42 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     const rows = stdout.rows ?? 30;
     const pendingApproval = ports.pendingApproval;
     const pendingConvergence = ports.pendingConvergence;
+    const pendingTestCommands = ports.pendingTestCommands;
+    /**
+     * Everything the panel can offer: offline heuristics first (free and
+     * usually right), then whatever the agent proposed if it was asked, then
+     * anything typed by hand. De-duplicated, since detection and the agent
+     * routinely land on the same command.
+     */
+    const testCommandCandidates = useMemo(() => {
+        if (!pendingTestCommands)
+            return [];
+        const seen = new Set();
+        const out = [];
+        const add = (command, note) => {
+            if (seen.has(command))
+                return;
+            seen.add(command);
+            out.push({ command, note });
+        };
+        for (const command of pendingTestCommands.req.detected)
+            add(command, 'detected');
+        for (const p of pendingTestCommands.proposals)
+            add(p.command, p.rationale);
+        for (const command of testCommandExtra)
+            add(command, 'typed');
+        return out;
+    }, [pendingTestCommands, pendingTestCommands?.proposals, testCommandExtra]);
     const discussState = ports.discussState;
     const discussActive = discussState?.active ?? false;
     const panelOpen = expanded ||
         pendingApproval !== null ||
         pendingConvergence !== null ||
+        pendingTestCommands !== null ||
         discussActive ||
         pickerOpen ||
-        skillPickerOpen;
+        skillPickerOpen ||
+        editorOpen;
     const floating = panelRect !== null;
     const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
     // A docked, open panel reserves flow space below the canvas; a floating one
@@ -136,7 +183,31 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         : Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
     const activeRect = floating ? panelRect : docked.rect;
     const panelHeight = activeRect.h;
-    const layout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+    const canvasWidth = columns - 2;
+    // Full cards first, then compact ones if they don't fit: the decision is
+    // made from the full layout's height so it can't oscillate (compacting
+    // never makes the graph taller, so a graph that fits compact and triggered
+    // the switch stays switched).
+    const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+    const compactLayout = useMemo(() => computeLayout(workflow, overrides, { compact: true }), [workflow, overrides]);
+    const autoCompact = fullLayout.height > canvasHeight;
+    const compact = compactOverride ?? autoCompact;
+    const layout = compact ? compactLayout : fullLayout;
+    const viewport = { ...offset, width: canvasWidth, height: canvasHeight };
+    // Panning is clamped so it can never leave the graph off-screen entirely,
+    // and goes through one helper so the keyboard and the scroll wheel agree.
+    const panBy = (dx, dy) => {
+        setOffset((o) => clampOffset(layout, { ox: o.ox + dx, oy: o.oy + dy, width: canvasWidth, height: canvasHeight }));
+    };
+    const offscreen = offscreenCounts(layout, viewport);
+    const offscreenHint = [
+        offscreen.left > 0 ? `←${offscreen.left}` : '',
+        offscreen.right > 0 ? `→${offscreen.right}` : '',
+        offscreen.up > 0 ? `↑${offscreen.up}` : '',
+        offscreen.down > 0 ? `↓${offscreen.down}` : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
     const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
     const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
     // Scanned once per repo root rather than per keystroke — the picker just
@@ -193,6 +264,56 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         setSkillPickerCursor(0);
         setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
         setSkillPickerOpen(true);
+    };
+    const editorFields = focusedNode ? editableFields(focusedNode) : [];
+    const editorField = editorFields[Math.min(editorCursor, editorFields.length - 1)];
+    const openEditor = () => {
+        setEditorCursor(0);
+        setEditorBuffer(null);
+        setEditorOpen(true);
+    };
+    /**
+     * Writes one edited field to disk and to the same in-memory `WorkflowNode`
+     * the engine reads at node-start time, so a node that hasn't run yet picks
+     * the change up without restarting the run — the pattern confirmModel and
+     * confirmSkills already use.
+     */
+    const commitEditorField = (nodeId, field, input) => {
+        const node = workflow.nodes.find((n) => n.id === nodeId);
+        if (!node)
+            return;
+        const parsed = parseFieldValue(field, input);
+        if (!parsed.ok) {
+            showPickerMessage(parsed.error);
+            return;
+        }
+        const path = join(runState.repoRoot, WORKFLOW_RELATIVE_PATH);
+        try {
+            if (parsed.kind === 'number')
+                setNodeBudgetTokens(path, nodeId, parsed.value);
+            else
+                setNodeConfigString(path, nodeId, field.key, parsed.value);
+        }
+        catch (err) {
+            showPickerMessage(err instanceof WorkflowWriteError ? err.message : `could not save ${field.label}: ${String(err)}`);
+            return;
+        }
+        if (parsed.kind === 'number') {
+            if (parsed.value === null)
+                delete node.budget;
+            else
+                node.budget = { ...node.budget, tokens: parsed.value };
+        }
+        else {
+            const config = { ...node.config };
+            if (parsed.value === null)
+                delete config[field.key];
+            else
+                config[field.key] = parsed.value;
+            node.config = config;
+        }
+        setModelTick((t) => t + 1);
+        setEditorBuffer(null);
     };
     /**
      * Writes `model` to the node's config on disk and, so the current run
@@ -262,8 +383,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         const box = layout.boxes.get(focusedId);
         if (!box)
             return;
-        setOffset((prev) => scrollIntoView(box, { ...prev, width: columns - 2, height: canvasHeight }));
-    }, [focusedId, layout, columns, canvasHeight]);
+        setOffset((prev) => scrollIntoView(box, { ...prev, width: canvasWidth, height: canvasHeight }));
+    }, [focusedId, layout, canvasWidth, canvasHeight]);
     // Auto-focus a gate when its approval request arrives.
     useEffect(() => {
         if (pendingApproval) {
@@ -330,6 +451,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         pendingApproval,
         columns,
         rows,
+        canvasWidth,
+        canvasHeight,
         openModelPicker,
         openSkillPicker,
     });
@@ -344,6 +467,8 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             pendingApproval,
             columns,
             rows,
+            canvasWidth,
+            canvasHeight,
             openModelPicker,
             openSkillPicker,
         };
@@ -361,7 +486,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
         const onData = (data) => {
             const events = parseMouseEvents(data.toString());
             for (const event of events) {
-                const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows, openModelPicker, openSkillPicker, } = mouseStateRef.current;
+                const { layout, offset, activeRect, panelOpen, discussActive, pendingApproval, columns, rows, canvasWidth, canvasHeight, openModelPicker, openSkillPicker, } = mouseStateRef.current;
                 const overPanel = panelOpen &&
                     event.x >= activeRect.x &&
                     event.x < activeRect.x + activeRect.w &&
@@ -436,9 +561,11 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                         setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
                     }
                     else {
-                        setOffset((o) => ({
-                            ...o,
-                            oy: event.direction === 'down' ? o.oy + 2 : Math.max(0, o.oy - 2),
+                        setOffset((o) => clampOffset(layout, {
+                            ox: o.ox,
+                            oy: o.oy + (event.direction === 'down' ? PAN_STEP_Y : -PAN_STEP_Y),
+                            width: canvasWidth,
+                            height: canvasHeight,
                         }));
                     }
                 }
@@ -472,6 +599,22 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             setPanelRect(null);
             return;
         }
+        // Panning the canvas works in every mode, including while Discuss or a
+        // picker holds the keyboard — those return unconditionally below, and a
+        // graph you cannot scroll while the panel that covers it is open is a
+        // graph you cannot read. Shift-modified so it never collides with typed
+        // text or with a picker's own arrow-key cursor.
+        if (key.shift && (key.leftArrow || key.rightArrow || key.upArrow || key.downArrow)) {
+            if (key.leftArrow)
+                panBy(-PAN_STEP_X, 0);
+            else if (key.rightArrow)
+                panBy(PAN_STEP_X, 0);
+            else if (key.upArrow)
+                panBy(0, -PAN_STEP_Y);
+            else
+                panBy(0, PAN_STEP_Y);
+            return;
+        }
         // Discussion input mode captures the keyboard.
         if (discussActive && discussState) {
             if (key.pageUp) {
@@ -498,6 +641,71 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             }
             if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
                 setInputBuffer((b) => b + input);
+            }
+            return;
+        }
+        // Test commands: a Test node reached execution still holding the
+        // scaffolded placeholder and is asking what it should actually run.
+        if (pendingTestCommands) {
+            const { resolve } = pendingTestCommands;
+            if (testCommandInput !== null) {
+                if (key.escape) {
+                    setTestCommandInput(null);
+                }
+                else if (key.return) {
+                    const command = testCommandInput.trim();
+                    if (command.length > 0) {
+                        setTestCommandExtra((prev) => [...prev, command]);
+                        setTestCommandSelected((prev) => new Set([...prev, command]));
+                    }
+                    setTestCommandInput(null);
+                }
+                else if (key.backspace || key.delete) {
+                    setTestCommandInput((b) => (b ?? '').slice(0, -1));
+                }
+                else if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+                    setTestCommandInput((b) => (b ?? '') + input);
+                }
+                return;
+            }
+            if (key.escape) {
+                // Skipping is a real answer — a project with no test suite yet.
+                resolve(null);
+                return;
+            }
+            if (key.return) {
+                resolve(testCommandCandidates.filter((c) => testCommandSelected.has(c.command)).map((c) => c.command));
+                return;
+            }
+            if (input === 'a') {
+                setTestCommandInput('');
+                return;
+            }
+            if (input === 'd') {
+                // Reading the repo costs a session, so it happens only when asked.
+                void ports.discoverTestCommands();
+                return;
+            }
+            if (testCommandCandidates.length === 0)
+                return;
+            if (key.upArrow || input === 'k') {
+                setTestCommandCursor((c) => (c + testCommandCandidates.length - 1) % testCommandCandidates.length);
+            }
+            else if (key.downArrow || input === 'j') {
+                setTestCommandCursor((c) => (c + 1) % testCommandCandidates.length);
+            }
+            else if (input === ' ') {
+                const command = testCommandCandidates[testCommandCursor]?.command;
+                if (command !== undefined) {
+                    setTestCommandSelected((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(command))
+                            next.delete(command);
+                        else
+                            next.add(command);
+                        return next;
+                    });
+                }
             }
             return;
         }
@@ -585,6 +793,45 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             }
             return;
         }
+        // Node settings editor. Two modes: moving between fields, and typing into
+        // one. Enter switches between them — it opens the field under the cursor
+        // and, on the second press, saves it — so there is no separate "edit" key
+        // to learn and no way to be typing without seeing a cursor.
+        if (editorOpen && focusedNode && editorField) {
+            if (key.escape) {
+                // Escape backs out of the field being typed, then out of the panel:
+                // an abandoned edit shouldn't cost you the panel too.
+                if (editorBuffer !== null)
+                    setEditorBuffer(null);
+                else
+                    setEditorOpen(false);
+                return;
+            }
+            if (editorBuffer === null) {
+                if (key.upArrow || input === 'k') {
+                    setEditorCursor((c) => (c + editorFields.length - 1) % editorFields.length);
+                }
+                else if (key.downArrow || input === 'j') {
+                    setEditorCursor((c) => (c + 1) % editorFields.length);
+                }
+                else if (key.return) {
+                    setEditorBuffer(editorField.value);
+                }
+                return;
+            }
+            if (key.return) {
+                commitEditorField(focusedNode.id, editorField, editorBuffer);
+                return;
+            }
+            if (key.backspace || key.delete) {
+                setEditorBuffer((b) => (b ?? '').slice(0, -1));
+                return;
+            }
+            if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+                setEditorBuffer((b) => (b ?? '') + input);
+            }
+            return;
+        }
         // Skill picker: same reachable-only-via-`s` guarantee as the model picker
         // above. Multi-select, so enter confirms the whole set rather than one item.
         if (skillPickerOpen && focusedNode) {
@@ -636,17 +883,24 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             if (focusedNode)
                 openSkillPicker(focusedNode.id);
         }
+        else if (input === 'e') {
+            if (focusedNode)
+                openEditor();
+        }
+        else if (input === 'z') {
+            setCompactOverride(!compact);
+        }
         else if (key.leftArrow) {
-            setOffset((o) => ({ ...o, ox: Math.max(0, o.ox - 4) }));
+            panBy(-PAN_STEP_X, 0);
         }
         else if (key.rightArrow) {
-            setOffset((o) => ({ ...o, ox: o.ox + 4 }));
+            panBy(PAN_STEP_X, 0);
         }
         else if (key.upArrow) {
-            setOffset((o) => ({ ...o, oy: Math.max(0, o.oy - 2) }));
+            panBy(0, -PAN_STEP_Y);
         }
         else if (key.downArrow) {
-            setOffset((o) => ({ ...o, oy: o.oy + 2 }));
+            panBy(0, PAN_STEP_Y);
         }
         else if (input === 'q') {
             onExit();
@@ -660,7 +914,7 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
     // `workflow`'s own identity never changes for this memo to key off.
     // `frame` plays the same role for the animated parts of a node card.
     () => renderGraph(workflow, layout, runState, focusedId, { frame, now: Date.now() }), [workflow, layout, runState, focusedId, modelTick, frame]);
-    const canvasLines = useMemo(() => gridToLines(grid, { ...offset, width: columns - 2, height: canvasHeight }), [grid, offset, columns, canvasHeight]);
+    const canvasLines = useMemo(() => gridToLines(grid, { ...offset, width: canvasWidth, height: canvasHeight }), [grid, offset, canvasWidth, canvasHeight]);
     const statusCounts = Object.values(runState.nodes).reduce((acc, n) => ({ ...acc, [n.status]: (acc[n.status] ?? 0) + 1 }), {});
     const finished = runState.finishedAt !== undefined;
     const runTokens = totalTokens(runState.nodes);
@@ -684,9 +938,11 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
             }
             : { height: panelHeight }),
     };
-    return (_jsxs(Box, { flexDirection: "column", width: columns, height: rows, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, color: "cyan", children: "flow-code" }), _jsxs(Text, { dimColor: true, children: [" run ", runState.runId.slice(0, 8), " \u00B7 "] }), _jsx(Text, { children: headerParts.join('  ') }), runTokens > 0 ? (_jsxs(Text, { color: "cyan", children: [" \u00B7 ", formatTokens(runTokens), " tok"] })) : null, finished ? _jsx(Text, { color: "green", children: " \u00B7 finished \u2014 press q to exit" }) : null, floating ? _jsx(Text, { dimColor: true, children: " \u00B7 ctrl+p: dock panel" }) : null, pickerMessage ? _jsxs(Text, { color: "yellow", children: [" \u00B7 ", pickerMessage] }) : null] }), _jsx(Box, { flexDirection: "column", height: canvasHeight, children: canvasLines.map((line, i) => (_jsx(Text, { children: line || ' ' }, i))) }), discussActive && discussState ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Discussion \u2014 ", discussState.nodeId, discussState.topic ? `: ${discussState.topic}` : '', !discussWindow.following ? (_jsxs(Text, { dimColor: true, children: [' ', "(", discussWindow.start, " above", discussRows.length - discussWindow.end > 0
+    return (_jsxs(Box, { flexDirection: "column", width: columns, height: rows, children: [_jsxs(Text, { children: [_jsx(Text, { bold: true, color: "cyan", children: "flow-code" }), _jsxs(Text, { dimColor: true, children: [" run ", runState.runId.slice(0, 8), " \u00B7 "] }), _jsx(Text, { children: headerParts.join('  ') }), runTokens > 0 ? (_jsxs(Text, { color: "cyan", children: [" \u00B7 ", formatTokens(runTokens), " tok"] })) : null, finished ? _jsx(Text, { color: "green", children: " \u00B7 finished \u2014 press q to exit" }) : null, offscreenHint ? _jsxs(Text, { dimColor: true, children: [" \u00B7 ", offscreenHint, " off-screen (\u21E7+arrows)"] }) : null, floating ? _jsx(Text, { dimColor: true, children: " \u00B7 ctrl+p: dock panel" }) : null, pickerMessage ? _jsxs(Text, { color: "yellow", children: [" \u00B7 ", pickerMessage] }) : null] }), _jsx(Box, { flexDirection: "column", height: canvasHeight, children: canvasLines.map((line, i) => (_jsx(Text, { children: line || ' ' }, i))) }), discussActive && discussState ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Discussion \u2014 ", discussState.nodeId, discussState.topic ? `: ${discussState.topic}` : '', !discussWindow.following ? (_jsxs(Text, { dimColor: true, children: [' ', "(", discussWindow.start, " above", discussRows.length - discussWindow.end > 0
                                             ? `, ${discussRows.length - discussWindow.end} below`
-                                            : '', ")"] })) : null] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", overflow: "hidden", children: discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: row.color, children: row.prefix }), row.segments.map((segment, i) => (_jsx(Text, { ...segmentStyle(segment), children: segment.text }, i)))] }, row.key))) }), _jsx(Text, { wrap: "truncate-end", children: discussState.awaitingUser ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "cyan", children: '> ' }), inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth)), _jsx(Text, { inverse: true, children: " " })] })) : (_jsx(Text, { dimColor: true, children: "\u2026 agent is thinking" })) }), _jsx(PanelFooter, { hint: "enter: send \u00B7 /done: finish \u00B7 PgUp/PgDn: scroll \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingConvergence ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Convergence \u2014 ", pendingConvergence.req.nodeId, " (", pendingConvergence.req.mode, pendingConvergence.req.mode === 'compare'
+                                            : '', ")"] })) : null] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, justifyContent: "flex-end", overflow: "hidden", children: discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsx(Text, { color: row.color, children: row.prefix }), row.segments.map((segment, i) => (_jsx(Text, { ...segmentStyle(segment), children: segment.text }, i)))] }, row.key))) }), _jsx(Text, { wrap: "truncate-end", children: discussState.awaitingUser ? (_jsxs(_Fragment, { children: [_jsx(Text, { color: "cyan", children: '> ' }), inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth)), _jsx(Text, { inverse: true, children: " " })] })) : (_jsx(Text, { dimColor: true, children: "\u2026 agent is thinking" })) }), _jsx(PanelFooter, { hint: "enter: send \u00B7 /done: finish \u00B7 PgUp/PgDn: scroll \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingTestCommands ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Test commands \u2014 ", pendingTestCommands.req.nodeId] }) }), _jsxs(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: [_jsx(Text, { dimColor: true, wrap: "truncate-end", children: "This node has never been told what to run. Whatever you pick is saved to .flow-code/workflow.yaml." }), testCommandCandidates.length === 0 && !pendingTestCommands.discovering ? (_jsx(Text, { dimColor: true, wrap: "truncate-end", children: "nothing detected by inspection \u2014 `d` to have flow-code read the repo, `a` to type one" })) : null, testCommandCandidates.map((candidate, i) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsxs(Text, { ...(i === testCommandCursor ? { color: 'cyan' } : {}), children: [i === testCommandCursor ? '❯ ' : '  ', testCommandSelected.has(candidate.command) ? '[x] ' : '[ ] ', candidate.command, ' '] }), _jsx(Text, { dimColor: true, children: candidate.note })] }, candidate.command))), pendingTestCommands.discovering ? (_jsx(Text, { color: "cyan", wrap: "truncate-end", children: "reading the repository\u2026" })) : null, pendingTestCommands.discoverError ? (_jsxs(Text, { color: "red", wrap: "truncate-end", children: ["could not work it out: ", pendingTestCommands.discoverError] })) : null, testCommandInput !== null ? (_jsxs(Text, { wrap: "truncate-end", children: ["command: ", testCommandInput, "\u258C"] })) : null] }), _jsx(PanelFooter, { hint: testCommandInput !== null
+                            ? 'enter: add · esc: cancel'
+                            : '↑/↓: move · space: select · a: add · d: let flow-code find them · enter: confirm · esc: skip' })] })) : pendingConvergence ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Convergence \u2014 ", pendingConvergence.req.nodeId, " (", pendingConvergence.req.mode, pendingConvergence.req.mode === 'compare'
                                     ? ': pick exactly one'
                                     : ': pick one or more', ")"] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: pendingConvergence.req.branches.map((branch, i) => (_jsxs(Text, { wrap: "truncate-end", children: [_jsxs(Text, { ...(i === convCursor ? { color: 'cyan' } : {}), children: [i === convCursor ? '❯ ' : '  ', convSelected.has(branch.instanceId) ? '[x] ' : '[ ] ', branch.instanceId, " (", branch.branch, ") ", branch.status === 'done' ? '●' : '✖', ' '] }), _jsx(Text, { dimColor: true, children: branch.diffSummary.split('\n').at(-1) ?? '' })] }, branch.instanceId))) }), _jsx(PanelFooter, { hint: "\u2191/\u2193: move \u00B7 space: select \u00B7 enter: confirm \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] })) : pendingApproval ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Approval \u2014 ", pendingApproval.req.title] }) }), pendingApproval.req.pushTarget ? (_jsxs(Text, { color: "red", children: ["On approval, `", pendingApproval.req.pushTarget.nodeId, "` will push to", ' ', pendingApproval.req.pushTarget.remote, "/", pendingApproval.req.pushTarget.branch] })) : null, _jsxs(Text, { dimColor: true, children: ["upstream: ", pendingApproval.req.upstreamSummaries.map((u) => u.nodeId).join(', ') || '—'] }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: (() => {
                             const lines = pendingApproval.req.diffs.flatMap((d) => [
@@ -725,7 +981,18 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                                                     return (_jsxs(Text, { wrap: "truncate-end", ...(idx === skillPickerCursor ? { color: 'cyan', bold: true } : {}), children: [idx === skillPickerCursor ? '❯ ' : '  ', checked ? '[x] ' : '[ ] ', skill.id] }, skill.id));
                                                 }), end < skillCatalog.length ? (_jsxs(Text, { dimColor: true, children: [" \u2193 ", skillCatalog.length - end, " more below"] })) : null] }));
                                     })())] }));
-                        })() }), _jsx(PanelFooter, { hint: "\u2191/\u2193: move \u00B7 space: toggle \u00B7 enter: confirm \u00B7 esc: cancel" })] })) : expanded && focusedNode ? (_jsx(Box, { ...panelBoxProps, children: (() => {
+                        })() }), _jsx(PanelFooter, { hint: "\u2191/\u2193: move \u00B7 space: toggle \u00B7 enter: confirm \u00B7 esc: cancel" })] })) : editorOpen && focusedNode ? (_jsxs(Box, { ...panelBoxProps, children: [_jsx(PanelTitle, { children: _jsxs(Text, { bold: true, color: "yellow", wrap: "truncate-end", children: ["Settings \u2014 ", focusedNode.id, " (", focusedNode.type.displayName, ")"] }) }), _jsx(Box, { flexDirection: "column", flexGrow: 1, overflow: "hidden", children: (() => {
+                            const status = runState.nodes[focusedNode.id]?.status;
+                            const readOnly = status === 'running' || status === 'done';
+                            return (_jsxs(_Fragment, { children: [readOnly ? (_jsxs(Text, { color: "yellow", wrap: "truncate-end", children: [focusedNode.id, " is already ", status, " \u2014 a change here applies the next time it runs, not to ", status === 'running' ? 'the session in flight' : 'this attempt', "."] })) : null, editorFields.map((field, idx) => {
+                                        const active = idx === editorCursor;
+                                        const typing = active && editorBuffer !== null;
+                                        const shown = typing ? `${editorBuffer}▌` : field.value;
+                                        return (_jsxs(Text, { wrap: "truncate-end", ...(active ? { color: 'cyan', bold: true } : {}), children: [active ? '❯ ' : '  ', field.label, ": ", shown.length > 0 ? shown : _jsx(Text, { dimColor: true, children: field.placeholder })] }, field.key));
+                                    })] }));
+                        })() }), _jsx(PanelFooter, { hint: editorBuffer !== null
+                            ? 'type a value · empty clears it · enter: save · esc: cancel'
+                            : '↑/↓: move · enter: edit · m: model · s: skills · esc: close' })] })) : expanded && focusedNode ? (_jsx(Box, { ...panelBoxProps, children: (() => {
                     const state = runState.nodes[focusedNode.id];
                     const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
                     const live = store.liveOutputFor(focusedNode.id);
@@ -754,6 +1021,6 @@ export function App({ workflow, store, ports, onExit, onInterrupt, modelContext,
                                                 ? ` · elapsed ${formatDuration((state.endedAt ? Date.parse(state.endedAt) : Date.now()) -
                                                     Date.parse(state.startedAt))}`
                                                 : ''] })) : null, (state.priorAttempts?.length ?? 0) > 0 ? (_jsxs(Text, { color: "magenta", wrap: "truncate-end", children: ["attempt ", state.attempt ?? 1, " \u2014 earlier:", ' ', state.priorAttempts.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')] })) : null, tail(liveLines, outputBudget).map((line, i) => (_jsx(Text, { wrap: "truncate-end", children: line || ' ' }, `o${i}`))), activity.length > 0 ? _jsx(Text, { dimColor: true, children: "\u2500\u2500 activity \u2500\u2500" }) : null, tail(activity, activityBudget).map((entry, i) => (_jsx(Text, { wrap: "truncate-end", ...(entry.decision === 'denied' ? { color: 'red' } : {}), children: formatActivityRow(entry) }, `a${i}`)))] }), _jsx(PanelFooter, { hint: "enter: close \u00B7 tab: focus \u00B7 drag \u283F/edge: move \u00B7 \u21F2: resize" })] }));
-                })() })) : (_jsxs(Text, { dimColor: true, children: ["tab: focus \u00B7 enter: details \u00B7 \u2190\u2192\u2191\u2193: pan \u00B7 q: quit", focusedNode ? ` · focused: ${focusedNode.id}` : ''] }))] }));
+                })() })) : (_jsxs(Text, { dimColor: true, children: ["tab: focus \u00B7 enter: details \u00B7 e: settings \u00B7 \u2190\u2192\u2191\u2193 (\u21E7 anywhere): pan \u00B7 z:", ' ', compact ? 'full cards' : 'compact', " \u00B7 q: quit", focusedNode ? ` · focused: ${focusedNode.id}` : ''] }))] }));
 }
 //# sourceMappingURL=App.js.map

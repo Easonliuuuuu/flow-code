@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { discoverTestCommandsWithAgent } from '../init/testDiscoverAgent.js';
-import { TEST_COMMANDS_AUTO } from '../registry/index.js';
+import { join } from 'node:path';
+import { detectTestCommands } from '../init/testDetect.js';
+import { discoverTestCommandsWithAgent, } from '../init/testDiscoverAgent.js';
+import { PLACEHOLDER_TEST_COMMAND, TEST_COMMANDS_AUTO } from '../registry/index.js';
+import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
+import { setNodeTestCommands } from '../workflow/write.js';
 import { nodeModel } from './helpers.js';
 function runCommand(command, cwd, signal) {
     return new Promise((resolve) => {
@@ -36,17 +40,60 @@ async function commandsFor(ctx, config) {
         return config.commands;
     const release = await ctx.acquireSessionSlot();
     try {
-        const model = nodeModel(ctx, undefined);
-        const proposals = await discoverTestCommandsWithAgent({
-            repoRoot: ctx.workingDir,
-            sessions: ctx.sessions,
-            ...(model !== undefined ? { model } : {}),
-        });
+        const proposals = await discoverWithAgent(ctx);
         return proposals.map((p) => p.command);
     }
     finally {
         release();
     }
+}
+function discoverWithAgent(ctx) {
+    const model = nodeModel(ctx, undefined);
+    return discoverTestCommandsWithAgent({
+        repoRoot: ctx.workingDir,
+        sessions: ctx.sessions,
+        ...(model !== undefined ? { model } : {}),
+    });
+}
+/** True while this node still carries exactly the command `init` scaffolded. */
+function isPlaceholder(config) {
+    const { commands } = config;
+    return (Array.isArray(commands) && commands.length === 1 && commands[0] === PLACEHOLDER_TEST_COMMAND);
+}
+/**
+ * Ask the user what this node should run, the first time it actually reaches
+ * execution still holding the scaffolded placeholder.
+ *
+ * Deliberately here and not in `flow-code run`'s startup: asking before the
+ * run has begun means asking before the Discuss node has established what is
+ * being built, and from a console prompt that fights the terminal UI for the
+ * screen. By the time a Test node executes, the discussion has happened and
+ * the agent doing the looking has that context.
+ *
+ * The answer is written back to `workflow.yaml`, so this is asked once per
+ * project rather than once per run.
+ */
+async function resolvePlaceholder(ctx) {
+    const chosen = await ctx.ports.testCommands.request({
+        nodeId: ctx.node.id,
+        detected: detectTestCommands(ctx.repoRoot),
+        discover: async () => {
+            const release = await ctx.acquireSessionSlot();
+            try {
+                return await discoverWithAgent(ctx);
+            }
+            finally {
+                release();
+            }
+        },
+    });
+    if (chosen === null || chosen.length === 0)
+        return null;
+    // Persisted before running anything: a command good enough to run is good
+    // enough to keep, and a run interrupted mid-suite shouldn't ask again.
+    setNodeTestCommands(join(ctx.repoRoot, WORKFLOW_RELATIVE_PATH), ctx.node.id, chosen);
+    ctx.node.config = { ...ctx.node.config, commands: chosen };
+    return chosen;
 }
 /**
  * Deterministic command runner: no agent session, no API cost. Commands run
@@ -54,8 +101,22 @@ async function commandsFor(ctx, config) {
  */
 export const executeTest = async function* (ctx) {
     yield { type: 'status', status: 'running' };
-    const config = ctx.node.config;
+    let config = ctx.node.config;
     const results = [];
+    if (isPlaceholder(config)) {
+        yield { type: 'status', status: 'waiting', detail: 'no test command set yet' };
+        const resolved = await resolvePlaceholder(ctx);
+        if (resolved === null) {
+            // Not a failure: a project with no test command yet is a real project,
+            // and the alternative is failing every run until one exists.
+            yield { type: 'output', text: 'no test command configured — nothing to run\n' };
+            yield { type: 'result', output: { passed: true, commands: [] } };
+            yield { type: 'status', status: 'done', detail: 'no test command configured' };
+            return;
+        }
+        config = ctx.node.config;
+        yield { type: 'status', status: 'running' };
+    }
     const commands = await commandsFor(ctx, config);
     if (commands.length === 0 && config.commands === TEST_COMMANDS_AUTO) {
         yield { type: 'output', text: 'no test command could be determined for this project\n' };

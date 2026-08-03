@@ -1,5 +1,8 @@
+import { plannedSummary } from './nodeCard.js';
 /** Border, title, type/model, live subtitle, metrics, border — see renderGraph. */
 export const BOX_HEIGHT = 6;
+/** Border, title (with metrics inline), border — the compact card. */
+export const COMPACT_BOX_HEIGHT = 3;
 export const GAP_X = 5;
 export const GAP_Y = 1;
 /**
@@ -8,16 +11,34 @@ export const GAP_Y = 1;
  * id would truncate all of it away.
  */
 export const MIN_BOX_CONTENT = 22;
-function boxWidth(id, typeName) {
+/**
+ * Past this, a card stops being a card. A summary longer than this is elided
+ * on the box and read in full in the detail panel; the alternative is one
+ * verbose node stretching its whole layer and pushing everything downstream
+ * off the screen.
+ */
+export const MAX_BOX_CONTENT = 46;
+/**
+ * Wide enough for the text the card actually wants to show. The subtitle is
+ * measured from `plannedSummary`, which is a pure function of the node's
+ * config: a width derived from the *live* subtitle instead would resize
+ * boxes — and so reflow the whole graph — every time a running agent
+ * reported a different tool call.
+ */
+function boxWidth(node) {
     // +4 on the title row leaves room for the status glyph and the denial bang.
-    return Math.max(id.length + 4, typeName.length + 2, MIN_BOX_CONTENT) + 2;
+    const content = Math.max(node.id.length + 4, node.type.displayName.length + 2, 
+    // +1 for the leading space every content row is drawn with.
+    plannedSummary(node).length + 1, MIN_BOX_CONTENT);
+    return Math.min(content, MAX_BOX_CONTENT) + 2;
 }
 /**
  * Left-to-right auto-layout in dependency order: a node's layer is the
  * longest path from any root, so every node is drawn after all of its
  * dependencies.
  */
-export function computeLayout(workflow, overrides) {
+export function computeLayout(workflow, overrides, options = {}) {
+    const boxHeight = options.compact ? COMPACT_BOX_HEIGHT : BOX_HEIGHT;
     const layerOf = new Map();
     for (const id of workflow.order) {
         const deps = workflow.graph.directDependencies(id);
@@ -33,7 +54,7 @@ export function computeLayout(workflow, overrides) {
     }
     const widths = new Map();
     for (const node of workflow.nodes) {
-        widths.set(node.id, boxWidth(node.id, node.type.displayName));
+        widths.set(node.id, boxWidth(node));
     }
     const boxes = new Map();
     let x = 0;
@@ -45,9 +66,9 @@ export function computeLayout(workflow, overrides) {
             boxes.set(id, {
                 id,
                 x,
-                y: row * (BOX_HEIGHT + GAP_Y),
+                y: row * (boxHeight + GAP_Y),
                 w: widths.get(id),
-                h: BOX_HEIGHT,
+                h: boxHeight,
                 layer: l,
             });
         });
@@ -82,6 +103,39 @@ export function scrollIntoView(box, viewport) {
     if (box.y + box.h > oy + viewport.height)
         oy = box.y + box.h - viewport.height;
     return { ox: Math.max(0, ox), oy: Math.max(0, oy) };
+}
+/**
+ * Hold the viewport over the graph. Panning is otherwise unbounded in the
+ * positive direction, and a canvas panned into empty space gives no clue
+ * which way the graph went — the offsets stop one screen short of the far
+ * edge so there is always something drawn.
+ */
+export function clampOffset(layout, viewport) {
+    const maxOx = Math.max(0, layout.width - viewport.width);
+    const maxOy = Math.max(0, layout.height - viewport.height);
+    return {
+        ox: Math.min(Math.max(0, viewport.ox), maxOx),
+        oy: Math.min(Math.max(0, viewport.oy), maxOy),
+    };
+}
+/**
+ * How many nodes sit off each edge of the viewport. Counted per box rather
+ * than derived from the layout bounds so the hint says "3 more that way"
+ * instead of merely "there is more canvas".
+ */
+export function offscreenCounts(layout, viewport) {
+    const counts = { left: 0, right: 0, up: 0, down: 0 };
+    for (const box of layout.boxes.values()) {
+        if (box.x + box.w <= viewport.ox)
+            counts.left++;
+        else if (box.x >= viewport.ox + viewport.width)
+            counts.right++;
+        if (box.y + box.h <= viewport.oy)
+            counts.up++;
+        else if (box.y >= viewport.oy + viewport.height)
+            counts.down++;
+    }
+    return counts;
 }
 export function hitTest(layout, x, y) {
     for (const box of layout.boxes.values()) {

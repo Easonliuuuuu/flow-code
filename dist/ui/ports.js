@@ -8,6 +8,7 @@ export class UiInteractionPorts {
     signal;
     pendingApproval = null;
     pendingConvergence = null;
+    pendingTestCommands = null;
     /**
      * Replaced wholesale on every change (never mutated in place): the App
      * memoizes the rendered transcript on this object's identity, so an
@@ -77,6 +78,50 @@ export class UiInteractionPorts {
             });
         }),
     };
+    testCommands = {
+        request: (req) => new Promise((resolve, reject) => {
+            this.pendingTestCommands = {
+                req,
+                proposals: [],
+                discovering: false,
+                discoverError: null,
+                resolve: (commands) => {
+                    this.pendingTestCommands = null;
+                    this.notify();
+                    resolve(commands);
+                },
+            };
+            this.notify();
+            this.onInterrupt(reject, () => {
+                this.pendingTestCommands = null;
+            });
+        }),
+    };
+    /**
+     * Runs the request's agent discovery and folds the proposals into the
+     * pending request, so the panel can offer them alongside what the offline
+     * heuristics found. Called by the App, which owns the decision to spend a
+     * session on it; failures surface as `discoverError` rather than throwing
+     * into a keypress handler.
+     */
+    async discoverTestCommands() {
+        const pending = this.pendingTestCommands;
+        if (!pending || pending.discovering)
+            return;
+        pending.discovering = true;
+        pending.discoverError = null;
+        this.notify();
+        try {
+            pending.proposals = await pending.req.discover();
+        }
+        catch (err) {
+            pending.discoverError = err instanceof Error ? err.message : String(err);
+        }
+        finally {
+            pending.discovering = false;
+            this.notify();
+        }
+    }
     discuss = {
         begin: (nodeId, topic, seedTranscript = []) => {
             this.discussState = {

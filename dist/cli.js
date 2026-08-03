@@ -13,8 +13,7 @@ import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
 import { selectFromList } from './init/SelectList.js';
-import { runTestSetupWizard } from './init/testWizard.js';
-import { listNodeTypes, PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
+import { listNodeTypes } from './registry/index.js';
 import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
 import { formatSkillsListing, skillCompatibilityNotes } from './skills/report.js';
 import { FileRunStatePersister, findInterruptedRun, findLatestInterruptedRun, } from './runstate/persist.js';
@@ -190,14 +189,13 @@ async function cmdInit(args) {
         }
         console.log(`flow-code: configured ${providerInfo(result.provider).label} / ${result.model} for this project.`);
     }
-    // The test command is deliberately not asked about here: `flow-code run`
-    // offers to detect it the first time it actually finds the placeholder in
-    // place, which is also the first point a provider is guaranteed resolved
-    // for the agent fallback — asking twice (or asking before there's even a
-    // codebase shape to detect against) would just be front-loaded busywork.
+    // The test command is deliberately not asked about here. The Test node
+    // asks for itself, in the run UI, the first time it executes still holding
+    // the placeholder — by which point the Discuss node has established what is
+    // being built, which is context both the user and the discovery agent want.
     if (justScaffolded) {
-        console.log("  Test command: left as the scaffolded placeholder — `flow-code run` will offer to detect it " +
-            'on first run, or edit `nodes: test: config: commands` in .flow-code/workflow.yaml directly.');
+        console.log("  Test command: left as the scaffolded placeholder — the Test node will ask what to run when " +
+            'it first executes, or edit `nodes: test: config: commands` in .flow-code/workflow.yaml directly.');
     }
     console.log('  Start a run with: flow-code run');
     // Explicit rather than relying on the event loop draining naturally: see
@@ -260,37 +258,6 @@ async function cmdDoctor(args) {
         console.log(`  FAILED ${failure.dir}: ${failure.error}`);
     process.exit(0);
 }
-/**
- * A Test node still carrying the scaffolded placeholder means nobody has
- * ever filled one in — `init` no longer asks (see cmdInit), so this is the
- * first, and only, place that offers to. Reuses the exact wizard `init`
- * used to run: heuristics first, an agent fallback if a provider is
- * configured and heuristics found nothing, then free-text entry, writing
- * whatever was chosen back to workflow.yaml. Returns whether anything may
- * have been written, so the caller knows to reload the workflow it already
- * parsed. Skipped entirely on a non-TTY run — with no one to ask, the
- * options are silently guessing at commands or hanging on a prompt that can
- * never be answered, and neither is better than failing with a pointer to
- * fix it once from an interactive terminal.
- */
-export async function resolveTestPlaceholder(repoRoot, workflowPath, workflow, provider) {
-    const unresolved = workflow.nodes.some((n) => {
-        if (n.type.id !== 'test')
-            return false;
-        const commands = n.config.commands;
-        return Array.isArray(commands) && commands.length === 1 && commands[0] === PLACEHOLDER_TEST_COMMAND;
-    });
-    if (!unresolved)
-        return false;
-    if (!process.stdin.isTTY) {
-        fail('a Test node still has the placeholder command — run `flow-code run` once from an ' +
-            'interactive terminal to fill it in, or edit `commands:` in .flow-code/workflow.yaml directly.');
-    }
-    await runTestSetupWizard(repoRoot, workflowPath, {
-        ...(provider ? { sessions: buildRunner(provider.provider), model: provider.model } : {}),
-    });
-    return true;
-}
 async function cmdRun(args) {
     const allowDirty = args.includes('--allow-dirty');
     const resumeIdx = args.indexOf('--resume');
@@ -319,19 +286,6 @@ async function cmdRun(args) {
     const resolved = await resolveProvider(repoRoot, workflow);
     if (resolved?.model && !workflow.settings.model) {
         workflow.settings.model = resolved.model;
-    }
-    // Skipped while resuming: a resume continues one specific interrupted
-    // attempt rather than starting a fresh setup pass, and if that attempt's
-    // Test node hasn't run yet its placeholder is no different from any other
-    // config carried over from the original run.
-    if (!resuming) {
-        const workflowPath = join(repoRoot, WORKFLOW_RELATIVE_PATH);
-        if (await resolveTestPlaceholder(repoRoot, workflowPath, workflow, resolved)) {
-            workflow = loadWorkflow(repoRoot);
-            if (resolved?.model && !workflow.settings.model) {
-                workflow.settings.model = resolved.model;
-            }
-        }
     }
     let resumeState;
     if (resuming) {

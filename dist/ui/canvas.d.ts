@@ -1,6 +1,6 @@
 import type { NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
-import type { Layout, Viewport } from './layout.js';
+import { type Layout, type Viewport } from './layout.js';
 export interface Cell {
     ch: string;
     style: string;

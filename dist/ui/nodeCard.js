@@ -156,24 +156,31 @@ export function outcomeSummary(node, output) {
  * Running nodes prefer their most recent tool call — that's the closest thing
  * the UI has to watching over the agent's shoulder.
  */
-export function nodeSubtitle(node, state, activity, frame) {
+export function nodeSubtitle(node, state, activity, frame, 
+/** Characters the card can actually show — the box is sized by the layout,
+ * so eliding to a hardcoded guess either wasted space or cut text the box
+ * had room for. */
+width = 44) {
     switch (state.status) {
         case 'running': {
             const last = activity.at(-1);
             if (last) {
                 const denied = last.decision === 'denied' ? '⚠ ' : '';
-                return `${denied}${last.tool} ${firstLine(last.summary, 40)}`;
+                const prefix = `${denied}${last.tool} `;
+                return `${prefix}${firstLine(last.summary, Math.max(4, width - prefix.length))}`;
             }
-            return `${state.statusDetail ? firstLine(state.statusDetail, 40) : 'thinking'}${ellipsis(frame)}`;
+            // The ellipsis animation is a fixed 3 columns on the end of the line.
+            const detailWidth = Math.max(4, width - 3);
+            return `${state.statusDetail ? firstLine(state.statusDetail, detailWidth) : 'thinking'}${ellipsis(frame)}`;
         }
         case 'waiting':
-            return firstLine(state.statusDetail ?? 'waiting for you', 44);
+            return firstLine(state.statusDetail ?? 'waiting for you', width);
         case 'error':
-            return firstLine(state.statusDetail ?? 'failed', 44);
+            return firstLine(state.statusDetail ?? 'failed', width);
         case 'done':
             return outcomeSummary(node, state.output) ?? plannedSummary(node);
         case 'skipped':
-            return firstLine(state.statusDetail ?? 'skipped', 44);
+            return firstLine(state.statusDetail ?? 'skipped', width);
         default:
             return plannedSummary(node);
     }
@@ -183,13 +190,17 @@ export function nodeSubtitle(node, state, activity, frame) {
  * while the node runs and frozen at its final value afterwards. Empty for a
  * node that hasn't started — there is nothing to measure yet.
  */
-export function nodeMetrics(state, now) {
+export function nodeMetrics(state, now, 
+/** Drop the clock and keep only the token counts — the compact card puts
+ * this on the title row, where there is rarely room for both, and tokens
+ * are the number a budget is spent in. */
+options = {}) {
     const parts = [];
     if (state.tokens) {
         const prompt = state.tokens.input + state.tokens.cached;
         parts.push(`↑${formatTokens(prompt)} ↓${formatTokens(state.tokens.output)}`);
     }
-    if (state.startedAt) {
+    if (options.clock !== false && state.startedAt) {
         const end = state.endedAt ? Date.parse(state.endedAt) : now;
         parts.push(formatDuration(end - Date.parse(state.startedAt)));
     }

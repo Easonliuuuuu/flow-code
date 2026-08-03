@@ -83,7 +83,13 @@ export function loadWorkflowFromString(source, options = {}) {
             problems.push(...describeZodIssues(`node \`${node.id}\` (${type.id}) config`, configResult.error));
             continue;
         }
-        nodes.push({ id: node.id, type, config: configResult.data, skills: [] });
+        nodes.push({
+            id: node.id,
+            type,
+            config: configResult.data,
+            skills: [],
+            ...(node.budget ? { budget: node.budget } : {}),
+        });
     }
     // Skills resolve once, here. Discovery is done lazily and only when some node
     // actually names a skill, so the common workflow scans no directories.

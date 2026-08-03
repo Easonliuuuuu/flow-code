@@ -1,3 +1,18 @@
+/**
+ * Truncate to `width`, marking the cut with an ellipsis. A bare `slice` is
+ * what node cards used to do, and it reads as a rendering bug rather than as
+ * elided text — `3 acceptance criteri` looks broken in a way `3 acceptance…`
+ * does not.
+ */
+export function fitText(text, width) {
+    if (width <= 0)
+        return '';
+    if (text.length <= width)
+        return text;
+    if (width === 1)
+        return '…';
+    return `${text.slice(0, width - 1)}…`;
+}
 /** Greedy word-wrap, preserving existing newlines as paragraph breaks. */
 export function wrapText(text, width) {
     const w = Math.max(1, width);

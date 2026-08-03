@@ -1,13 +1,15 @@
 import { type NodeTypeDefinition } from '../registry/index.js';
 import { type DiscoveredSkill, type SkillRoots } from '../skills/discover.js';
 import { Graph } from './graph.js';
-import { type RunSettings, type WorkflowEdge } from './schema.js';
+import { type NodeBudget, type RunSettings, type WorkflowEdge } from './schema.js';
 export declare const WORKFLOW_RELATIVE_PATH = ".flow-code/workflow.yaml";
 export interface WorkflowNode {
     id: string;
     type: NodeTypeDefinition;
     /** Config validated against the type's schema (defaults applied). */
     config: unknown;
+    /** This node's own ceiling, overriding the run-wide per-node one. */
+    budget?: NodeBudget;
     /**
      * Skills named in `config.skills`, resolved at load time in declaration
      * order. Resolution happens here, once, so an unresolvable skill is a
