@@ -1,8 +1,21 @@
 # flow-code
 
 [![CI](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-A terminal-native, node-graph interface for running and observing agentic coding workflows. Instead of a scrolling chat log, a coding task's lifecycle — spec discussion, implementation, validation, review, git operations — renders as a live, interactive graph in your terminal, with support for fanning work out across multiple agents in isolated git worktrees.
+A terminal-native, node-graph interface for running and observing agentic coding workflows. Instead of a scrolling chat log, a coding task's lifecycle renders as a live, interactive graph in your terminal — spec discussion, implementation, validation, review, and git operations, each a node you can watch, pause on, or fan out across isolated git worktrees.
+
+```
+┌─────────┐    ┌───────────┐    ┌──────┐    ┌──────────┐    ┌────────┐    ┌──────┐    ┌─────────┐
+│ Discuss │ ─▶ │ Implement │ ─▶ │ Test │ ─▶ │ Validate │ ─▶ │ Review │ ─▶ │ Gate │ ─▶ │ Git-ops │
+└─────────┘    └───────────┘    └──────┘    └──────────┘    └────────┘    └──────┘    └─────────┘
+                    ▲                             │
+                    └───────── loop-back ──────────┘
+                          (on a failing verdict)
+```
+
+Each box in that diagram is a live card in your terminal: a spinner while it runs, token counts, model badge, and a real-time subtitle of what the agent is doing.
 
 ## Quickstart
 
@@ -14,6 +27,16 @@ node dist/cli.js run    # run the workflow graph
 ```
 
 Once installed globally or linked (`npm link`), the same commands are available as `flow-code init` / `flow-code run`. Run `flow-code help` for the full command list (`init`, `run`, `node-types`, `doctor`).
+
+## Why flow-code
+
+| | |
+|---|---|
+| **Live graph, not a log** | Watch spec discussion → implementation → test → validate → review → git-ops progress as nodes light up, instead of scrolling a chat transcript. |
+| **Any provider** | Claude, NVIDIA NIM, OpenAI, or OpenRouter — one config backs every agent-driven node, with per-node overrides when you need them. |
+| **Fan out safely** | Worktree-Agent nodes run work in isolated git worktrees, so parallel agents never step on each other's changes. |
+| **Self-healing loops** | Loop-back edges send a failing `validate`/`review` verdict back upstream with the failure as context, bounded so it always terminates. |
+| **Headless-ready** | `flow-code run` never prompts — CI picks up credentials from env vars with no wizard in the way. |
 
 ## Test command setup
 
@@ -120,21 +143,7 @@ A rejected Approval-Gate works the same way: with a loop-back declared it sends 
 
 ## Contributing
 
-Work happens on feature branches, merged via pull request into `main` once CI is green:
-
-```
-feature branch → pull request → CI passes → merge
-```
-
-`.github/workflows/ci.yml` runs install, lint, typecheck, and test on every PR into `main` and on every push to `main`.
-
-Note: this is a convention, not an enforced gate. `flow-code` is currently a private repository on a GitHub plan where branch protection rules aren't available, so nothing server-side blocks a direct push to `main` or a merge with a failing check.
-
-### NVIDIA integration tests
-
-`test/*.integration.test.ts` make real calls to NVIDIA's NIM API rather than mocking it — they run separately via `npm run test:integration`, never as part of `npm test`, and skip themselves (not fail) when `NVIDIA_API_KEY` isn't set.
-
-`.github/workflows/nvidia-integration.yml` runs this suite in CI on push/PR into `main`, gated on a repo secret named `NVIDIA_API_KEY` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `NVIDIA_API_KEY`.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for branch/PR workflow, CI, and the NVIDIA integration test suite.
 
 ## License
 
