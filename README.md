@@ -114,6 +114,7 @@ edges:
 |---|---|
 | `flow-code init` | Scaffold `.flow-code/workflow.yaml` & configure provider/models |
 | `flow-code init --preset openspec` | Scaffold using the OpenSpec workflow graph (`explore → propose → apply → archive`) |
+| `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
 | `flow-code run` | Execute the workflow graph |
 | `flow-code skills` | List available skills attached from `.claude/skills` or plugins |
 | `flow-code doctor` | Diagnose environment, tools, and provider credentials |
