@@ -151,6 +151,12 @@ export function App({
   const [inputBuffer, setInputBuffer] = useState('');
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
+  // Test-command prompt: which candidates are checked, which commands the
+  // user typed in themselves, and (when not null) the one being typed.
+  const [testCommandCursor, setTestCommandCursor] = useState(0);
+  const [testCommandSelected, setTestCommandSelected] = useState<Set<string>>(new Set());
+  const [testCommandExtra, setTestCommandExtra] = useState<string[]>([]);
+  const [testCommandInput, setTestCommandInput] = useState<string | null>(null);
   const [diffScroll, setDiffScroll] = useState(0);
   // null = following the live tail; a number pins the transcript to that
   // absolute row so new messages don't disturb a mid-scroll read.
@@ -223,6 +229,27 @@ export function App({
 
   const pendingApproval = ports.pendingApproval;
   const pendingConvergence = ports.pendingConvergence;
+  const pendingTestCommands = ports.pendingTestCommands;
+  /**
+   * Everything the panel can offer: offline heuristics first (free and
+   * usually right), then whatever the agent proposed if it was asked, then
+   * anything typed by hand. De-duplicated, since detection and the agent
+   * routinely land on the same command.
+   */
+  const testCommandCandidates = useMemo(() => {
+    if (!pendingTestCommands) return [];
+    const seen = new Set<string>();
+    const out: Array<{ command: string; note: string }> = [];
+    const add = (command: string, note: string): void => {
+      if (seen.has(command)) return;
+      seen.add(command);
+      out.push({ command, note });
+    };
+    for (const command of pendingTestCommands.req.detected) add(command, 'detected');
+    for (const p of pendingTestCommands.proposals) add(p.command, p.rationale);
+    for (const command of testCommandExtra) add(command, 'typed');
+    return out;
+  }, [pendingTestCommands, pendingTestCommands?.proposals, testCommandExtra]);
   const discussState = ports.discussState;
   const discussActive = discussState?.active ?? false;
 
@@ -230,6 +257,7 @@ export function App({
     expanded ||
     pendingApproval !== null ||
     pendingConvergence !== null ||
+    pendingTestCommands !== null ||
     discussActive ||
     pickerOpen ||
     skillPickerOpen ||
@@ -730,6 +758,64 @@ export function App({
       return;
     }
 
+    // Test commands: a Test node reached execution still holding the
+    // scaffolded placeholder and is asking what it should actually run.
+    if (pendingTestCommands) {
+      const { resolve } = pendingTestCommands;
+      if (testCommandInput !== null) {
+        if (key.escape) {
+          setTestCommandInput(null);
+        } else if (key.return) {
+          const command = testCommandInput.trim();
+          if (command.length > 0) {
+            setTestCommandExtra((prev) => [...prev, command]);
+            setTestCommandSelected((prev) => new Set([...prev, command]));
+          }
+          setTestCommandInput(null);
+        } else if (key.backspace || key.delete) {
+          setTestCommandInput((b) => (b ?? '').slice(0, -1));
+        } else if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
+          setTestCommandInput((b) => (b ?? '') + input);
+        }
+        return;
+      }
+      if (key.escape) {
+        // Skipping is a real answer — a project with no test suite yet.
+        resolve(null);
+        return;
+      }
+      if (key.return) {
+        resolve(testCommandCandidates.filter((c) => testCommandSelected.has(c.command)).map((c) => c.command));
+        return;
+      }
+      if (input === 'a') {
+        setTestCommandInput('');
+        return;
+      }
+      if (input === 'd') {
+        // Reading the repo costs a session, so it happens only when asked.
+        void ports.discoverTestCommands();
+        return;
+      }
+      if (testCommandCandidates.length === 0) return;
+      if (key.upArrow || input === 'k') {
+        setTestCommandCursor((c) => (c + testCommandCandidates.length - 1) % testCommandCandidates.length);
+      } else if (key.downArrow || input === 'j') {
+        setTestCommandCursor((c) => (c + 1) % testCommandCandidates.length);
+      } else if (input === ' ') {
+        const command = testCommandCandidates[testCommandCursor]?.command;
+        if (command !== undefined) {
+          setTestCommandSelected((prev) => {
+            const next = new Set(prev);
+            if (next.has(command)) next.delete(command);
+            else next.add(command);
+            return next;
+          });
+        }
+      }
+      return;
+    }
+
     // Convergence selection.
     if (pendingConvergence) {
       const { req, resolve } = pendingConvergence;
@@ -1011,6 +1097,55 @@ export function App({
             )}
           </Text>
           <PanelFooter hint="enter: send · /done: finish · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
+        </Box>
+      ) : pendingTestCommands ? (
+        <Box {...panelBoxProps}>
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Test commands — {pendingTestCommands.req.nodeId}
+            </Text>
+          </PanelTitle>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            <Text dimColor wrap="truncate-end">
+              This node has never been told what to run. Whatever you pick is saved to
+              .flow-code/workflow.yaml.
+            </Text>
+            {testCommandCandidates.length === 0 && !pendingTestCommands.discovering ? (
+              <Text dimColor wrap="truncate-end">
+                nothing detected by inspection — `d` to have flow-code read the repo, `a` to type one
+              </Text>
+            ) : null}
+            {testCommandCandidates.map((candidate, i) => (
+              <Text key={candidate.command} wrap="truncate-end">
+                <Text {...(i === testCommandCursor ? { color: 'cyan' } : {})}>
+                  {i === testCommandCursor ? '❯ ' : '  '}
+                  {testCommandSelected.has(candidate.command) ? '[x] ' : '[ ] '}
+                  {candidate.command}{' '}
+                </Text>
+                <Text dimColor>{candidate.note}</Text>
+              </Text>
+            ))}
+            {pendingTestCommands.discovering ? (
+              <Text color="cyan" wrap="truncate-end">
+                reading the repository…
+              </Text>
+            ) : null}
+            {pendingTestCommands.discoverError ? (
+              <Text color="red" wrap="truncate-end">
+                could not work it out: {pendingTestCommands.discoverError}
+              </Text>
+            ) : null}
+            {testCommandInput !== null ? (
+              <Text wrap="truncate-end">command: {testCommandInput}▌</Text>
+            ) : null}
+          </Box>
+          <PanelFooter
+            hint={
+              testCommandInput !== null
+                ? 'enter: add · esc: cancel'
+                : '↑/↓: move · space: select · a: add · d: let flow-code find them · enter: confirm · esc: skip'
+            }
+          />
         </Box>
       ) : pendingConvergence ? (
         <Box {...panelBoxProps}>

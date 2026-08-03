@@ -1,11 +1,13 @@
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { Engine } from '../src/engine/engine.js';
 import { builtinExecutors } from '../src/executors/index.js';
 import { recordBaseline } from '../src/git/ops.js';
+import { PLACEHOLDER_TEST_COMMAND } from '../src/registry/index.js';
 import type { TestOutput, ApprovalGateOutput } from '../src/registry/index.js';
 import { RunStateStore } from '../src/runstate/store.js';
+import { WORKFLOW_RELATIVE_PATH } from '../src/workflow/load.js';
 import {
   fakePorts,
   fakeSessions,
@@ -111,6 +113,113 @@ nodes:
     expect(store.node('t').status).toBe('error');
     expect(store.node('t').statusDetail).toContain('no test command');
     expect((store.node('t').output as TestOutput).passed).toBe(false);
+  });
+
+  it('asks what to run when it still holds the placeholder, then runs and saves the answer', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands:
+        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
+`;
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(workflowPath, yaml);
+    const { store, ports } = await runReal(yaml, repo, {
+      portOpts: { testCommands: ['echo chosen'] },
+    });
+
+    expect(ports.testCommandRequests).toHaveLength(1);
+    expect(ports.testCommandRequests[0]!.nodeId).toBe('t');
+    expect(store.node('t').status).toBe('done');
+    const output = store.node('t').output as TestOutput;
+    expect(output.commands.map((c) => c.command)).toEqual(['echo chosen']);
+    // Saved, so the next run of this project never asks again.
+    expect(readFileSync(workflowPath, 'utf8')).toContain('echo chosen');
+    expect(readFileSync(workflowPath, 'utf8')).not.toContain('replace me');
+  });
+
+  it('passes with nothing to run when the user skips the question', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands:
+        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
+  - id: after
+    type: test
+    config: { commands: ["echo x"] }
+edges:
+  - { from: t, to: after }
+`;
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(workflowPath, yaml);
+    const before = readFileSync(workflowPath, 'utf8');
+    const { store } = await runReal(yaml, repo, { portOpts: { testCommands: null } });
+
+    // A project with no test suite yet is a real project: skipping doesn't
+    // fail the node, and the rest of the graph still runs.
+    expect(store.node('t').status).toBe('done');
+    expect(store.node('t').statusDetail).toContain('no test command configured');
+    expect((store.node('t').output as TestOutput).passed).toBe(true);
+    expect(store.node('after').status).toBe('done');
+    expect(readFileSync(workflowPath, 'utf8')).toBe(before);
+  });
+
+  it('never asks once real commands are configured', async () => {
+    const repo = makeTempGitRepo();
+    const { ports } = await runReal(
+      `
+nodes:
+  - id: t
+    type: test
+    config: { commands: ["echo real"] }
+`,
+      repo,
+      { portOpts: { testCommands: ['echo chosen'] } },
+    );
+    expect(ports.testCommandRequests).toHaveLength(0);
+  });
+
+  it('offers heuristics up front and spends a session only when the request asks', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands:
+        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
+`;
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(workflowPath, yaml);
+    const sessions = fakeSessions(() =>
+      JSON.stringify({ commands: [{ command: 'echo found', rationale: 'a package script' }] }),
+    );
+    const { store } = await runReal(yaml, repo, {
+      sessions,
+      portOpts: {
+        testCommands: async (req) => {
+          // Detection is offline and free, so it is already in hand.
+          expect(req.detected).toContain('npm test');
+          expect(sessions.requests).toHaveLength(0);
+          const proposals = await req.discover();
+          expect(proposals.map((p) => p.command)).toEqual(['echo found']);
+          return ['echo found'];
+        },
+      },
+    });
+
+    expect(sessions.requests).toHaveLength(1);
+    expect(store.node('t').status).toBe('done');
   });
 
   it('errors on a failing command, identifying it and its exit status, and skips downstream', async () => {

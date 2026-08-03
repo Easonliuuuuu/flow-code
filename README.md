@@ -62,7 +62,7 @@ node dist/cli.js run
 
 ## 🤖 AI Provider Setup
 
-`flow-code init` includes an interactive setup wizard that configures your provider, API keys, and test commands automatically.
+`flow-code init` includes an interactive setup wizard that configures your provider and API keys. Test commands are settled later, in the run itself: the Test node asks what it should run the first time it executes — after the Discuss node has established what is being built — and saves your answer to `workflow.yaml`.
 
 ### Environment Variables (Headless / CI)
 

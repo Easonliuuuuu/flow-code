@@ -128,6 +128,18 @@ export function setNodeBudgetTokens(path: string, nodeId: string, tokens: number
   });
 }
 
+/**
+ * Writes the command list a Test node runs. Used when a node reaches
+ * execution still carrying the scaffolded placeholder and the user says what
+ * it should run instead — the answer is kept so the question is asked once
+ * per project rather than once per run.
+ */
+export function setNodeTestCommands(path: string, nodeId: string, commands: string[]): void {
+  editNode(path, nodeId, (doc, index) => {
+    doc.setIn(['nodes', index, 'config', 'commands'], commands);
+  });
+}
+
 /** Sets (or, with an empty array, clears) one node's `config.skills` in the workflow file on disk. */
 export function setNodeSkills(path: string, nodeId: string, skills: string[]): void {
   editNode(path, nodeId, (doc, index) => {
