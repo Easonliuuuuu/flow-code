@@ -9,6 +9,7 @@ import type {
   InteractionPorts,
   InteractiveAgentSession,
   SessionRunner,
+  TestCommandsRequest,
 } from '../src/engine/types.js';
 import type { DiscussTranscriptEntry } from '../src/runstate/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
@@ -42,16 +43,20 @@ export interface FakePortOptions {
   approve?: 'approve' | 'reject' | ((req: ApprovalRequest) => 'approve' | 'reject');
   select?: string[] | ((req: ConvergenceRequest) => string[]);
   userMessages?: string[];
+  /** What to answer a Test node asking what to run; null skips. */
+  testCommands?: string[] | null | ((req: TestCommandsRequest) => Promise<string[] | null> | string[] | null);
 }
 
 export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
   approvalRequests: ApprovalRequest[];
   convergenceRequests: ConvergenceRequest[];
+  testCommandRequests: TestCommandsRequest[];
   assistantTexts: string[];
   beginCalls: Array<{ nodeId: string; topic: string | undefined; seedTranscript: DiscussTranscriptEntry[] }>;
 } {
   const approvalRequests: ApprovalRequest[] = [];
   const convergenceRequests: ConvergenceRequest[] = [];
+  const testCommandRequests: TestCommandsRequest[] = [];
   const assistantTexts: string[] = [];
   const beginCalls: Array<{
     nodeId: string;
@@ -62,6 +67,7 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
   return {
     approvalRequests,
     convergenceRequests,
+    testCommandRequests,
     assistantTexts,
     beginCalls,
     approval: {
@@ -69,6 +75,13 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
         approvalRequests.push(req);
         const a = opts.approve ?? 'approve';
         return typeof a === 'function' ? a(req) : a;
+      },
+    },
+    testCommands: {
+      async request(req) {
+        testCommandRequests.push(req);
+        const t = opts.testCommands ?? null;
+        return typeof t === 'function' ? t(req) : t;
       },
     },
     convergence: {

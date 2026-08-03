@@ -2,6 +2,7 @@ import type {
   ApprovalRequest,
   ConvergenceRequest,
   InteractionPorts,
+  TestCommandsRequest,
 } from '../engine/types.js';
 import { RunInterruptedError } from '../engine/types.js';
 import type { DiscussTranscriptEntry } from '../runstate/types.js';
@@ -28,6 +29,20 @@ interface PendingConvergence {
 }
 
 /**
+ * A Test node waiting to be told what to run. Mutated in place (unlike
+ * `discussState`) because the App reads its fields directly on every render
+ * rather than memoizing on identity.
+ */
+interface PendingTestCommands {
+  req: TestCommandsRequest;
+  resolve: (commands: string[] | null) => void;
+  /** Agent proposals, once the user has asked for them. */
+  proposals: Array<{ command: string; rationale: string }>;
+  discovering: boolean;
+  discoverError: string | null;
+}
+
+/**
  * The UI side of the engine's interaction ports: executors block on promises
  * that the App resolves from key presses. The engine never imports this —
  * headless runs substitute any other InteractionPorts implementation.
@@ -35,6 +50,7 @@ interface PendingConvergence {
 export class UiInteractionPorts implements InteractionPorts {
   pendingApproval: PendingApproval | null = null;
   pendingConvergence: PendingConvergence | null = null;
+  pendingTestCommands: PendingTestCommands | null = null;
   /**
    * Replaced wholesale on every change (never mutated in place): the App
    * memoizes the rendered transcript on this object's identity, so an
@@ -108,6 +124,50 @@ export class UiInteractionPorts implements InteractionPorts {
         });
       }),
   };
+
+  testCommands = {
+    request: (req: TestCommandsRequest): Promise<string[] | null> =>
+      new Promise((resolve, reject) => {
+        this.pendingTestCommands = {
+          req,
+          proposals: [],
+          discovering: false,
+          discoverError: null,
+          resolve: (commands) => {
+            this.pendingTestCommands = null;
+            this.notify();
+            resolve(commands);
+          },
+        };
+        this.notify();
+        this.onInterrupt(reject, () => {
+          this.pendingTestCommands = null;
+        });
+      }),
+  };
+
+  /**
+   * Runs the request's agent discovery and folds the proposals into the
+   * pending request, so the panel can offer them alongside what the offline
+   * heuristics found. Called by the App, which owns the decision to spend a
+   * session on it; failures surface as `discoverError` rather than throwing
+   * into a keypress handler.
+   */
+  async discoverTestCommands(): Promise<void> {
+    const pending = this.pendingTestCommands;
+    if (!pending || pending.discovering) return;
+    pending.discovering = true;
+    pending.discoverError = null;
+    this.notify();
+    try {
+      pending.proposals = await pending.req.discover();
+    } catch (err) {
+      pending.discoverError = err instanceof Error ? err.message : String(err);
+    } finally {
+      pending.discovering = false;
+      this.notify();
+    }
+  }
 
   discuss = {
     begin: (
