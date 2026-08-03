@@ -99,8 +99,10 @@ export class Engine {
    * the point of a ceiling is that it holds.
    */
   private checkBudgets(): void {
-    const budget = this.wf.settings.budget;
-    if (!budget || this.runBudgetStop !== null) return;
+    if (this.runBudgetStop !== null) return;
+    // A node carrying its own budget is bounded whether or not the run
+    // declares one, so this can't return early on a missing `settings.budget`.
+    const budget = this.wf.settings.budget ?? {};
 
     if (budget.tokensPerRun !== undefined) {
       const spent = this.store.totalTokens();
@@ -122,17 +124,20 @@ export class Engine {
       }
     }
 
-    if (budget.tokensPerNode !== undefined) {
-      for (const id of this.nodeAborts.keys()) {
-        if (this.nodeBudgetStops.has(id)) continue;
-        const spent = this.store.tokensFor(id);
-        if (spent > budget.tokensPerNode) {
-          this.nodeBudgetStops.set(
-            id,
-            `node token budget exhausted: ${spent} tokens spent of ${budget.tokensPerNode} allowed`,
-          );
-          this.nodeAborts.get(id)?.abort();
-        }
+    for (const id of this.nodeAborts.keys()) {
+      if (this.nodeBudgetStops.has(id)) continue;
+      // The node's own ceiling wins outright where it has one: it was set
+      // for this node specifically, so it is the more informed number in
+      // both directions — tighter or looser than the run-wide default.
+      const limit = this.nodeById(id).budget?.tokens ?? budget.tokensPerNode;
+      if (limit === undefined) continue;
+      const spent = this.store.tokensFor(id);
+      if (spent > limit) {
+        this.nodeBudgetStops.set(
+          id,
+          `node token budget exhausted: ${spent} tokens spent of ${limit} allowed`,
+        );
+        this.nodeAborts.get(id)?.abort();
       }
     }
   }

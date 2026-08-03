@@ -15,6 +15,7 @@ import { Graph, GraphCycleError } from './graph.js';
 import {
   DEFAULT_SETTINGS,
   workflowFileSchema,
+  type NodeBudget,
   type RunSettings,
   type WorkflowEdge,
 } from './schema.js';
@@ -26,6 +27,8 @@ export interface WorkflowNode {
   type: NodeTypeDefinition;
   /** Config validated against the type's schema (defaults applied). */
   config: unknown;
+  /** This node's own ceiling, overriding the run-wide per-node one. */
+  budget?: NodeBudget;
   /**
    * Skills named in `config.skills`, resolved at load time in declaration
    * order. Resolution happens here, once, so an unresolvable skill is a
@@ -133,7 +136,13 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
       );
       continue;
     }
-    nodes.push({ id: node.id, type, config: configResult.data, skills: [] });
+    nodes.push({
+      id: node.id,
+      type,
+      config: configResult.data,
+      skills: [],
+      ...(node.budget ? { budget: node.budget } : {}),
+    });
   }
 
   // Skills resolve once, here. Discovery is done lazily and only when some node

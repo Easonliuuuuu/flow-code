@@ -95,6 +95,39 @@ export function setNodeModel(path: string, nodeId: string, model: string | null)
   });
 }
 
+/**
+ * Sets (or, with `value: null`, clears) one arbitrary string field of a
+ * node's config. The editable set is decided by `editableFields` in the UI,
+ * not here — this writer only has to put a string where it was asked to.
+ */
+export function setNodeConfigString(
+  path: string,
+  nodeId: string,
+  field: string,
+  value: string | null,
+): void {
+  editNode(path, nodeId, (doc, index) => {
+    if (value === null) clearConfigField(doc, index, field);
+    else doc.setIn(['nodes', index, 'config', field], value);
+  });
+}
+
+/**
+ * Sets (or, with `tokens: null`, clears) one node's own token ceiling. The
+ * budget is a sibling of `config`, so it can't go through `clearConfigField`.
+ */
+export function setNodeBudgetTokens(path: string, nodeId: string, tokens: number | null): void {
+  editNode(path, nodeId, (doc, index) => {
+    if (tokens === null) {
+      doc.deleteIn(['nodes', index, 'budget', 'tokens']);
+      const budget = doc.getIn(['nodes', index, 'budget'], true);
+      if (isMap(budget) && budget.items.length === 0) doc.deleteIn(['nodes', index, 'budget']);
+    } else {
+      doc.setIn(['nodes', index, 'budget', 'tokens'], tokens);
+    }
+  });
+}
+
 /** Sets (or, with an empty array, clears) one node's `config.skills` in the workflow file on disk. */
 export function setNodeSkills(path: string, nodeId: string, skills: string[]): void {
   editNode(path, nodeId, (doc, index) => {
