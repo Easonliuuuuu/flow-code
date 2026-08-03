@@ -432,7 +432,8 @@ describe('output-conditional failure', () => {
     await engine.run();
     expect(store.node('check').status).toBe('error');
     // The verdict is still recorded in full — failing is not losing the result.
-    expect(store.node('check').output).toEqual(failing);
+    // (`criteria` is filled in by the output schema's default.)
+    expect(store.node('check').output).toMatchObject(failing);
     expect(store.node('check').statusDetail).toContain('fail');
   });
 

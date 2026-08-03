@@ -62,6 +62,8 @@ export interface TokenUsage {
     /** Prompt tokens served from, or written to, the provider's cache. */
     cached: number;
 }
+/** Every token a usage record accounts for — what a budget is measured against. */
+export declare function sumTokens(usage: TokenUsage | undefined): number;
 export interface NodeRunState {
     status: NodeStatus;
     statusDetail?: string;
@@ -72,6 +74,15 @@ export interface NodeRunState {
     endedAt?: string;
     /** Cumulative across attempts: what this node has cost, not what this attempt cost. */
     tokens?: TokenUsage;
+    /**
+     * Why a `skipped` node was skipped, which decides what it means downstream:
+     *  - `condition`: a routing condition sent the run down another branch. The
+     *    branch was not taken, so it does not block a node that also has a live
+     *    path into it (the two arms of a diamond rejoining at a gate).
+     *  - `upstream`: something above it failed or never completed. That *does*
+     *    block everything below, exactly as it always has.
+     */
+    skipReason?: 'condition' | 'upstream';
     /**
      * Which attempt this node is on, counting from 1. Greater than 1 only when
      * a loop-back has reset and re-run it.

@@ -63,6 +63,42 @@ export function extractJson(text: string): unknown {
   return last;
 }
 
+/**
+ * Acceptance criteria reaching a node through its upstream context — the
+ * contract a Spec node set for this run.
+ *
+ * Read back out of the serialized upstream outputs rather than passed down a
+ * side channel: upstream output *is* how one node learns what another
+ * decided, and a criterion the downstream prompt can quote is a criterion the
+ * downstream node was actually given.
+ */
+export function acceptanceCriteriaFrom(
+  upstream: UpstreamInput[],
+): Array<{ id: string; text: string }> {
+  for (const input of upstream) {
+    // A truncated output may have lost criteria mid-array; verifying against
+    // half a contract is worse than verifying against none.
+    if (input.truncated) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(input.outputJson);
+    } catch {
+      continue;
+    }
+    const criteria = (parsed as { acceptanceCriteria?: unknown } | null)?.acceptanceCriteria;
+    if (!Array.isArray(criteria)) continue;
+    const usable = criteria.filter(
+      (c): c is { id: string; text: string } =>
+        typeof c === 'object' &&
+        c !== null &&
+        typeof (c as { id?: unknown }).id === 'string' &&
+        typeof (c as { text?: unknown }).text === 'string',
+    );
+    if (usable.length > 0) return usable;
+  }
+  return [];
+}
+
 export function nodeModel(ctx: ExecuteContext, configModel: string | undefined): string | undefined {
   return configModel ?? ctx.settings.model;
 }

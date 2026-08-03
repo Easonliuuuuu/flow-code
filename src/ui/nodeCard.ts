@@ -1,3 +1,4 @@
+import { sumTokens } from '../runstate/types.js';
 import type { ActivityEntry, NodeRunState } from '../runstate/types.js';
 import type { WorkflowNode } from '../workflow/load.js';
 
@@ -62,6 +63,11 @@ export function plannedSummary(node: WorkflowNode): string {
   switch (node.type.id) {
     case 'discuss':
       return firstLine(typeof c['topic'] === 'string' ? c['topic'] : 'settle intent and constraints');
+    case 'spec': {
+      const criteria = Array.isArray(c['acceptanceCriteria']) ? c['acceptanceCriteria'].length : 0;
+      if (criteria > 0) return `${criteria} acceptance criteri${criteria === 1 ? 'on' : 'a'} (given)`;
+      return firstLine(typeof c['title'] === 'string' ? c['title'] : 'write the spec to verify against');
+    }
     case 'implement':
       return firstLine(typeof c['instructions'] === 'string' ? c['instructions'] : 'write the code');
     case 'test': {
@@ -103,6 +109,10 @@ export function outcomeSummary(node: WorkflowNode, output: unknown): string | nu
   switch (node.type.id) {
     case 'discuss':
       return typeof o['conclusion'] === 'string' ? firstLine(o['conclusion']) : null;
+    case 'spec': {
+      const criteria = Array.isArray(o['acceptanceCriteria']) ? o['acceptanceCriteria'].length : 0;
+      return `${criteria} acceptance criteri${criteria === 1 ? 'on' : 'a'}`;
+    }
     case 'implement': {
       const files = Array.isArray(o['changedFiles']) ? o['changedFiles'].length : 0;
       const summary = typeof o['summary'] === 'string' ? o['summary'] : '';
@@ -115,8 +125,19 @@ export function outcomeSummary(node: WorkflowNode, output: unknown): string | nu
         ? `${commands} command${commands === 1 ? '' : 's'} passed`
         : 'command failed';
     }
-    case 'validate':
-      return o['verdict'] === 'pass' ? 'verdict: pass' : `verdict: fail${o['notes'] ? ` — ${firstLine(String(o['notes']), 40)}` : ''}`;
+    case 'validate': {
+      // With criteria in play, "3/4 criteria met" says more than a verdict.
+      const criteria = Array.isArray(o['criteria'])
+        ? (o['criteria'] as Array<{ met?: unknown }>)
+        : [];
+      if (criteria.length > 0) {
+        const met = criteria.filter((c) => c.met === true).length;
+        return `${met}/${criteria.length} criteria met`;
+      }
+      return o['verdict'] === 'pass'
+        ? 'verdict: pass'
+        : `verdict: fail${o['notes'] ? ` — ${firstLine(String(o['notes']), 40)}` : ''}`;
+    }
     case 'review': {
       const findings = Array.isArray(o['findings']) ? o['findings'].length : 0;
       return `${o['verdict'] === 'pass' ? 'pass' : 'fail'} · ${findings} finding${findings === 1 ? '' : 's'}`;
@@ -192,8 +213,5 @@ export function nodeMetrics(state: NodeRunState, now: number): string {
 
 /** Every token the run has consumed, for the header total. */
 export function totalTokens(nodes: Record<string, NodeRunState>): number {
-  return Object.values(nodes).reduce(
-    (sum, n) => sum + (n.tokens ? n.tokens.input + n.tokens.cached + n.tokens.output : 0),
-    0,
-  );
+  return Object.values(nodes).reduce((sum, n) => sum + sumTokens(n.tokens), 0);
 }

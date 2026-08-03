@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sumTokens } from './types.js';
 import type {
   ActivityEntry,
   AttemptRecord,
@@ -126,6 +127,25 @@ export class RunStateStore {
   }
 
   /**
+   * Skip a node, recording *why* — the distinction downstream scheduling turns
+   * on (see `NodeRunState.skipReason`).
+   */
+  setSkipped(nodeId: string, reason: 'condition' | 'upstream', detail: string): void {
+    const node = this.node(nodeId);
+    this.state.nodes = {
+      ...this.state.nodes,
+      [nodeId]: {
+        ...node,
+        status: 'skipped',
+        statusDetail: detail,
+        skipReason: reason,
+        endedAt: new Date().toISOString(),
+      },
+    };
+    this.commit();
+  }
+
+  /**
    * Accumulate token usage reported by a runner. Deltas, not totals: every
    * API response adds its own usage, so the count climbs live during a
    * session and survives across attempts (a loop-back re-run adds to the
@@ -172,6 +192,7 @@ export class RunStateStore {
       statusDetail: _statusDetail,
       startedAt: _startedAt,
       endedAt: _endedAt,
+      skipReason: _skipReason,
       ...rest
     } = node;
     this.state.nodes = {
@@ -266,6 +287,16 @@ export class RunStateStore {
     const node = this.node(nodeId);
     this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, sessionId } };
     this.commit();
+  }
+
+  /** Tokens one node has consumed so far, across every attempt. */
+  tokensFor(nodeId: string): number {
+    return sumTokens(this.node(nodeId).tokens);
+  }
+
+  /** Tokens the whole run has consumed so far. */
+  totalTokens(): number {
+    return Object.values(this.state.nodes).reduce((sum, n) => sum + sumTokens(n.tokens), 0);
   }
 
   markFinished(interrupted = false): void {

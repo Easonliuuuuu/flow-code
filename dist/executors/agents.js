@@ -1,7 +1,7 @@
 import { capabilitySet } from '../capabilities.js';
 import { captureTree, diffNamesBetweenTrees, diffTrees, headCommit } from '../git/ops.js';
 import { reviewOutput, validateOutput, } from '../registry/index.js';
-import { extractJson, nodeModel, truncateText, upstreamPreamble } from './helpers.js';
+import { acceptanceCriteriaFrom, extractJson, nodeModel, truncateText, upstreamPreamble, } from './helpers.js';
 async function runNodeSession(ctx, prompt, model) {
     const release = await ctx.acquireSessionSlot();
     try {
@@ -39,16 +39,58 @@ export const executeImplement = async function* (ctx) {
 export const executeValidate = async function* (ctx) {
     yield { type: 'status', status: 'running' };
     const config = ctx.node.config;
-    const prompt = `${upstreamPreamble(ctx.upstream)}## Validation task\n\n` +
-        `${config.instructions ?? 'Check whether the work described in the upstream context has actually been carried out in this working directory, and satisfies its intent.'}\n\n` +
-        `When you are done, respond with ONLY a JSON object:\n` +
-        `{"verdict": "pass" | "fail", "notes": "<what you checked and what you found>"}`;
+    const criteria = acceptanceCriteriaFrom(ctx.upstream);
+    // With a spec upstream, validation is a checklist against a contract that
+    // was fixed before the work started. Without one it stays what it was: a
+    // judgement about intent.
+    const task = criteria.length > 0
+        ? `Check the work in this working directory against each acceptance criterion below. ` +
+            `These were fixed before the work began and are the contract it is judged against — ` +
+            `do not reinterpret them to fit what was built.\n\n` +
+            criteria.map((c) => `- ${c.id}: ${c.text}`).join('\n') +
+            (config.instructions ? `\n\nAlso: ${config.instructions}` : '')
+        : (config.instructions ??
+            'Check whether the work described in the upstream context has actually been carried out in this working directory, and satisfies its intent.');
+    const shape = criteria.length > 0
+        ? `{"verdict": "pass" | "fail", "notes": "<summary>", "criteria": [{"id": "<criterion id>", "met": true | false, "evidence": "<what you checked, and where>"}]}\n\n` +
+            `Include one entry per criterion (${criteria.map((c) => c.id).join(', ')}). ` +
+            `Report what you found; the verdict is computed from your entries.`
+        : `{"verdict": "pass" | "fail", "notes": "<what you checked and what you found>"}`;
+    const prompt = `${upstreamPreamble(ctx.upstream)}## Validation task\n\n${task}\n\n` +
+        `When you are done, respond with ONLY a JSON object:\n${shape}`;
     const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
     const parsed = validateOutput.parse(extractJson(finalText));
     // No terminal status here: the type's `failsWhen` predicate decides whether
     // this verdict is a pass or a failure.
-    yield { type: 'result', output: parsed };
+    yield { type: 'result', output: withCriteriaVerdict(parsed, criteria) };
 };
+/**
+ * The verdict of a spec-backed validation is computed, never asserted: any
+ * criterion reported unmet — or simply not reported at all — is a fail,
+ * whatever the model concluded in prose. This is what makes a spec a stop
+ * rule rather than a suggestion.
+ */
+function withCriteriaVerdict(parsed, criteria) {
+    if (criteria.length === 0)
+        return parsed;
+    const reported = new Map(parsed.criteria.map((c) => [c.id, c]));
+    const filled = criteria.map((c) => reported.get(c.id) ?? {
+        id: c.id,
+        met: false,
+        evidence: 'not reported by the validation step',
+    });
+    const unmet = filled.filter((c) => !c.met);
+    return {
+        ...parsed,
+        criteria: filled,
+        verdict: unmet.length > 0 ? 'fail' : 'pass',
+        notes: unmet.length > 0
+            ? `${unmet.length} of ${filled.length} acceptance criteria unmet (${unmet
+                .map((c) => c.id)
+                .join(', ')}). ${parsed.notes}`
+            : parsed.notes,
+    };
+}
 export const executeReview = async function* (ctx) {
     yield { type: 'status', status: 'running' };
     const config = ctx.node.config;

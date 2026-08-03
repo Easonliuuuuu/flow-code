@@ -72,6 +72,22 @@ describe('nvidia capability enforcement (parity with the Claude-path harness)', 
     expect(withEdit.check('write_file', { path: 'a.ts' }, 't1').behavior).toBe('allow');
   });
 
+  it('anchors the control directory exactly as the Claude-path harness does', () => {
+    const { interceptor } = interceptorFor(capabilitySet('read', 'edit', 'exec'));
+    expect(interceptor.check('write_file', { path: '.flow-code/workflow.yaml' }, 't1').behavior).toBe(
+      'deny',
+    );
+    expect(
+      interceptor.check('run_shell', { command: 'sed -i s/a/b/ .flow-code/workflow.yaml' }, 't2')
+        .behavior,
+    ).toBe('deny');
+    // Reading stays available; ordinary work is untouched.
+    expect(interceptor.check('read_file', { path: '.flow-code/specs/r.md' }, 't3').behavior).toBe(
+      'allow',
+    );
+    expect(interceptor.check('write_file', { path: 'src/a.ts' }, 't4').behavior).toBe('allow');
+  });
+
   it('denies run_shell without exec/git-read/git-write, allows with exec', () => {
     const { interceptor } = interceptorFor(capabilitySet('read'));
     expect(interceptor.check('run_shell', { command: 'echo hi' }, 't1').behavior).toBe('deny');

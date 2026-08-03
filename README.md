@@ -118,6 +118,67 @@ A loop-back must point back to a node upstream of its source — this is checked
 
 A rejected Approval-Gate works the same way: with a loop-back declared it sends the segment back for another pass, and without one it halts the branch as before.
 
+### Budgets: what a run is allowed to cost
+
+A workflow that can retry is a workflow that can spend without bound, so `settings.budget` says when to stop. Every field is optional, and an unset field is unbounded — an existing workflow behaves exactly as it did.
+
+```yaml
+settings:
+  budget:
+    tokensPerNode: 300000   # one node, across all of its attempts
+    tokensPerRun: 2000000   # the whole run
+    minutesPerRun: 60       # wall clock
+```
+
+A per-node breach aborts that node's session and fails it, leaving the rest of the graph free to finish and report. A run-wide breach aborts everything in flight and starts nothing new. Either way the status detail names the ceiling and what was spent against it.
+
+**A budget stop never retries**, even where a loop-back is declared: retrying past a ceiling is precisely what the ceiling exists to prevent. Token counts are live — a running node shows `↑prompt ↓completion` on its card, and the header carries the run total.
+
+### Specs and acceptance criteria
+
+A **Spec** node turns the intent settled upstream (usually by a Discuss node) into a durable contract: `.flow-code/specs/<runId>.md`, plus numbered acceptance criteria that flow downstream as context.
+
+```yaml
+nodes:
+  - id: spec
+    type: spec
+    # Or write it by hand and skip the agent call entirely:
+    # config:
+    #   title: What we're building
+    #   acceptanceCriteria:
+    #     - Running `foo --bar` prints the parsed config and exits 0
+
+edges:
+  - { from: discuss, to: spec }
+  - { from: spec, to: implement }
+  - { from: spec, to: validate }   # Validate needs the criteria, so wire them to it
+```
+
+Where a Validate node receives acceptance criteria, it answers them one at a time (`{id, met, evidence}`) and **its verdict is computed from those answers, not asserted**: any criterion reported unmet — or simply not reported — fails the node, whatever the model concluded in prose. That is what makes a spec a stop rule rather than a suggestion, and what gives a loop-back a real termination condition to converge on.
+
+The spec file is written by flow-code itself, never by an agent, and no node can edit it afterwards (see below). It also sits *outside* the segment a loop-back resets, so every retry is judged against the same criteria the first attempt was.
+
+### Conditional edges
+
+An edge with a `when` still waits for its source, but only carries when the condition holds:
+
+```yaml
+edges:
+  - { from: implement, to: gate, when: "implement.changedFiles isNotEmpty" }
+  - { from: review, to: rework, when: "review.findings.length > 0" }
+  - { from: test, to: triage, when: "test.passed == false" }
+```
+
+A condition reads `<node>.<field>` from a node's recorded output — the edge's own source, or anything upstream of it. Operators: `==` `!=` `>` `<` `>=` `<=` `contains` `isEmpty` `isNotEmpty`; values are quoted strings, numbers, `true`/`false`/`null`; `.length` works on arrays and strings. One condition per edge — use two edges for two conditions. Everything is parsed and checked when the workflow loads, so a typo is a validation error rather than an edge that silently never fires.
+
+When a condition does not hold, its target is skipped along with the rest of that branch — but a node the branches rejoin at still runs, as long as some other path into it was taken. A branch that was *not taken* clears the way; a branch that *failed* still blocks, exactly as before.
+
+### The control directory is an anchor
+
+No node can write into `.flow-code/` — not the workflow file, not credentials, not the specs. The harness denies edit-tool writes whose path lands there and shell commands that name a control artifact, on both the Claude and the OpenAI-compatible paths, and every denial is logged like any other. Reading stays available.
+
+This is deliberate: a node that could edit `.flow-code/workflow.yaml` could raise its own attempt limit, rewrite the Test node's commands, grant itself capabilities, or soften the acceptance criteria it is about to be judged against. The things that define and verify a run have to be things the run cannot move. (A Worktree-Agent instance is unaffected inside its own worktree — the rule is relative to each node's working directory.)
+
 ## Contributing
 
 Work happens on feature branches, merged via pull request into `main` once CI is green:
