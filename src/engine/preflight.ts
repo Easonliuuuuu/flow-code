@@ -24,9 +24,23 @@ export function defaultCredentialsResolver(): boolean {
   return existsSync(join(homedir(), '.claude', '.credentials.json'));
 }
 
+/**
+ * Codex SDK's own resolution order is apiKey option, then OPENAI_API_KEY,
+ * then CODEX_API_KEY, then an existing `codex` CLI login — this mirrors that
+ * last-resort check (CODEX_HOME defaults to ~/.codex) so preflight can fail
+ * fast with a clear message instead of letting the subprocess fail later.
+ */
+export function defaultCodexCredentialsResolver(): boolean {
+  if (process.env['OPENAI_API_KEY']) return true;
+  if (process.env['CODEX_API_KEY']) return true;
+  const codexHome = process.env['CODEX_HOME'] || join(homedir(), '.codex');
+  return existsSync(join(codexHome, 'auth.json'));
+}
+
 /** Checks the env var for whichever provider is configured to back the project. */
 export function defaultProviderCredentialsResolver(provider: ProviderId): boolean {
   if (provider === 'claude') return defaultCredentialsResolver();
+  if (provider === 'codex') return defaultCodexCredentialsResolver();
   const envVar = providerInfo(provider).apiKeyEnvVar!;
   return Boolean(process.env[envVar]);
 }
@@ -66,7 +80,9 @@ export async function preflight(
         'credentials',
         provider === 'claude'
           ? 'No Claude Agent SDK credentials found. Set ANTHROPIC_API_KEY (or CLAUDE_CODE_OAUTH_TOKEN), or log in with the claude CLI, then run `flow-code init`.'
-          : `No ${providerInfo(provider).label} API key found. Run \`flow-code init\` to configure one, or set ${providerInfo(provider).apiKeyEnvVar}.`,
+          : provider === 'codex'
+            ? 'No Codex credentials found. Set OPENAI_API_KEY (or CODEX_API_KEY), or log in with the codex CLI, then run `flow-code init`.'
+            : `No ${providerInfo(provider).label} API key found. Run \`flow-code init\` to configure one, or set ${providerInfo(provider).apiKeyEnvVar}.`,
       );
     }
   }

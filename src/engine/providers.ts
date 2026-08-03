@@ -1,19 +1,21 @@
 /** Providers flow-code can run every agent-driven node against. */
-export type ProviderId = 'claude' | 'nvidia' | 'openai' | 'openrouter';
+export type ProviderId = 'claude' | 'codex' | 'nvidia' | 'openai' | 'openrouter';
 
 export interface ProviderInfo {
   id: ProviderId;
   label: string;
   /**
-   * Env var checked for credentials. Claude has none here — it falls back to
-   * the Claude Agent SDK's own credential resolution (ANTHROPIC_API_KEY,
-   * CLAUDE_CODE_OAUTH_TOKEN, or a `claude` CLI login), see preflight.ts.
+   * Env var checked for credentials. Claude and Codex have none here — both
+   * fall back to their own SDK's credential resolution (a CLI login, or an
+   * SDK-specific env var checked directly rather than through this field),
+   * see preflight.ts.
    */
   apiKeyEnvVar?: string;
 }
 
 export const PROVIDERS: ProviderInfo[] = [
   { id: 'claude', label: 'Claude (Anthropic)' },
+  { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'nvidia', label: 'NVIDIA NIM', apiKeyEnvVar: 'NVIDIA_API_KEY' },
   { id: 'openai', label: 'OpenAI', apiKeyEnvVar: 'OPENAI_API_KEY' },
   { id: 'openrouter', label: 'OpenRouter', apiKeyEnvVar: 'OPENROUTER_API_KEY' },

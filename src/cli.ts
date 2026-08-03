@@ -4,10 +4,16 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Engine } from './engine/engine.js';
 import { loadCredentials } from './engine/credentials.js';
-import { preflight, PreflightError, defaultCredentialsResolver } from './engine/preflight.js';
+import {
+  preflight,
+  PreflightError,
+  defaultCredentialsResolver,
+  defaultCodexCredentialsResolver,
+} from './engine/preflight.js';
 import { PROVIDERS, providerInfo, type ProviderId } from './engine/providers.js';
 import type { SessionRunner } from './engine/types.js';
 import {
+  CodexSessionRunner,
   NvidiaSessionRunner,
   OpenAiSessionRunner,
   OpenRouterSessionRunner,
@@ -78,11 +84,12 @@ export async function resolveProvider(
     if (info.apiKeyEnvVar && process.env[info.apiKeyEnvVar]) return { provider: info.id };
   }
   if (defaultCredentialsResolver()) return { provider: 'claude' };
+  if (defaultCodexCredentialsResolver()) return { provider: 'codex' };
 
   if (workflow.nodes.some((n) => n.type.agentDriven)) {
     fail(
       'no provider configured — run `flow-code init` to choose one, or set ' +
-        'ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.',
+        'ANTHROPIC_API_KEY / CODEX_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.',
     );
   }
   return undefined;
@@ -92,6 +99,8 @@ export function buildRunner(provider: ProviderId): SessionRunner {
   switch (provider) {
     case 'claude':
       return new SdkSessionRunner();
+    case 'codex':
+      return new CodexSessionRunner();
     case 'nvidia':
       return new NvidiaSessionRunner();
     case 'openai':
@@ -223,7 +232,7 @@ async function cmdInit(args: string[]): Promise<void> {
     if (!process.stdin.isTTY) {
       console.log('flow-code: no TTY detected — skipping interactive provider setup.');
       console.log(
-        '  Set ANTHROPIC_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
+        '  Set ANTHROPIC_API_KEY / CODEX_API_KEY / NVIDIA_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY, or re-run `flow-code init` from an interactive terminal.',
       );
       process.exit(0);
     }
