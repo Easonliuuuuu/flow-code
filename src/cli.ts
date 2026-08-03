@@ -111,18 +111,24 @@ export function buildRunner(provider: ProviderId): SessionRunner {
   }
 }
 
+/** Which of `preset.requiredSkills` aren't discoverable from this repo yet. */
+export function missingSkillNames(preset: WorkflowPreset, repoRoot: string): string[] {
+  if (preset.requiredSkills.length === 0) return [];
+  const available = new Set(discoverSkills(defaultSkillRoots(repoRoot)).map((s) => s.id));
+  return preset.requiredSkills.filter((name) => !available.has(name));
+}
+
 /**
  * A preset references skills by name; whether they are installed is a property
  * of the machine, not of the preset. Report what is missing and where it is
  * expected rather than refusing to scaffold — the file is still the right
- * starting point, and the run would fail with the same names anyway.
+ * starting point, and the run would fail with the same names anyway. This is
+ * the fallback for whatever `resolvePresetSkills` didn't (or couldn't) fix.
  */
 function missingPresetSkills(preset: WorkflowPreset, repoRoot: string): string[] {
-  if (preset.requiredSkills.length === 0) return [];
-  const roots = defaultSkillRoots(repoRoot);
-  const available = new Set(discoverSkills(roots).map((s) => s.id));
-  const missing = preset.requiredSkills.filter((name) => !available.has(name));
+  const missing = missingSkillNames(preset, repoRoot);
   if (missing.length === 0) return [];
+  const roots = defaultSkillRoots(repoRoot);
   return [
     `  Warning: ${missing.length} skill(s) this preset uses are not installed: ${missing.join(', ')}`,
     `    Expected in ${roots.project}, ${roots.user}, or an installed plugin.`,
@@ -212,6 +218,48 @@ function promptCliInstallAction(preset: WorkflowPreset): Promise<CliInstallActio
   );
 }
 
+export type SkillScaffoldAction = 'run' | 'skip';
+
+/**
+ * True whether or not the scaffold actually ran — this never blocks `init`.
+ * The CLI being on PATH says nothing about whether it has been pointed at
+ * *this* project yet (e.g. `openspec init`, which is what actually writes
+ * `.claude/skills/openspec-*`); this is the step that closes that gap.
+ * Declining, having no `scaffoldSkills` command, or the scaffold itself
+ * failing all fall through to `missingPresetSkills`' warning instead.
+ */
+export async function resolvePresetSkills(
+  preset: WorkflowPreset,
+  repoRoot: string,
+  deps: {
+    missingSkillNames: (preset: WorkflowPreset, repoRoot: string) => string[];
+    runScaffold: (command: { command: string; args: string[] }) => Promise<boolean>;
+    promptAction: (preset: WorkflowPreset, missing: string[]) => Promise<SkillScaffoldAction | undefined>;
+  },
+): Promise<void> {
+  if (!preset.cli?.scaffoldSkills) return;
+  const missing = deps.missingSkillNames(preset, repoRoot);
+  if (missing.length === 0) return;
+  const action = await deps.promptAction(preset, missing);
+  if (action !== 'run') return;
+  await deps.runScaffold({ ...preset.cli.scaffoldSkills, args: [...preset.cli.scaffoldSkills.args, repoRoot] });
+}
+
+/** Yes/No picker for scaffolding a preset's missing skills via its CLI (e.g. `openspec init`). */
+function promptSkillScaffoldAction(preset: WorkflowPreset, missing: string[]): Promise<SkillScaffoldAction | undefined> {
+  const { command, args } = preset.cli!.scaffoldSkills!;
+  const scaffoldCmd = `${command} ${args.join(' ')}`;
+  return selectFromList(
+    [
+      { label: `Run now (${scaffoldCmd})`, value: 'run' as const },
+      { label: 'Skip — install manually later', value: 'skip' as const },
+    ],
+    {
+      prompt: `\`${preset.name}\` preset needs ${missing.length} skill(s) not yet set up in this project: ${missing.join(', ')}.`,
+    },
+  );
+}
+
 /**
  * Shown only when there's an actual choice to make: no `--preset` flag and no
  * workflow.yaml yet. An already-scaffolded repo is left untouched by a bare
@@ -221,7 +269,7 @@ function promptCliInstallAction(preset: WorkflowPreset): Promise<CliInstallActio
  * the CLI missing) rather than bailing out of `init` — the user just picks
  * again, same as if that preset had no CLI dependency at all.
  */
-async function selectPresetInteractively(): Promise<WorkflowPreset | undefined> {
+async function selectPresetInteractively(repoRoot: string): Promise<WorkflowPreset | undefined> {
   const presets = [DEFAULT_PRESET, ...listPresets()];
   for (;;) {
     const chosen = await selectFromList(
@@ -233,8 +281,16 @@ async function selectPresetInteractively(): Promise<WorkflowPreset | undefined> 
     );
     if (!chosen) return undefined; // Esc/Ctrl+C on the picker itself still cancels init
     const ready = await resolvePresetCli(chosen, { isCliAvailable, runInstall: runCliInstall, promptAction: promptCliInstallAction });
-    if (ready) return chosen;
-    console.log(`flow-code: \`${chosen.cli!.command}\` still not found on PATH — pick another preset or install it manually.`);
+    if (!ready) {
+      console.log(`flow-code: \`${chosen.cli!.command}\` still not found on PATH — pick another preset or install it manually.`);
+      continue;
+    }
+    await resolvePresetSkills(chosen, repoRoot, {
+      missingSkillNames,
+      runScaffold: runCliInstall,
+      promptAction: promptSkillScaffoldAction,
+    });
+    return chosen;
   }
 }
 
@@ -255,8 +311,21 @@ async function cmdInit(args: string[]): Promise<void> {
   let preset: WorkflowPreset;
   if (presetName) {
     preset = getPreset(presetName)!;
+    // An explicit --preset always scaffolds regardless of what happens here
+    // (see below) — this just gives it the same CLI/skill prompts the
+    // interactive picker gets, when there's a terminal to show them on.
+    if (process.stdin.isTTY) {
+      const ready = await resolvePresetCli(preset, { isCliAvailable, runInstall: runCliInstall, promptAction: promptCliInstallAction });
+      if (ready) {
+        await resolvePresetSkills(preset, repoRoot, {
+          missingSkillNames,
+          runScaffold: runCliInstall,
+          promptAction: promptSkillScaffoldAction,
+        });
+      }
+    }
   } else if (!existsSync(path) && process.stdin.isTTY) {
-    const chosen = await selectPresetInteractively();
+    const chosen = await selectPresetInteractively(repoRoot);
     if (!chosen) {
       console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
       process.exit(0);

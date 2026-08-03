@@ -26,10 +26,11 @@ describe('preset registry', () => {
     expect(getPreset('openspec')?.summary).toContain('explore');
   });
 
-  it('declares how to check for and install the openspec CLI', () => {
+  it('declares how to check for and install the openspec CLI, and how to scaffold its skills', () => {
     expect(getPreset('openspec')?.cli).toEqual({
       command: 'openspec',
       install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] },
+      scaffoldSkills: { command: 'openspec', args: ['init', '--tools', 'claude'] },
     });
   });
 
