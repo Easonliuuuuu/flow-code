@@ -18,7 +18,7 @@ function contextFor(
   upstream: ExecuteContext['upstream'] = [],
 ): { ctx: ExecuteContext; store: RunStateStore; repoRoot: string; prompts: string[] } {
   const repoRoot = mkdtempSync(join(tmpdir(), 'flow-code-spec-'));
-  const node = { id: typeId, type: getNodeType(typeId)!, config };
+  const node = { id: typeId, type: getNodeType(typeId)!, config, skills: [] };
   const store = new RunStateStore({ repoRoot, nodeIds: [node.id] });
   const prompts: string[] = [];
   const ctx = {

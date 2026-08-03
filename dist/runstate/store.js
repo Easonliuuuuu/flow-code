@@ -229,6 +229,12 @@ export class RunStateStore {
         this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, sessionId } };
         this.commit();
     }
+    /** Record which skills a node ran with; idempotent across re-attempts. */
+    setSkills(nodeId, skills) {
+        const node = this.node(nodeId);
+        this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, skills } };
+        this.commit();
+    }
     /** Tokens one node has consumed so far, across every attempt. */
     tokensFor(nodeId) {
         return sumTokens(this.node(nodeId).tokens);

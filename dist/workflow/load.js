@@ -1,11 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { getNodeType } from '../registry/index.js';
+import { getNodeType, TEST_COMMANDS_AUTO } from '../registry/index.js';
+import { defaultSkillRoots, discoverSkills, resolveSkillEntry, } from '../skills/discover.js';
 import { parseCondition } from './condition.js';
 import { Graph, GraphCycleError } from './graph.js';
 import { DEFAULT_SETTINGS, workflowFileSchema, } from './schema.js';
 export const WORKFLOW_RELATIVE_PATH = '.flow-code/workflow.yaml';
+/** `skills` sits at the top level of every config shape that carries it. */
+function skillEntriesOf(config) {
+    const entries = config?.skills;
+    return Array.isArray(entries) ? entries : [];
+}
 export class WorkflowValidationError extends Error {
     problems;
     constructor(problems) {
@@ -20,7 +26,9 @@ function describeZodIssues(prefix, error) {
         return `${prefix}${path}: ${issue.message}`;
     });
 }
-export function loadWorkflowFromString(source) {
+export function loadWorkflowFromString(source, options = {}) {
+    const repoRoot = options.repoRoot ?? process.cwd();
+    const skillRoots = options.skillRoots ?? defaultSkillRoots(repoRoot);
     let raw;
     try {
         raw = parseYaml(source);
@@ -75,7 +83,24 @@ export function loadWorkflowFromString(source) {
             problems.push(...describeZodIssues(`node \`${node.id}\` (${type.id}) config`, configResult.error));
             continue;
         }
-        nodes.push({ id: node.id, type, config: configResult.data });
+        nodes.push({ id: node.id, type, config: configResult.data, skills: [] });
+    }
+    // Skills resolve once, here. Discovery is done lazily and only when some node
+    // actually names a skill, so the common workflow scans no directories.
+    const entriesByNode = nodes.map((n) => ({ node: n, entries: skillEntriesOf(n.config) }));
+    if (entriesByNode.some(({ entries }) => entries.length > 0)) {
+        const discovered = discoverSkills(skillRoots);
+        for (const { node, entries } of entriesByNode) {
+            for (const entry of entries) {
+                const { skill, searched } = resolveSkillEntry(entry, skillRoots, repoRoot, discovered);
+                if (!skill) {
+                    problems.push(`node \`${node.id}\` (${node.type.id}) config at \`skills\`: no skill \`${entry}\` — searched:\n` +
+                        searched.map((s) => `      ${s}`).join('\n'));
+                    continue;
+                }
+                node.skills.push(skill);
+            }
+        }
     }
     // Edges must reference declared nodes.
     for (const edge of file.edges) {
@@ -125,6 +150,27 @@ export function loadWorkflowFromString(source) {
     }
     if (loopbackProblems.length > 0)
         throw new WorkflowValidationError(loopbackProblems);
+    // A Test node that rediscovers its own commands and can be re-run by a
+    // loop-back is a node that grades work with an exam it also chooses, and gets
+    // several attempts to choose an easier one. Reject the combination, not
+    // either half of it.
+    const autoProblems = [];
+    for (const node of nodes) {
+        if (node.type.id !== 'test')
+            continue;
+        if (node.config.commands !== TEST_COMMANDS_AUTO)
+            continue;
+        for (const loop of graph.allLoopbacks()) {
+            if (!graph.nodesBetween(loop.to, loop.from).has(node.id))
+                continue;
+            autoProblems.push(`node \`${node.id}\` (test): \`commands: ${TEST_COMMANDS_AUTO}\` cannot be combined with retry — ` +
+                `the loop-back ${loop.from} -> ${loop.to} re-runs this node, which would let it rediscover an easier ` +
+                `set of commands on each attempt. Use an explicit command list, or remove that loop-back.`);
+            break;
+        }
+    }
+    if (autoProblems.length > 0)
+        throw new WorkflowValidationError(autoProblems);
     // A condition may only read a node whose output is guaranteed to exist by
     // the time the edge is evaluated: the edge's own source, or an ancestor of
     // it. Anything else is a race the graph cannot honour.
@@ -149,7 +195,7 @@ export function loadWorkflowFromString(source) {
         order,
     };
 }
-export function loadWorkflow(repoRoot) {
+export function loadWorkflow(repoRoot, options = {}) {
     const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
     let source;
     try {
@@ -160,6 +206,6 @@ export function loadWorkflow(repoRoot) {
             `no workflow file found at ${path} — run \`flow-code init\` to scaffold one`,
         ]);
     }
-    return loadWorkflowFromString(source);
+    return loadWorkflowFromString(source, { repoRoot, ...options });
 }
 //# sourceMappingURL=load.js.map

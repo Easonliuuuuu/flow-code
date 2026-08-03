@@ -1,3 +1,13 @@
+import type { SessionRunner } from '../engine/types.js';
+export interface TestSetupOptions {
+    /**
+     * The configured provider's runner, used only for the fallback. Absent when
+     * no provider is configured, which skips the fallback rather than failing —
+     * `init` still has to finish.
+     */
+    sessions?: SessionRunner;
+    model?: string;
+}
 /** Writes `commands` into the `test` node's config, preserving the rest of the file (comments included). */
 export declare function writeTestCommands(workflowPath: string, commands: string[]): void;
 /**
@@ -8,4 +18,4 @@ export declare function writeTestCommands(workflowPath: string, commands: string
  * (integration/e2e) detection won't have found, or a project with no test
  * command yet, which just leaves the scaffolded placeholder untouched.
  */
-export declare function runTestSetupWizard(repoRoot: string, workflowPath: string): Promise<void>;
+export declare function runTestSetupWizard(repoRoot: string, workflowPath: string, opts?: TestSetupOptions): Promise<void>;

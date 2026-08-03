@@ -2,7 +2,7 @@ import { capabilitySet } from '../capabilities.js';
 import type { Capability } from '../capabilities.js';
 import type { NodeExecutor } from '../engine/types.js';
 import { discussOutput, type DiscussConfig } from '../registry/index.js';
-import { extractJson, nodeModel, upstreamPreamble } from './helpers.js';
+import { nodeModel, parseNodeOutput, rolePromptFor, upstreamPreamble } from './helpers.js';
 
 /**
  * Interactive sub-panel flow: the node holds at `waiting` until the user
@@ -24,7 +24,7 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
       {
         nodeId: ctx.node.id,
         capabilities: capabilitySet(...(ctx.node.type.capabilities as Capability[])),
-        rolePrompt: ctx.node.type.rolePrompt,
+        rolePrompt: rolePromptFor(ctx),
         prompt: '',
         workingDir: ctx.workingDir,
         ...(nodeModel(ctx, config.model) !== undefined
@@ -69,7 +69,7 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
     await session.end();
     ctx.ports.discuss.end(ctx.node.id);
 
-    const parsed = discussOutput.parse(extractJson(conclusionText));
+    const parsed = parseNodeOutput(ctx, discussOutput, conclusionText);
     yield { type: 'result', output: parsed };
     yield { type: 'status', status: 'done' };
   } finally {

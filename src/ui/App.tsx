@@ -930,6 +930,11 @@ export function App({
                         : ''}
                     </Text>
                   ) : null}
+                  {focusedNode.skills.length > 0 ? (
+                    <Text dimColor wrap="truncate-end">
+                      skills: {focusedNode.skills.map((s) => s.id).join(', ')}
+                    </Text>
+                  ) : null}
                   {state.tokens || state.startedAt ? (
                     <Text dimColor wrap="truncate-end">
                       {state.tokens

@@ -14,6 +14,8 @@ export interface PreflightOptions {
     provider?: ProviderId;
     /** Injectable for tests. */
     credentialsResolver?: (provider: ProviderId) => boolean;
+    /** Non-fatal findings — currently skills that will not resolve elsewhere. */
+    onWarning?: (message: string) => void;
 }
 /**
  * All checks run before any node starts and before anything is created or

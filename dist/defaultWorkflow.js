@@ -7,6 +7,11 @@
  */
 export const DEFAULT_WORKFLOW_YAML = `# flow-code workflow — checked into your repo, edit as needed.
 # Run \`flow-code node-types\` to see every node type's capabilities and config.
+#
+# Any agent-driven node can carry \`skills: [name, …]\`, giving it project- or
+# team-specific instructions on top of its built-in role. \`flow-code skills\`
+# lists what is attachable. A skill governs *how* a node works; the node type
+# still owns what it must return and what it is allowed to touch.
 
 settings:
   # Max concurrently running agent sessions (only Worktree-Agent instances
@@ -23,10 +28,14 @@ settings:
     minutesPerRun: 60
 
 nodes:
+  # Discuss is the only interactive node type — the only one that can stop and
+  # ask you something. Everything below it runs headless, so anything they need
+  # to know has to be settled here (or written into their config).
   - id: discuss
     type: discuss
     config:
       topic: What should this change accomplish?
+      # skills: [your-discovery-skill]
 
   - id: spec
     type: spec
@@ -46,6 +55,8 @@ nodes:
       # it has no agent and cannot author a test.
       instructions: Implement what the upstream spec requires, including tests covering it.
 
+  # Test has no agent: it only runs commands, so it takes no \`skills\`. That is
+  # deliberate — it is the one node whose verdict is not a model's opinion.
   - id: test
     type: test
     config:
@@ -57,6 +68,8 @@ nodes:
 
   - id: review
     type: review
+    # config:
+    #   skills: [your-code-review-skill]
 
   - id: gate
     type: approval-gate
