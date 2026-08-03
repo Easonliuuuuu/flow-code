@@ -33,6 +33,14 @@ declare const implementConfig: z.ZodObject<{
  * combination that lets a retry loop shop for an easier suite.
  */
 export declare const TEST_COMMANDS_AUTO = "auto";
+/**
+ * The single command every scaffolded Test node starts with, before a real
+ * one is filled in. Exported rather than duplicated as a literal in
+ * defaultWorkflow.ts/presets.ts (which use it verbatim in their YAML) and in
+ * `cmdRun` (which matches on it to know a node was never actually
+ * configured, and offers to resolve it there instead of failing on it).
+ */
+export declare const PLACEHOLDER_TEST_COMMAND = "echo \"replace me with your project's test command\"";
 declare const testConfig: z.ZodObject<{
     commands: z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodLiteral<"auto">]>;
 }, z.core.$strict>;

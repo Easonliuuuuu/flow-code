@@ -1,4 +1,5 @@
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
+import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 const OPENSPEC_YAML = `# flow-code workflow (openspec preset) — checked into your repo, edit as needed.
 # Run \`flow-code node-types\` for every node type, and \`flow-code skills\` for
 # every skill you can attach to one.
@@ -40,7 +41,7 @@ nodes:
     type: test
     config:
       commands:
-        - echo "replace me with your project's test command"
+        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate

@@ -1,3 +1,4 @@
+import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 /**
  * The scaffolded default workflow: Discuss → Spec → Implement → Test →
  * Validate → Review → Approval-Gate → Git-ops. The gate sits before Git-ops
@@ -61,7 +62,7 @@ nodes:
     type: test
     config:
       commands:
-        - echo "replace me with your project's test command"
+        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate

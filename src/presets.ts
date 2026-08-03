@@ -1,4 +1,5 @@
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
+import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 
 /**
  * A named starting workflow. A preset is a scaffolded file and nothing more —
@@ -59,7 +60,7 @@ nodes:
     type: test
     config:
       commands:
-        - echo "replace me with your project's test command"
+        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate

@@ -51,6 +51,15 @@ const implementConfig = z.strictObject({
  */
 export const TEST_COMMANDS_AUTO = 'auto';
 
+/**
+ * The single command every scaffolded Test node starts with, before a real
+ * one is filled in. Exported rather than duplicated as a literal in
+ * defaultWorkflow.ts/presets.ts (which use it verbatim in their YAML) and in
+ * `cmdRun` (which matches on it to know a node was never actually
+ * configured, and offers to resolve it there instead of failing on it).
+ */
+export const PLACEHOLDER_TEST_COMMAND = 'echo "replace me with your project\'s test command"';
+
 const testConfig = z.strictObject({
   commands: z.union([z.array(z.string().min(1)).min(1), z.literal(TEST_COMMANDS_AUTO)]),
 });
