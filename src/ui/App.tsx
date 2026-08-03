@@ -252,13 +252,23 @@ export function App({
   }, [pendingTestCommands, pendingTestCommands?.proposals, testCommandExtra]);
   const discussState = ports.discussState;
   const discussActive = discussState?.active ?? false;
+  const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
+  const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
+  // Discuss is the one blocking prompt you can step away from: tabbing (or
+  // clicking) to another node hides the conversation — still paused,
+  // draft still in `inputBuffer` — in favor of that node's own panel, and
+  // tabbing back re-shows it. Every other pending-* prompt below stays
+  // forced open regardless of focus, since those are short single
+  // decisions where losing track of the request matters more than being
+  // able to browse mid-decision.
+  const discussPanelOpen = discussActive && discussState?.nodeId === focusedId;
 
   const panelOpen =
     expanded ||
     pendingApproval !== null ||
     pendingConvergence !== null ||
     pendingTestCommands !== null ||
-    discussActive ||
+    discussPanelOpen ||
     pickerOpen ||
     skillPickerOpen ||
     editorOpen;
@@ -303,8 +313,6 @@ export function App({
   ]
     .filter(Boolean)
     .join(' ');
-  const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
-  const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
 
   // Scanned once per repo root rather than per keystroke — the picker just
   // filters/indexes into this list, same source `flow-code skills` lists.
@@ -547,7 +555,7 @@ export function App({
     offset,
     activeRect,
     panelOpen,
-    discussActive,
+    discussPanelOpen,
     discussWindow,
     pendingApproval,
     columns,
@@ -563,7 +571,7 @@ export function App({
       offset,
       activeRect,
       panelOpen,
-      discussActive,
+      discussPanelOpen,
       discussWindow,
       pendingApproval,
       columns,
@@ -580,6 +588,17 @@ export function App({
     setDiscussPin(null);
   }, [discussState?.nodeId, discussActive]);
 
+  // Auto-focus a discuss node the moment it starts awaiting a reply — same
+  // reasoning as the approval-gate effect below: since discussPanelOpen only
+  // shows the conversation while its node is focused, a discussion beginning
+  // while you're looking elsewhere must still surface itself rather than
+  // wait silently for you to notice and tab over.
+  useEffect(() => {
+    if (!discussActive || !discussState) return;
+    const idx = workflow.order.indexOf(discussState.nodeId);
+    if (idx >= 0) setFocusIdx(idx);
+  }, [discussState?.nodeId, discussActive, workflow.order]);
+
   // Mouse: enhancement layer only. Terminals without mouse reporting simply
   // never emit these sequences; everything stays keyboard-operable.
   useEffect(() => {
@@ -593,7 +612,7 @@ export function App({
           offset,
           activeRect,
           panelOpen,
-          discussActive,
+          discussPanelOpen,
           pendingApproval,
           columns,
           rows,
@@ -666,7 +685,7 @@ export function App({
           panelDragRef.current = null;
           setPanelDragMode(null);
         } else if (event.kind === 'scroll') {
-          if (overPanel && discussActive) {
+          if (overPanel && discussPanelOpen) {
             setDiscussPin(
               pinAfterScroll(mouseStateRef.current.discussWindow, event.direction === 'down' ? -3 : 3),
             );
@@ -730,8 +749,19 @@ export function App({
       return;
     }
 
-    // Discussion input mode captures the keyboard.
-    if (discussActive && discussState) {
+    // Discussion input mode captures the keyboard — but only while its node
+    // is the one focused. Tab/shift+tab step away to browse the rest of the
+    // graph (the conversation stays paused, draft and all) rather than being
+    // swallowed; tabbing back onto this node re-enters the same block.
+    if (discussPanelOpen && discussState) {
+      if (key.tab && key.shift) {
+        setFocusIdx((i) => (i + workflow.order.length - 1) % workflow.order.length);
+        return;
+      }
+      if (key.tab) {
+        setFocusIdx((i) => (i + 1) % workflow.order.length);
+        return;
+      }
       if (key.pageUp) {
         setDiscussPin(pinAfterScroll(discussWindow, Math.max(1, panelHeight - 6)));
         return;
@@ -1052,7 +1082,7 @@ export function App({
           <Text key={i}>{line || ' '}</Text>
         ))}
       </Box>
-      {discussActive && discussState ? (
+      {discussPanelOpen && discussState ? (
         <Box {...panelBoxProps}>
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
@@ -1096,7 +1126,7 @@ export function App({
               <Text dimColor>… agent is thinking</Text>
             )}
           </Text>
-          <PanelFooter hint="enter: send · /done: finish · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="enter: send · tab: other nodes · /done: finish · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pendingTestCommands ? (
         <Box {...panelBoxProps}>

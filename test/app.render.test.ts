@@ -237,4 +237,69 @@ describe('App discuss panel rendering', () => {
       unmount();
     }
   });
+
+  it('tab steps away to another node without losing the draft, and tabbing back resumes it', async () => {
+    const wf = workflowFromYaml(`
+      nodes:
+        - id: talk
+          type: discuss
+          config: { topic: colors }
+        - id: impl
+          type: implement
+          config: { instructions: x }
+      edges:
+        - { from: talk, to: impl }
+    `);
+    const store = storeFor(wf, makeTempGitRepo());
+    const ports = new UiInteractionPorts();
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: wf,
+        store,
+        ports,
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      ports.discuss.begin('talk', 'colors', []);
+      ports.discuss.postAssistant('talk', 'what shade did you have in mind?');
+      ports.discuss.nextUserMessage('talk');
+      await settle();
+      stdin.write('half-typed');
+      await settle();
+      expect(lastFrameLines(stdout).join('\n')).toContain('> half-typed');
+
+      // Tab away: the discuss transcript is replaced by the plain canvas hint
+      // (impl isn't expanded), not left showing the conversation underneath.
+      stdin.write('\t');
+      await settle();
+      let frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('focused:');
+      expect(frame).not.toContain('half-typed');
+      expect(frame).not.toContain('Discussion — talk');
+
+      // Enter on the newly-focused node opens *its* detail panel, not discuss.
+      stdin.write('\r');
+      await settle();
+      frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('impl (Implement)');
+      expect(frame).not.toContain('Discussion — talk');
+      stdin.write('\r'); // close it back up before tabbing again
+      await settle();
+
+      // Tab back onto the discuss node: conversation and draft both return.
+      stdin.write('\t');
+      await settle();
+      frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('Discussion — talk');
+      expect(frame).toContain('> half-typed');
+    } finally {
+      instance.unmount();
+    }
+  });
 });
