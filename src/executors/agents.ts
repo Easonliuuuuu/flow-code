@@ -13,8 +13,9 @@ import {
 import type { Capability } from '../capabilities.js';
 import {
   acceptanceCriteriaFrom,
-  extractJson,
   nodeModel,
+  parseNodeOutput,
+  rolePromptFor,
   truncateText,
   upstreamPreamble,
 } from './helpers.js';
@@ -30,7 +31,7 @@ async function runNodeSession(
       {
         nodeId: ctx.node.id,
         capabilities: capabilitySet(...(ctx.node.type.capabilities as Capability[])),
-        rolePrompt: ctx.node.type.rolePrompt,
+        rolePrompt: rolePromptFor(ctx),
         prompt,
         workingDir: ctx.workingDir,
         ...(model !== undefined ? { model } : {}),
@@ -89,7 +90,7 @@ export const executeValidate: NodeExecutor = async function* (ctx) {
     `When you are done, respond with ONLY a JSON object:\n${shape}`;
 
   const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
-  const parsed = validateOutput.parse(extractJson(finalText));
+  const parsed = parseNodeOutput(ctx, validateOutput, finalText);
   // No terminal status here: the type's `failsWhen` predicate decides whether
   // this verdict is a pass or a failure.
   yield { type: 'result', output: withCriteriaVerdict(parsed, criteria) };
@@ -138,7 +139,7 @@ export const executeReview: NodeExecutor = async function* (ctx) {
     `When you are done, respond with ONLY a JSON object:\n` +
     `{"verdict": "pass" | "fail", "findings": [{"location": "<file:line or area>", "description": "<finding>", "severity": "info" | "minor" | "major"}]}`;
   const finalText = await runNodeSession(ctx, prompt, nodeModel(ctx, config.model));
-  const parsed = reviewOutput.parse(extractJson(finalText));
+  const parsed = parseNodeOutput(ctx, reviewOutput, finalText);
   // No terminal status here: see executeValidate.
   yield { type: 'result', output: parsed };
 };

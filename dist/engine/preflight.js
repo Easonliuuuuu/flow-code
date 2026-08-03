@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
+import { skillPortabilityWarnings } from '../skills/report.js';
 import { providerInfo } from './providers.js';
 export class PreflightError extends Error {
     kind;
@@ -31,6 +32,12 @@ export function defaultProviderCredentialsResolver(provider) {
  * three nodes in with a worktree already on disk.
  */
 export async function preflight(workflow, repoRoot, opts) {
+    // Reported before the credential check so the user sees every portability
+    // problem in one pass, rather than one per failed start.
+    if (opts.onWarning) {
+        for (const warning of skillPortabilityWarnings(workflow))
+            opts.onWarning(warning);
+    }
     const hasAgentNode = workflow.nodes.some((n) => n.type.agentDriven);
     if (hasAgentNode) {
         const provider = opts.provider ?? 'claude';

@@ -5,6 +5,7 @@ export { NODE_TYPE_IDS } from './types.js';
 declare const discussConfig: z.ZodObject<{
     topic: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
 }, z.core.$strict>;
 /**
  * A Spec node either derives the spec from upstream context (no fields set,
@@ -17,21 +18,33 @@ declare const specConfig: z.ZodObject<{
     requirements: z.ZodOptional<z.ZodArray<z.ZodString>>;
     acceptanceCriteria: z.ZodOptional<z.ZodArray<z.ZodString>>;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
 }, z.core.$strict>;
 declare const implementConfig: z.ZodObject<{
     instructions: z.ZodString;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
 }, z.core.$strict>;
+/**
+ * Either an explicit command list or `auto`. `auto` opts the node into
+ * rediscovering its commands at the start of each execution, trading the
+ * deterministic-verdict guarantee for convenience; the loader rejects it in
+ * combination with a loop-back that can re-run the node, which is the
+ * combination that lets a retry loop shop for an easier suite.
+ */
+export declare const TEST_COMMANDS_AUTO = "auto";
 declare const testConfig: z.ZodObject<{
-    commands: z.ZodArray<z.ZodString>;
+    commands: z.ZodUnion<readonly [z.ZodArray<z.ZodString>, z.ZodLiteral<"auto">]>;
 }, z.core.$strict>;
 declare const validateConfig: z.ZodObject<{
     instructions: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
 }, z.core.$strict>;
 declare const reviewConfig: z.ZodObject<{
     instructions: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
 }, z.core.$strict>;
 /**
  * Git-ops config: commit-only by default. Pushing is opt-in and requires an
@@ -41,6 +54,7 @@ declare const reviewConfig: z.ZodObject<{
 declare const gitOpsConfig: z.ZodObject<{
     commitMessage: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     push: z.ZodOptional<z.ZodObject<{
         remote: z.ZodString;
         branch: z.ZodString;
@@ -49,6 +63,7 @@ declare const gitOpsConfig: z.ZodObject<{
 declare const worktreeAgentConfig: z.ZodDiscriminatedUnion<[z.ZodObject<{
     mode: z.ZodLiteral<"compare">;
     task: z.ZodString;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     instances: z.ZodArray<z.ZodObject<{
         id: z.ZodOptional<z.ZodString>;
         instructions: z.ZodOptional<z.ZodString>;
@@ -57,6 +72,7 @@ declare const worktreeAgentConfig: z.ZodDiscriminatedUnion<[z.ZodObject<{
 }, z.core.$strict>, z.ZodObject<{
     mode: z.ZodLiteral<"parallelize">;
     model: z.ZodOptional<z.ZodString>;
+    skills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     instances: z.ZodArray<z.ZodObject<{
         id: z.ZodOptional<z.ZodString>;
         task: z.ZodString;

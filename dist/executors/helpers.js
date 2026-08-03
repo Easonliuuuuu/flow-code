@@ -1,3 +1,60 @@
+/**
+ * Characters of composed skill text one session may carry. A skill is prompt
+ * material on every turn, so an unbounded one silently taxes the whole node;
+ * the cap is generous next to the ~5k-character skills this targets, and a
+ * skill that exceeds it is truncated *and reported*, never quietly trimmed.
+ */
+export const SKILL_TEXT_LIMIT = 24_000;
+/**
+ * Compose a node's attached skills ahead of its type's role prompt.
+ *
+ * Order is the whole design: skills say *how* to work, the role prompt says
+ * what this node is, and the runner appends the capability boundary after
+ * both — so the boundary is the last instruction in the system prompt and no
+ * skill can present itself as overriding it. The type's output-shape
+ * instruction is likewise appended later, in the node's user prompt, which is
+ * why an attached skill cannot change what the node must return.
+ */
+export function composeRolePrompt(node) {
+    if (node.skills.length === 0)
+        return { rolePrompt: node.type.rolePrompt, truncated: [] };
+    const truncated = [];
+    const sections = [];
+    let remaining = SKILL_TEXT_LIMIT;
+    for (const skill of node.skills) {
+        const body = skill.body.length > remaining ? skill.body.slice(0, Math.max(remaining, 0)) : skill.body;
+        if (body.length < skill.body.length)
+            truncated.push(skill.id);
+        remaining -= body.length;
+        sections.push(`## Skill: ${skill.id}\n\n${body}`);
+        if (remaining <= 0)
+            break;
+    }
+    if (node.skills.length > sections.length) {
+        for (const skill of node.skills.slice(sections.length))
+            truncated.push(skill.id);
+    }
+    return {
+        rolePrompt: `You are working under the following skill instructions. They govern how you do this ` +
+            `work; they do not change what you must produce or what you are permitted to do.\n\n` +
+            `${sections.join('\n\n')}\n\n---\n\n${node.type.rolePrompt}`,
+        truncated,
+    };
+}
+/**
+ * Compose the role prompt for a node and record, once, which skills it ran
+ * with — plus a status detail when any had to be truncated.
+ */
+export function rolePromptFor(ctx) {
+    const composed = composeRolePrompt(ctx.node);
+    if (ctx.node.skills.length > 0) {
+        ctx.store.setSkills(ctx.node.id, ctx.node.skills.map((s) => s.id));
+    }
+    if (composed.truncated.length > 0) {
+        ctx.store.appendLiveOutput(ctx.node.id, `flow-code: skill text exceeded ${SKILL_TEXT_LIMIT} characters; truncated: ${composed.truncated.join(', ')}\n`);
+    }
+    return composed.rolePrompt;
+}
 export function upstreamPreamble(upstream) {
     if (upstream.length === 0)
         return '';
@@ -65,6 +122,78 @@ export function extractJson(text) {
     if (!found)
         throw new Error('agent response contained no parseable JSON object');
     return last;
+}
+/**
+ * A node whose session ended without output conforming to its type's schema.
+ * The `cause` distinguishes the two ways that happens, because they call for
+ * different fixes: a skill or instruction written for a conversation, versus a
+ * model that answered in the wrong shape.
+ */
+export class UnmetOutputContractError extends Error {
+    cause;
+    constructor(cause, message) {
+        super(message);
+        this.cause = cause;
+        this.name = 'UnmetOutputContractError';
+    }
+}
+/** Phrases that only appear when a response is addressed to a person. */
+const REQUEST_PHRASES = [
+    'let me know',
+    'could you',
+    'can you clarify',
+    'can you confirm',
+    'please confirm',
+    'please clarify',
+    'please let me',
+    'would you like',
+    'do you want',
+    'which would you',
+    'should i proceed',
+    'before i proceed',
+    'waiting for your',
+    'awaiting your',
+];
+/**
+ * Whether a final response reads as a request for user input rather than an
+ * answer. Consulted only once the output contract is already unmet, so a false
+ * negative merely reports the failure as malformed output — the conservative
+ * side to err on.
+ */
+export function readsAsQuestionToUser(text) {
+    const trimmed = text.trim();
+    if (trimmed.length === 0)
+        return false;
+    const lower = trimmed.toLowerCase();
+    if (REQUEST_PHRASES.some((p) => lower.includes(p)))
+        return true;
+    const lastLine = trimmed.split('\n').filter((l) => l.trim().length > 0).pop() ?? '';
+    return lastLine.trimEnd().endsWith('?');
+}
+/**
+ * Validate a session's final text against a node's output schema, classifying
+ * the failure when it does not conform.
+ *
+ * A non-interactive node cannot block for a user — it is given no channel to
+ * block on — so a session that ends by asking a question does not hang, it
+ * simply never produces its output. Saying so by name is the difference
+ * between a legible failure and an opaque parse error, and it routes through a
+ * loop-back edge exactly like any other node failure.
+ */
+export function parseNodeOutput(ctx, schema, finalText) {
+    try {
+        return schema.parse(extractJson(finalText));
+    }
+    catch (err) {
+        // The response is kept either way: the user has to be able to read what
+        // the session actually said in order to act on either diagnosis.
+        ctx.store.appendLiveOutput(ctx.node.id, `\n${finalText.trim()}\n`);
+        if (!ctx.node.type.interactive && readsAsQuestionToUser(finalText)) {
+            throw new UnmetOutputContractError('question', `the session ended by asking a question instead of producing this node's output, and \`${ctx.node.id}\` (${ctx.node.type.id}) is not interactive — it has no way to receive an answer. ` +
+                `Give it what it needs up front (an upstream Discuss node, or its config), or move the work to a node type that can hold a conversation.`);
+        }
+        throw new UnmetOutputContractError('malformed', `the session did not produce output matching the ${ctx.node.type.id} output schema: ${err instanceof Error ? err.message : String(err)}`);
+    }
 }
 /**
  * Acceptance criteria reaching a node through its upstream context — the

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { isMap, isSeq, parseDocument } from 'yaml';
 import { confirm, promptText } from './prompts.js';
 import { detectTestCommands } from './testDetect.js';
+import { discoverTestCommandsWithAgent } from './testDiscoverAgent.js';
 /** Writes `commands` into the `test` node's config, preserving the rest of the file (comments included). */
 export function writeTestCommands(workflowPath, commands) {
     const doc = parseDocument(readFileSync(workflowPath, 'utf8'));
@@ -16,6 +17,46 @@ export function writeTestCommands(workflowPath, commands) {
     writeFileSync(workflowPath, String(doc));
 }
 /**
+ * The fallback path: heuristics found nothing, or the user wanted none of what
+ * they found. Everything proposed here is shown with its evidence and accepted
+ * one at a time — nothing is executed to check it, and nothing is written
+ * without a yes.
+ */
+async function offerAgentFallback(repoRoot, chosen, opts) {
+    if (!opts.sessions) {
+        console.log('  No provider configured yet, so flow-code cannot search the repo for you — leaving the placeholder in place.');
+        return;
+    }
+    if (!(await confirm('  Have flow-code read the repo and work out the test command(s)?', { defaultAnswer: true }))) {
+        return;
+    }
+    console.log('  Reading the repository…');
+    let proposals;
+    try {
+        proposals = await discoverTestCommandsWithAgent({
+            repoRoot,
+            sessions: opts.sessions,
+            ...(opts.model !== undefined ? { model: opts.model } : {}),
+        });
+    }
+    catch (err) {
+        console.log(`  Could not work it out: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+    }
+    if (proposals.length === 0) {
+        console.log('  Found no test command — fine for a project with nothing to test yet.');
+        return;
+    }
+    console.log(`  Proposed ${proposals.length} test command${proposals.length > 1 ? 's' : ''}:`);
+    for (const proposal of proposals) {
+        if (proposal.rationale)
+            console.log(`    ${proposal.rationale}`);
+        if (await confirm(`  Include \`${proposal.command}\`?`, { defaultAnswer: true })) {
+            chosen.push(proposal.command);
+        }
+    }
+}
+/**
  * Walks the user through the Test node's command(s) right after scaffolding
  * `.flow-code/workflow.yaml`: shows anything auto-detected (package.json
  * scripts, a Makefile target, pytest/go/cargo) for them to accept or skip,
@@ -23,8 +64,10 @@ export function writeTestCommands(workflowPath, commands) {
  * (integration/e2e) detection won't have found, or a project with no test
  * command yet, which just leaves the scaffolded placeholder untouched.
  */
-export async function runTestSetupWizard(repoRoot, workflowPath) {
+export async function runTestSetupWizard(repoRoot, workflowPath, opts = {}) {
     console.log('\nflow-code: set up the command(s) the Test node runs.\n');
+    // Heuristics first, always: free, instant, offline, and right for the common
+    // case. A model is spent only where they actually failed.
     const detected = detectTestCommands(repoRoot);
     const chosen = [];
     if (detected.length > 0) {
@@ -35,7 +78,10 @@ export async function runTestSetupWizard(repoRoot, workflowPath) {
         }
     }
     else {
-        console.log('  No test command detected — fine for a new project with nothing to test yet.');
+        console.log('  No test command detected by inspection.');
+    }
+    if (chosen.length === 0) {
+        await offerAgentFallback(repoRoot, chosen, opts);
     }
     for (;;) {
         const prompt = chosen.length === 0 ? '  Add a test command?' : '  Add another test command?';

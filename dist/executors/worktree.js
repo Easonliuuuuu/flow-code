@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { capabilitySet } from '../capabilities.js';
 import { addWorktree, commitAll, diffStatBetweenTrees, git, removeWorktree, } from '../git/ops.js';
-import { nodeModel, truncateText, upstreamPreamble } from './helpers.js';
+import { nodeModel, rolePromptFor, truncateText, upstreamPreamble } from './helpers.js';
 function instancePrompt(ctx, config, index) {
     const preamble = upstreamPreamble(ctx.upstream);
     if (config.mode === 'compare') {
@@ -64,7 +64,7 @@ export const executeWorktreeAgent = async function* (ctx) {
                 nodeId: ctx.node.id,
                 instanceId,
                 capabilities: capabilitySet(...ctx.node.type.capabilities),
-                rolePrompt: ctx.node.type.rolePrompt,
+                rolePrompt: rolePromptFor(ctx),
                 prompt,
                 workingDir: dir,
                 ...(model !== undefined ? { model } : {}),

@@ -29,6 +29,14 @@ export interface NodeTypeDefinition {
   /** False for Test (deterministic commands) and Approval-Gate (no session). */
   agentDriven: boolean;
   /**
+   * True when the type holds at `waiting` and consumes user turns during its
+   * session — Discuss and nothing else. Not a switch: it records which session
+   * API the executor uses (`openInteractive` vs `run`), and a non-interactive
+   * node is given no channel to block on, so it cannot wait for a user even if
+   * its instructions tell it to.
+   */
+  interactive: boolean;
+  /**
    * True when the type's config schema carries a single top-level `model`
    * field the run UI's model picker can read and write. False for every
    * `agentDriven: false` type, and also for Worktree-Agent: its `compare`

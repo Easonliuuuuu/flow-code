@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { capabilitySet, type Capability } from '../capabilities.js';
 import type { ExecuteContext, NodeExecutor } from '../engine/types.js';
 import type { AcceptanceCriterion, SpecConfig } from '../registry/index.js';
-import { extractJson, nodeModel, upstreamPreamble } from './helpers.js';
+import { nodeModel, parseNodeOutput, rolePromptFor, upstreamPreamble } from './helpers.js';
 import { z } from 'zod';
 
 /** Where a run's spec lives, relative to the repository root. */
@@ -95,7 +95,7 @@ export const executeSpec: NodeExecutor = async function* (ctx: ExecuteContext) {
         {
           nodeId: ctx.node.id,
           capabilities: capabilitySet(...(ctx.node.type.capabilities as Capability[])),
-          rolePrompt: ctx.node.type.rolePrompt,
+          rolePrompt: rolePromptFor(ctx),
           prompt,
           workingDir: ctx.workingDir,
           ...(nodeModel(ctx, config.model) !== undefined
@@ -111,7 +111,7 @@ export const executeSpec: NodeExecutor = async function* (ctx: ExecuteContext) {
       release();
     }
 
-    const parsed = agentSpec.parse(extractJson(finalText));
+    const parsed = parseNodeOutput(ctx, agentSpec, finalText);
     title = config.title ?? parsed.title;
     // Fixed requirements stay first and stay verbatim; the agent's additions
     // follow. Config is the author's word and outranks the model's.

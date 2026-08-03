@@ -1,0 +1,110 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_WORKFLOW_YAML } from '../src/defaultWorkflow.js';
+import { DEFAULT_PRESET, getPreset, listPresets, presetNames } from '../src/presets.js';
+import { defaultSkillRoots, type SkillRoots } from '../src/skills/discover.js';
+import { loadWorkflowFromString } from '../src/workflow/load.js';
+
+/** A fixture tree with every skill the openspec preset references. */
+function repoWithPresetSkills(names: string[]): { repoRoot: string; roots: SkillRoots } {
+  const base = mkdtempSync(join(tmpdir(), 'flow-code-preset-'));
+  const repoRoot = join(base, 'repo');
+  const roots = defaultSkillRoots(repoRoot, join(base, 'home'));
+  for (const name of names) {
+    const dir = join(roots.project, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n${name} body\n`);
+  }
+  return { repoRoot, roots };
+}
+
+describe('preset registry', () => {
+  it('exposes the openspec preset by name', () => {
+    expect(presetNames()).toContain('openspec');
+    expect(getPreset('openspec')?.summary).toContain('explore');
+  });
+
+  it('returns nothing for an unknown name', () => {
+    expect(getPreset('nope')).toBeUndefined();
+  });
+
+  it('keeps the default preset as the untouched default graph', () => {
+    expect(DEFAULT_PRESET.yaml).toBe(DEFAULT_WORKFLOW_YAML);
+    expect(DEFAULT_PRESET.requiredSkills).toEqual([]);
+  });
+});
+
+describe('the openspec preset scaffolds a valid workflow', () => {
+  const preset = getPreset('openspec')!;
+
+  it('loads and validates like any hand-written workflow', () => {
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
+
+    expect(wf.order).toEqual(['explore', 'propose', 'apply', 'test', 'validate', 'gate', 'archive']);
+  });
+
+  it('attaches each openspec skill to the node that needs it', () => {
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
+    const skillsOf = (id: string) => wf.nodes.find((n) => n.id === id)!.skills.map((s) => s.id);
+
+    expect(skillsOf('explore')).toEqual(['openspec-explore']);
+    expect(skillsOf('propose')).toEqual(['openspec-propose']);
+    expect(skillsOf('apply')).toEqual(['openspec-apply-change']);
+    expect(skillsOf('archive')).toEqual(['openspec-archive-change']);
+  });
+
+  it('puts the only conversational skill on the only interactive node', () => {
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
+
+    const explore = wf.nodes.find((n) => n.id === 'explore')!;
+    expect(explore.type.interactive).toBe(true);
+    for (const node of wf.nodes.filter((n) => n.id !== 'explore')) {
+      expect(node.type.interactive).toBe(false);
+    }
+  });
+
+  it('gates the git-mutating step, and does not retry a rejected gate', () => {
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
+
+    expect(wf.graph.directDependencies('archive')).toEqual(['gate']);
+    expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
+  });
+
+  it('fails to load when its skills are not installed, naming them', () => {
+    const { repoRoot, roots } = repoWithPresetSkills([]);
+
+    expect(() => loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots })).toThrow(
+      /openspec-explore/,
+    );
+  });
+
+  it('declares every skill its yaml references', () => {
+    const referenced = [...preset.yaml.matchAll(/skills: \[([^\]]+)\]/g)].flatMap((m) =>
+      m[1]!.split(',').map((s) => s.trim()),
+    );
+
+    expect([...new Set(referenced)].sort()).toEqual([...preset.requiredSkills].sort());
+  });
+});
+
+describe('every preset', () => {
+  it('produces a workflow whose test node still runs explicit commands', () => {
+    for (const preset of listPresets()) {
+      const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+      const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
+      const test = wf.nodes.find((n) => n.type.id === 'test');
+      if (!test) continue;
+      expect((test.config as { commands: unknown }).commands).toBeInstanceOf(Array);
+    }
+  });
+});
