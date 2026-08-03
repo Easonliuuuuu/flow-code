@@ -1,0 +1,58 @@
+name: Release
+
+# Publishes to npm when a `v*` tag is pushed. The tag is the trigger *and* the
+# source of truth for the version: the job refuses to publish if the tag and
+# package.json disagree, so a mistyped tag fails loudly instead of shipping the
+# wrong version.
+#
+# Auth is npm trusted publishing (OIDC) — there is no NPM_TOKEN secret to leak
+# or rotate, and npm attaches a provenance attestation to the release
+# automatically. Setup is a one-time step in the package settings on npmjs.com;
+# the `workflow_filename` registered there must stay `release.yml` (npm matches
+# it exactly, case-sensitively) or publishes start failing with an auth error.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for npm's OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 22.14+ and npm 11.5.1+ are the floor for OIDC trusted publishing.
+      # The package itself supports Node >=20 — that's what ci.yml tests on;
+      # this pin is only about the publishing toolchain.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+
+      - run: npm install -g npm@latest
+
+      - run: npm ci
+
+      # Same gate as ci.yml. A tag can be pushed to any commit, including one
+      # that never went through the PR checks, so re-run them rather than
+      # assuming main was green.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test
+
+      - name: Verify tag matches package.json version
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          pkg_version="$(node -p 'require("./package.json").version')"
+          if [ "$tag_version" != "$pkg_version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tag_version, but package.json says $pkg_version"
+            exit 1
+          fi
+          echo "publishing flow-code@$pkg_version"
+
+      # `npm ci` already ran `prepare` (which builds), and `npm publish` runs it
+      # again — building twice is cheap and keeps this correct if either side
+      # changes.
+      - run: npm publish

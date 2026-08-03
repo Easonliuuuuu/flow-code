@@ -3,6 +3,26 @@
   "version": "0.1.0",
   "description": "Terminal-native node-graph interface for running and observing agentic coding workflows",
   "license": "MIT",
+  "homepage": "https://github.com/Easonliuuuuu/flow-code#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Easonliuuuuu/flow-code.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Easonliuuuuu/flow-code/issues"
+  },
+  "keywords": [
+    "cli",
+    "tui",
+    "ink",
+    "agent",
+    "agentic",
+    "workflow",
+    "node-graph",
+    "claude",
+    "openai",
+    "openrouter"
+  ],
   "type": "module",
   "bin": {
     "flow-code": "./dist/cli.js"
@@ -12,6 +32,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=20"
   },
