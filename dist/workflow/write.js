@@ -85,6 +85,47 @@ export function setNodeModel(path, nodeId, model) {
             doc.setIn(['nodes', index, 'config', 'model'], model);
     });
 }
+/**
+ * Sets (or, with `value: null`, clears) one arbitrary string field of a
+ * node's config. The editable set is decided by `editableFields` in the UI,
+ * not here — this writer only has to put a string where it was asked to.
+ */
+export function setNodeConfigString(path, nodeId, field, value) {
+    editNode(path, nodeId, (doc, index) => {
+        if (value === null)
+            clearConfigField(doc, index, field);
+        else
+            doc.setIn(['nodes', index, 'config', field], value);
+    });
+}
+/**
+ * Sets (or, with `tokens: null`, clears) one node's own token ceiling. The
+ * budget is a sibling of `config`, so it can't go through `clearConfigField`.
+ */
+export function setNodeBudgetTokens(path, nodeId, tokens) {
+    editNode(path, nodeId, (doc, index) => {
+        if (tokens === null) {
+            doc.deleteIn(['nodes', index, 'budget', 'tokens']);
+            const budget = doc.getIn(['nodes', index, 'budget'], true);
+            if (isMap(budget) && budget.items.length === 0)
+                doc.deleteIn(['nodes', index, 'budget']);
+        }
+        else {
+            doc.setIn(['nodes', index, 'budget', 'tokens'], tokens);
+        }
+    });
+}
+/**
+ * Writes the command list a Test node runs. Used when a node reaches
+ * execution still carrying the scaffolded placeholder and the user says what
+ * it should run instead — the answer is kept so the question is asked once
+ * per project rather than once per run.
+ */
+export function setNodeTestCommands(path, nodeId, commands) {
+    editNode(path, nodeId, (doc, index) => {
+        doc.setIn(['nodes', index, 'config', 'commands'], commands);
+    });
+}
 /** Sets (or, with an empty array, clears) one node's `config.skills` in the workflow file on disk. */
 export function setNodeSkills(path, nodeId, skills) {
     editNode(path, nodeId, (doc, index) => {

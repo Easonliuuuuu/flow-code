@@ -22,6 +22,21 @@ export declare const budgetSchema: z.ZodObject<{
     minutesPerRun: z.ZodOptional<z.ZodNumber>;
 }, z.core.$strict>;
 export type RunBudget = z.infer<typeof budgetSchema>;
+/**
+ * One node's own ceiling, overriding `settings.budget.tokensPerNode` for it
+ * alone. A run-wide per-node number has to be set for the most expensive
+ * node in the graph, which leaves every cheap node effectively unbounded;
+ * this is how a single known-expensive (or known-cheap) node gets a limit
+ * that fits it.
+ *
+ * A sibling of `config` rather than a field inside it: the budget is enforced
+ * by the engine and means the same thing for every node type, so it has no
+ * business in a schema each type validates for itself.
+ */
+export declare const nodeBudgetSchema: z.ZodObject<{
+    tokens: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strict>;
+export type NodeBudget = z.infer<typeof nodeBudgetSchema>;
 export declare const settingsSchema: z.ZodObject<{
     concurrency: z.ZodDefault<z.ZodNumber>;
     model: z.ZodOptional<z.ZodString>;
@@ -57,6 +72,9 @@ export type WorkflowEdge = z.infer<typeof edgeSchema>;
 export declare const nodeEntrySchema: z.ZodObject<{
     id: z.ZodString;
     type: z.ZodString;
+    budget: z.ZodOptional<z.ZodObject<{
+        tokens: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strict>>;
     config: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
 }, z.core.$strict>;
 export declare const workflowFileSchema: z.ZodObject<{
@@ -72,6 +90,9 @@ export declare const workflowFileSchema: z.ZodObject<{
     nodes: z.ZodArray<z.ZodObject<{
         id: z.ZodString;
         type: z.ZodString;
+        budget: z.ZodOptional<z.ZodObject<{
+            tokens: z.ZodOptional<z.ZodNumber>;
+        }, z.core.$strict>>;
         config: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnknown>>;
     }, z.core.$strict>>;
     edges: z.ZodDefault<z.ZodArray<z.ZodObject<{

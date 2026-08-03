@@ -24,6 +24,21 @@ export const budgetSchema = z.strictObject({
     /** Wall-clock minutes the whole run may take. */
     minutesPerRun: z.number().min(0.1).optional(),
 });
+/**
+ * One node's own ceiling, overriding `settings.budget.tokensPerNode` for it
+ * alone. A run-wide per-node number has to be set for the most expensive
+ * node in the graph, which leaves every cheap node effectively unbounded;
+ * this is how a single known-expensive (or known-cheap) node gets a limit
+ * that fits it.
+ *
+ * A sibling of `config` rather than a field inside it: the budget is enforced
+ * by the engine and means the same thing for every node type, so it has no
+ * business in a schema each type validates for itself.
+ */
+export const nodeBudgetSchema = z.strictObject({
+    /** Tokens this node may consume across all of its attempts. */
+    tokens: z.number().int().min(1).optional(),
+});
 export const settingsSchema = z.strictObject({
     concurrency: z.number().int().min(1).max(16).default(2),
     model: z.string().min(1).optional(),
@@ -68,6 +83,7 @@ export const nodeEntrySchema = z.strictObject({
         .string()
         .regex(/^[A-Za-z0-9][A-Za-z0-9_-]*$/, 'node ids must be alphanumeric with - or _'),
     type: z.string().min(1),
+    budget: nodeBudgetSchema.optional(),
     config: z.record(z.string(), z.unknown()).optional(),
 });
 export const workflowFileSchema = z.strictObject({

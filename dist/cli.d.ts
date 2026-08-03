@@ -33,20 +33,3 @@ export interface ScaffoldResult {
  * repo.
  */
 export declare function scaffoldWorkflow(repoRoot: string, path: string, preset: WorkflowPreset, presetExplicit: boolean, confirmOverwrite: () => Promise<boolean>): Promise<ScaffoldResult>;
-/**
- * A Test node still carrying the scaffolded placeholder means nobody has
- * ever filled one in — `init` no longer asks (see cmdInit), so this is the
- * first, and only, place that offers to. Reuses the exact wizard `init`
- * used to run: heuristics first, an agent fallback if a provider is
- * configured and heuristics found nothing, then free-text entry, writing
- * whatever was chosen back to workflow.yaml. Returns whether anything may
- * have been written, so the caller knows to reload the workflow it already
- * parsed. Skipped entirely on a non-TTY run — with no one to ask, the
- * options are silently guessing at commands or hanging on a prompt that can
- * never be answered, and neither is better than failing with a pointer to
- * fix it once from an interactive terminal.
- */
-export declare function resolveTestPlaceholder(repoRoot: string, workflowPath: string, workflow: Workflow, provider: {
-    provider: ProviderId;
-    model?: string;
-} | undefined): Promise<boolean>;

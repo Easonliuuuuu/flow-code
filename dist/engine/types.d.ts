@@ -101,6 +101,24 @@ export interface DiscussPort {
     nextUserMessage(nodeId: string): Promise<string | null>;
     end(nodeId: string): void;
 }
+/**
+ * A Test node that reached execution still carrying the scaffolded
+ * placeholder command, asking what it should actually run.
+ *
+ * `discover` is handed over as a callback rather than run by the UI: reading
+ * the repo costs an agent session, and the executor is what holds the session
+ * runner. The UI decides *whether* to spend it; the executor knows how.
+ */
+export interface TestCommandsRequest {
+    nodeId: string;
+    /** Commands found by offline heuristics — free, instant, usually right. */
+    detected: string[];
+    /** Ask an agent to read the repo and propose commands, with its reasoning. */
+    discover(): Promise<Array<{
+        command: string;
+        rationale: string;
+    }>>;
+}
 /** UI bridge for the interactions a run can require. Headless-substitutable. */
 export interface InteractionPorts {
     approval: {
@@ -110,6 +128,10 @@ export interface InteractionPorts {
         select(req: ConvergenceRequest): Promise<string[]>;
     };
     discuss: DiscussPort;
+    /** Resolve null to run no tests at all; the node passes and says so. */
+    testCommands: {
+        request(req: TestCommandsRequest): Promise<string[] | null>;
+    };
 }
 export interface ExecuteContext {
     runId: string;
