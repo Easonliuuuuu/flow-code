@@ -18,6 +18,7 @@ import { ensureGitExclude } from './git/exclude.js';
 import { git, recordBaseline, removeWorktree } from './git/ops.js';
 import { runProviderWizard } from './init/providerWizard.js';
 import { confirm } from './init/prompts.js';
+import { selectFromList } from './init/SelectList.js';
 import { runTestSetupWizard } from './init/testWizard.js';
 import { listNodeTypes } from './registry/index.js';
 import { defaultSkillRoots, discoverSkills } from './skills/discover.js';
@@ -31,7 +32,7 @@ import {
 import { RunStateStore } from './runstate/store.js';
 import type { RunState } from './runstate/types.js';
 import { runUi, UiInteractionPorts } from './ui/index.js';
-import { DEFAULT_PRESET, getPreset, presetNames } from './presets.js';
+import { DEFAULT_PRESET, getPreset, listPresets, presetNames } from './presets.js';
 import { loadWorkflow, WORKFLOW_RELATIVE_PATH, WorkflowValidationError, type Workflow } from './workflow/load.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from './worktrees/reconcile.js';
 
@@ -162,6 +163,22 @@ export async function scaffoldWorkflow(
   return { justScaffolded, overwrote: overwrite };
 }
 
+/**
+ * Shown only when there's an actual choice to make: no `--preset` flag and no
+ * workflow.yaml yet. An already-scaffolded repo is left untouched by a bare
+ * `init` regardless of TTY, so this never fires on a reconfigure-only run.
+ */
+async function selectPresetInteractively(): Promise<WorkflowPreset | undefined> {
+  const presets = [DEFAULT_PRESET, ...listPresets()];
+  return selectFromList(
+    presets.map((p) => ({
+      label: p.name === 'default' ? `${p.name} — ${p.summary} (customize afterward)` : `${p.name} — ${p.summary}`,
+      value: p,
+    })),
+    { prompt: 'Starting workflow:' },
+  );
+}
+
 async function cmdInit(args: string[]): Promise<void> {
   const presetIdx = args.indexOf('--preset');
   const presetName = presetIdx >= 0 ? args[presetIdx + 1] : undefined;
@@ -172,10 +189,24 @@ async function cmdInit(args: string[]): Promise<void> {
       `unknown preset \`${presetName ?? ''}\` — available: ${presetNames().join(', ')}`,
     );
   }
-  const preset = presetName ? getPreset(presetName)! : DEFAULT_PRESET;
 
   const repoRoot = await repoRootFromCwd();
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
+
+  let preset: WorkflowPreset;
+  if (presetName) {
+    preset = getPreset(presetName)!;
+  } else if (!existsSync(path) && process.stdin.isTTY) {
+    const chosen = await selectPresetInteractively();
+    if (!chosen) {
+      console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
+      process.exit(0);
+    }
+    preset = chosen;
+  } else {
+    preset = DEFAULT_PRESET;
+  }
+
   const { justScaffolded } = await scaffoldWorkflow(repoRoot, path, preset, presetIdx >= 0, () =>
     confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`),
   );
