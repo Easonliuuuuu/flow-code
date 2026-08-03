@@ -6,11 +6,17 @@ import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS
 import { defaultSkillRoots } from '../src/skills/discover.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
 import {
+  centerOnBox,
   clampOffset,
   COMPACT_BOX_HEIGHT,
   computeLayout,
+  FOCUS_ANCHOR_X_FRACTION,
+  FOCUS_ANCHOR_Y_ROWS,
   hitTest,
   MAX_BOX_CONTENT,
+  MINI_BOX_HEIGHT,
+  MINI_MAX_BOX_CONTENT,
+  MINI_MIN_BOX_CONTENT,
   offscreenCounts,
   scrollIntoView,
 } from '../src/ui/layout.js';
@@ -116,12 +122,55 @@ nodes:
 
   it('compact layout keeps the columns and shortens every card', () => {
     const full = computeLayout(WF);
-    const compact = computeLayout(WF, undefined, { compact: true });
+    const compact = computeLayout(WF, undefined, { density: 'compact' });
     expect(compact.boxes.get('impl')!.h).toBe(COMPACT_BOX_HEIGHT);
     expect(compact.height).toBeLessThan(full.height);
     // Widths and columns are unchanged — only the vertical footprint shrinks.
     expect(compact.width).toBe(full.width);
     expect(compact.boxes.get('rev')!.x).toBe(full.boxes.get('rev')!.x);
+  });
+
+  it('mini layout shrinks both height and width, unlike compact which only shrinks height', () => {
+    const compact = computeLayout(WF, undefined, { density: 'compact' });
+    const mini = computeLayout(WF, undefined, { density: 'mini' });
+    expect(mini.boxes.get('impl')!.h).toBe(MINI_BOX_HEIGHT);
+    expect(mini.boxes.get('impl')!.w).toBeLessThan(compact.boxes.get('impl')!.w);
+    expect(mini.height).toBeLessThan(compact.height);
+  });
+
+  it('clamps mini box width to its own (narrower) bounds', () => {
+    const shortId = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+`);
+    const longId = workflowFromYaml(`
+nodes:
+  - id: ${'x'.repeat(50)}
+    type: implement
+    config: { instructions: x }
+`);
+    const shortMini = computeLayout(shortId, undefined, { density: 'mini' });
+    const longMini = computeLayout(longId, undefined, { density: 'mini' });
+    for (const layout of [shortMini, longMini]) {
+      for (const box of layout.boxes.values()) {
+        expect(box.w).toBeGreaterThanOrEqual(MINI_MIN_BOX_CONTENT);
+        expect(box.w).toBeLessThanOrEqual(MINI_MAX_BOX_CONTENT);
+      }
+    }
+  });
+
+  it('centerOnBox anchors the box left-of-center and near the top, unclamped', () => {
+    const layout = computeLayout(WF);
+    const rev = layout.boxes.get('rev')!;
+    const viewport = { width: 40, height: 20 };
+    const { ox, oy } = centerOnBox(rev, viewport);
+    expect(ox).toBe(rev.x - Math.round(viewport.width * FOCUS_ANCHOR_X_FRACTION));
+    expect(oy).toBe(rev.y - FOCUS_ANCHOR_Y_ROWS);
+    // Near the origin the raw result goes negative — clamping is the caller's job.
+    const impl = layout.boxes.get('impl')!;
+    expect(centerOnBox(impl, viewport).oy).toBeLessThan(0);
   });
 
   it('clampOffset stops panning at the far edge of the graph', () => {
@@ -246,7 +295,7 @@ describe('canvas rendering', () => {
     const store = storeFor(WF, '/tmp');
     store.setStatus('impl', 'running');
     store.addTokens('impl', { input: 1_200, output: 340, cached: 0 });
-    const layout = computeLayout(WF, undefined, { compact: true });
+    const layout = computeLayout(WF, undefined, { density: 'compact' });
     const started = Date.parse(store.snapshot().nodes['impl']!.startedAt!);
     const lines = gridToLines(
       renderGraph(WF, layout, store.snapshot(), null, { frame: 0, now: started + 5_000 }),
@@ -263,6 +312,35 @@ describe('canvas rendering', () => {
     // Three rows per card, and every one of them closed by a border.
     expect(layout.boxes.get('impl')!.h).toBe(3);
     expect(lines[2]!.startsWith('╰')).toBe(true);
+  });
+
+  it('draws a mini card as one borderless row, with edges connecting to that row', () => {
+    const store = storeFor(WF, '/tmp');
+    const layout = computeLayout(WF, undefined, { density: 'mini' });
+    const grid = renderGraph(WF, layout, store.snapshot(), null);
+    const lines = gridToLines(grid, {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    }).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+    const text = lines.join('\n');
+
+    expect(layout.boxes.get('impl')!.h).toBe(MINI_BOX_HEIGHT);
+    expect(text).toContain('impl');
+    // No border glyphs within any mini box's own columns (edges elsewhere in
+    // the grid legitimately use '│' for vertical connectors between layers).
+    for (const box of layout.boxes.values()) {
+      const row = lines[box.y]!.slice(box.x, box.x + box.w);
+      expect(row).not.toMatch(/[╭╰│]/);
+    }
+
+    // The edge out of impl connects on its one and only row, not the row below it,
+    // and arrives on the target's one and only row too.
+    const impl = layout.boxes.get('impl')!;
+    const check = layout.boxes.get('check')!;
+    expect(lines[impl.y]).toContain('─');
+    expect(lines[check.y]).toContain('▶');
   });
 
   it('marks an elided card line with an ellipsis rather than cutting it dead', () => {

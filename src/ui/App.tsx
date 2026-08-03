@@ -19,6 +19,7 @@ import {
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import {
+  centerOnBox,
   clampOffset,
   computeLayout,
   hitTest,
@@ -149,6 +150,10 @@ export function App({
   // null = follow the auto rule (compact once the graph outgrows the canvas);
   // a boolean is the user overruling it with `z`.
   const [compactOverride, setCompactOverride] = useState<boolean | null>(null);
+  // 'focus' hard-centers the focused node; 'overview' forces mini density and
+  // keeps the gentler scrollIntoView nudge. Independent of compactOverride —
+  // z only has visible effect while in focus mode.
+  const [viewMode, setViewMode] = useState<'focus' | 'overview'>('focus');
   const [inputBuffer, setInputBuffer] = useState('');
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
@@ -298,12 +303,16 @@ export function App({
   // the switch stays switched).
   const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
   const compactLayout = useMemo(
-    () => computeLayout(workflow, overrides, { compact: true }),
+    () => computeLayout(workflow, overrides, { density: 'compact' }),
+    [workflow, overrides],
+  );
+  const miniLayout = useMemo(
+    () => computeLayout(workflow, overrides, { density: 'mini' }),
     [workflow, overrides],
   );
   const autoCompact = fullLayout.height > canvasHeight;
   const compact = compactOverride ?? autoCompact;
-  const layout = compact ? compactLayout : fullLayout;
+  const layout = viewMode === 'overview' ? miniLayout : compact ? compactLayout : fullLayout;
   const viewport = { ...offset, width: canvasWidth, height: canvasHeight };
   // Panning is clamped so it can never leave the graph off-screen entirely,
   // and goes through one helper so the keyboard and the scroll wheel agree.
@@ -500,15 +509,22 @@ export function App({
     setModelTick((t) => t + 1);
   };
 
-  // Focus scrolls into view (keyboard navigation on graphs larger than the terminal).
+  // Focus mode hard-centers the focused node near the upper-left of the
+  // canvas; overview mode keeps the gentler nudge — the point there is
+  // surveying many nodes, not spotlighting one.
   useEffect(() => {
     if (!focusedId) return;
     const box = layout.boxes.get(focusedId);
     if (!box) return;
-    setOffset((prev) =>
-      scrollIntoView(box, { ...prev, width: canvasWidth, height: canvasHeight }),
-    );
-  }, [focusedId, layout, canvasWidth, canvasHeight]);
+    setOffset((prev) => {
+      const viewport = { ...prev, width: canvasWidth, height: canvasHeight };
+      const next = viewMode === 'focus' ? centerOnBox(box, viewport) : scrollIntoView(box, viewport);
+      const clamped = clampOffset(layout, { ...next, width: canvasWidth, height: canvasHeight });
+      // Bail out (same reference) rather than a same-valued new object, so
+      // React skips the redundant re-render when the box was already in view.
+      return clamped.ox === prev.ox && clamped.oy === prev.oy ? prev : clamped;
+    });
+  }, [focusedId, layout, viewMode, canvasWidth, canvasHeight]);
 
   // Auto-focus a gate when its approval request arrives.
   useEffect(() => {
@@ -1047,6 +1063,8 @@ export function App({
       if (focusedNode) openEditor();
     } else if (input === 'z') {
       setCompactOverride(!compact);
+    } else if (input === 'o') {
+      setViewMode((m) => (m === 'focus' ? 'overview' : 'focus'));
     } else if (key.leftArrow) {
       panBy(-PAN_STEP_X, 0);
     } else if (key.rightArrow) {
@@ -1120,6 +1138,7 @@ export function App({
         {/* Lives in the header rather than the bottom hint line because the
             hint line disappears behind a docked panel — which is exactly when
             the canvas is smallest and the most nodes are off-screen. */}
+        {viewMode === 'overview' ? <Text dimColor> · overview</Text> : null}
         {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
@@ -1618,8 +1637,9 @@ export function App({
         </Box>
       ) : (
         <Text dimColor>
-          tab: focus · enter: details · e: settings · ←→↑↓ (⇧ anywhere): pan · z:{' '}
-          {compact ? 'full cards' : 'compact'} · q: quit
+          tab: focus · enter: details · e: settings · ←→↑↓ (⇧ anywhere): pan ·{' '}
+          {viewMode === 'focus' ? `z: ${compact ? 'full cards' : 'compact'} · ` : ''}
+          o: {viewMode === 'focus' ? 'overview' : 'focus'} · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
         </Text>
       )}
