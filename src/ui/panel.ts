@@ -31,7 +31,7 @@ export function dockedRect(bounds: Bounds, height: number): PanelRect {
 }
 
 /** Fraction of the terminal a docked panel takes up by default. */
-export const DOCKED_HEIGHT_RATIO = 0.45;
+export const DOCKED_HEIGHT_RATIO = 0.6;
 
 /**
  * Splits the terminal between the canvas and a docked panel, below `headerRows`
