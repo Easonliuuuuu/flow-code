@@ -3,6 +3,7 @@ import type { Capability } from '../capabilities.js';
 
 export const NODE_TYPE_IDS = [
   'discuss',
+  'spec',
   'implement',
   'test',
   'validate',

@@ -4,9 +4,32 @@ import { z } from 'zod';
  *  - concurrency: 2 — max concurrently running agent sessions across the run
  *  - model: unset — each session falls back to the Claude Agent SDK's default
  */
+/**
+ * Stop rules. A workflow that can retry is a workflow that can spend without
+ * bound, so a run gets to say how much it is allowed to cost before it is
+ * stopped — in tokens, per node and overall, and in wall-clock minutes.
+ *
+ * Every field is optional and unset means unbounded: an existing workflow
+ * keeps behaving exactly as it did. Scaffolded workflows come with real
+ * numbers, because "no ceiling" is a bad default to hand someone new.
+ *
+ * A budget stop is deliberately final — it never triggers a loop-back retry.
+ * Retrying past a ceiling is precisely what the ceiling exists to prevent.
+ */
+export declare const budgetSchema: z.ZodObject<{
+    tokensPerNode: z.ZodOptional<z.ZodNumber>;
+    tokensPerRun: z.ZodOptional<z.ZodNumber>;
+    minutesPerRun: z.ZodOptional<z.ZodNumber>;
+}, z.core.$strict>;
+export type RunBudget = z.infer<typeof budgetSchema>;
 export declare const settingsSchema: z.ZodObject<{
     concurrency: z.ZodDefault<z.ZodNumber>;
     model: z.ZodOptional<z.ZodString>;
+    budget: z.ZodOptional<z.ZodObject<{
+        tokensPerNode: z.ZodOptional<z.ZodNumber>;
+        tokensPerRun: z.ZodOptional<z.ZodNumber>;
+        minutesPerRun: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strict>>;
 }, z.core.$strict>;
 export type RunSettings = z.infer<typeof settingsSchema>;
 export declare const DEFAULT_SETTINGS: RunSettings;
@@ -28,6 +51,7 @@ export declare const edgeSchema: z.ZodObject<{
     }, true | {
         maxAttempts: number;
     }>>>;
+    when: z.ZodOptional<z.ZodString>;
 }, z.core.$strict>;
 export type WorkflowEdge = z.infer<typeof edgeSchema>;
 export declare const nodeEntrySchema: z.ZodObject<{
@@ -39,6 +63,11 @@ export declare const workflowFileSchema: z.ZodObject<{
     settings: z.ZodOptional<z.ZodObject<{
         concurrency: z.ZodDefault<z.ZodNumber>;
         model: z.ZodOptional<z.ZodString>;
+        budget: z.ZodOptional<z.ZodObject<{
+            tokensPerNode: z.ZodOptional<z.ZodNumber>;
+            tokensPerRun: z.ZodOptional<z.ZodNumber>;
+            minutesPerRun: z.ZodOptional<z.ZodNumber>;
+        }, z.core.$strict>>;
     }, z.core.$strict>>;
     nodes: z.ZodArray<z.ZodObject<{
         id: z.ZodString;
@@ -55,6 +84,7 @@ export declare const workflowFileSchema: z.ZodObject<{
         }, true | {
             maxAttempts: number;
         }>>>;
+        when: z.ZodOptional<z.ZodString>;
     }, z.core.$strict>>>;
 }, z.core.$strict>;
 export type WorkflowFileRaw = z.infer<typeof workflowFileSchema>;

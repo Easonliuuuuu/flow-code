@@ -1,9 +1,16 @@
+import { type Condition } from './condition.js';
 import type { WorkflowEdge } from './schema.js';
 /** A return path: when `from` fails, execution resumes at `to`. */
 export interface Loopback {
     from: string;
     to: string;
     maxAttempts: number;
+}
+/** A forward edge that only carries when its condition holds. */
+export interface ConditionalEdge {
+    from: string;
+    to: string;
+    condition: Condition;
 }
 /**
  * Pure graph structure over node ids. Built after schema validation; assumes
@@ -19,7 +26,11 @@ export declare class Graph {
     private readonly out;
     private readonly in_;
     private readonly loopbacks;
+    private readonly conditionals;
     constructor(nodeIds: string[], edges: WorkflowEdge[]);
+    /** Conditions guarding entry to `id` — all must hold for it to run. */
+    conditionsInto(id: string): ConditionalEdge[];
+    allConditionals(): ConditionalEdge[];
     /** Loop-back edges whose source is `id` — i.e. that fire when `id` fails. */
     loopbacksFrom(id: string): Loopback[];
     allLoopbacks(): Loopback[];

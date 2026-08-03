@@ -7,6 +7,18 @@ const discussConfig = z.strictObject({
     topic: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
 });
+/**
+ * A Spec node either derives the spec from upstream context (no fields set,
+ * the agent writes it) or is handed one outright. Supplying
+ * `acceptanceCriteria` in config skips the agent session entirely — a spec
+ * you already know is not worth paying a model to restate.
+ */
+const specConfig = z.strictObject({
+    title: z.string().min(1).optional(),
+    requirements: z.array(z.string().min(1)).optional(),
+    acceptanceCriteria: z.array(z.string().min(1)).optional(),
+    model: z.string().min(1).optional(),
+});
 const implementConfig = z.strictObject({
     instructions: z.string().min(1),
     model: z.string().min(1).optional(),
@@ -70,6 +82,19 @@ export const discussOutput = z.object({
     conclusion: z.string(),
     constraints: z.array(z.string()),
 });
+/** One testable statement the run is finished against. */
+export const acceptanceCriterion = z.object({
+    /** Stable within a run (`AC1`, `AC2`, …) so downstream nodes can cite it. */
+    id: z.string(),
+    text: z.string(),
+});
+export const specOutput = z.object({
+    /** Repo-relative path of the written spec, for a human to open or commit. */
+    specPath: z.string(),
+    title: z.string(),
+    requirements: z.array(z.string()),
+    acceptanceCriteria: z.array(acceptanceCriterion),
+});
 export const implementOutput = z.object({
     changedFiles: z.array(z.string()),
     diff: z.string(),
@@ -86,6 +111,19 @@ export const testOutput = z.object({
 export const validateOutput = z.object({
     verdict: z.enum(['pass', 'fail']),
     notes: z.string(),
+    /**
+     * One entry per acceptance criterion in scope, when an upstream Spec node
+     * supplied any. This is what turns validation from an opinion into a
+     * checklist: the verdict is then computed from the entries rather than
+     * asserted, so a model cannot pass a run whose criteria are unmet.
+     */
+    criteria: z
+        .array(z.object({
+        id: z.string(),
+        met: z.boolean(),
+        evidence: z.string(),
+    }))
+        .default([]),
 });
 export const reviewOutput = z.object({
     verdict: z.enum(['pass', 'fail']),
@@ -149,6 +187,24 @@ const definitions = [
         outputSummary: 'conclusion (string), constraints (string[])',
     },
     {
+        id: 'spec',
+        displayName: 'Spec',
+        description: 'Writes the durable spec — requirements and acceptance criteria — that the rest of the run implements and is verified against. ' +
+            'The file is written by flow-code itself, not by an agent, and no node can edit it afterwards.',
+        capabilities: ['read'],
+        agentDriven: true,
+        hasModelField: true,
+        rolePrompt: 'You are the specification step of a coding workflow. ' +
+            'Turn the intent in your context into a short, concrete spec: what must be true when this change is done. ' +
+            'Acceptance criteria are the contract the work will be judged against, so each one must be a single, ' +
+            'independently checkable statement about observable behaviour — not a task list, not a restatement of the plan. ' +
+            'You may read the repository to ground the spec in what actually exists, but you must not change anything.',
+        configSchema: specConfig,
+        outputSchema: specOutput,
+        configSummary: 'title? (string), requirements? (string[]), acceptanceCriteria? (string[]), model? (string)',
+        outputSummary: 'specPath (string), title (string), requirements (string[]), acceptanceCriteria ({id, text}[])',
+    },
+    {
         id: 'implement',
         displayName: 'Implement',
         description: 'Agent session that writes code for the configured task.',
@@ -194,7 +250,7 @@ const definitions = [
         configSchema: validateConfig,
         outputSchema: validateOutput,
         configSummary: 'instructions? (string), model? (string)',
-        outputSummary: "verdict ('pass'|'fail'), notes (string)",
+        outputSummary: "verdict ('pass'|'fail'), notes (string), criteria ({id, met, evidence}[])",
         failsWhen: failsOnFailVerdict,
     },
     {

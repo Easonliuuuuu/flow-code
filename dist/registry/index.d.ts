@@ -6,6 +6,18 @@ declare const discussConfig: z.ZodObject<{
     topic: z.ZodOptional<z.ZodString>;
     model: z.ZodOptional<z.ZodString>;
 }, z.core.$strict>;
+/**
+ * A Spec node either derives the spec from upstream context (no fields set,
+ * the agent writes it) or is handed one outright. Supplying
+ * `acceptanceCriteria` in config skips the agent session entirely — a spec
+ * you already know is not worth paying a model to restate.
+ */
+declare const specConfig: z.ZodObject<{
+    title: z.ZodOptional<z.ZodString>;
+    requirements: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    acceptanceCriteria: z.ZodOptional<z.ZodArray<z.ZodString>>;
+    model: z.ZodOptional<z.ZodString>;
+}, z.core.$strict>;
 declare const implementConfig: z.ZodObject<{
     instructions: z.ZodString;
     model: z.ZodOptional<z.ZodString>;
@@ -57,6 +69,20 @@ export declare const discussOutput: z.ZodObject<{
     conclusion: z.ZodString;
     constraints: z.ZodArray<z.ZodString>;
 }, z.core.$strip>;
+/** One testable statement the run is finished against. */
+export declare const acceptanceCriterion: z.ZodObject<{
+    id: z.ZodString;
+    text: z.ZodString;
+}, z.core.$strip>;
+export declare const specOutput: z.ZodObject<{
+    specPath: z.ZodString;
+    title: z.ZodString;
+    requirements: z.ZodArray<z.ZodString>;
+    acceptanceCriteria: z.ZodArray<z.ZodObject<{
+        id: z.ZodString;
+        text: z.ZodString;
+    }, z.core.$strip>>;
+}, z.core.$strip>;
 export declare const implementOutput: z.ZodObject<{
     changedFiles: z.ZodArray<z.ZodString>;
     diff: z.ZodString;
@@ -76,6 +102,11 @@ export declare const validateOutput: z.ZodObject<{
         fail: "fail";
     }>;
     notes: z.ZodString;
+    criteria: z.ZodDefault<z.ZodArray<z.ZodObject<{
+        id: z.ZodString;
+        met: z.ZodBoolean;
+        evidence: z.ZodString;
+    }, z.core.$strip>>>;
 }, z.core.$strip>;
 export declare const reviewOutput: z.ZodObject<{
     verdict: z.ZodEnum<{
@@ -125,6 +156,8 @@ export declare const approvalGateOutput: z.ZodObject<{
     decidedAt: z.ZodString;
 }, z.core.$strip>;
 export type DiscussOutput = z.infer<typeof discussOutput>;
+export type SpecOutput = z.infer<typeof specOutput>;
+export type AcceptanceCriterion = z.infer<typeof acceptanceCriterion>;
 export type ImplementOutput = z.infer<typeof implementOutput>;
 export type TestOutput = z.infer<typeof testOutput>;
 export type ValidateOutput = z.infer<typeof validateOutput>;
@@ -133,6 +166,7 @@ export type GitOpsOutput = z.infer<typeof gitOpsOutput>;
 export type WorktreeAgentOutput = z.infer<typeof worktreeAgentOutput>;
 export type ApprovalGateOutput = z.infer<typeof approvalGateOutput>;
 export type DiscussConfig = z.infer<typeof discussConfig>;
+export type SpecConfig = z.infer<typeof specConfig>;
 export type ImplementConfig = z.infer<typeof implementConfig>;
 export type TestConfig = z.infer<typeof testConfig>;
 export type ValidateConfig = z.infer<typeof validateConfig>;

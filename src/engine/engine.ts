@@ -1,6 +1,8 @@
 import type { NodeTypeId } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
 import type { RunBaseline } from '../runstate/types.js';
+import { evaluateCondition } from '../workflow/condition.js';
+import type { ConditionalEdge } from '../workflow/graph.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import type {
   ExecuteContext,
@@ -67,6 +69,17 @@ export class Engine {
   private readonly running = new Map<string, Promise<void>>();
   /** Pending "why you are running again" context, keyed by loop-back target. */
   private readonly retryReasons = new Map<string, UpstreamInput>();
+  /**
+   * One abort controller per in-flight node, so a per-node budget can stop
+   * that node's session without taking down the rest of the run. Each is
+   * chained to the run-wide signal, so ctrl+c still stops everything.
+   */
+  private readonly nodeAborts = new Map<string, AbortController>();
+  /** Nodes stopped by their own budget, with the message explaining it. */
+  private readonly nodeBudgetStops = new Map<string, string>();
+  /** Set once a run-wide budget is spent; no further node ever starts. */
+  private runBudgetStop: string | null = null;
+  private runStartedAt = Date.now();
 
   constructor(opts: EngineOptions) {
     this.opts = opts;
@@ -74,6 +87,59 @@ export class Engine {
     this.store = opts.store;
     this.sessionSlots = new Semaphore(opts.workflow.settings.concurrency);
     this.signal = opts.signal ?? new AbortController().signal;
+  }
+
+  /**
+   * Enforce the run's stop rules. Called on every run-state change (token
+   * counts move there) and on a timer while a wall-clock budget is set.
+   *
+   * A run-wide breach stops everything; a per-node breach stops only the node
+   * that overspent, so the rest of the graph can still finish and report. In
+   * both cases the stop is an abort of a live session, not a polite request:
+   * the point of a ceiling is that it holds.
+   */
+  private checkBudgets(): void {
+    const budget = this.wf.settings.budget;
+    if (!budget || this.runBudgetStop !== null) return;
+
+    if (budget.tokensPerRun !== undefined) {
+      const spent = this.store.totalTokens();
+      if (spent > budget.tokensPerRun) {
+        this.stopRun(
+          `run token budget exhausted: ${spent} tokens spent of ${budget.tokensPerRun} allowed`,
+        );
+        return;
+      }
+    }
+
+    if (budget.minutesPerRun !== undefined) {
+      const elapsedMinutes = (Date.now() - this.runStartedAt) / 60_000;
+      if (elapsedMinutes > budget.minutesPerRun) {
+        this.stopRun(
+          `run time budget exhausted: ${elapsedMinutes.toFixed(1)} minutes elapsed of ${budget.minutesPerRun} allowed`,
+        );
+        return;
+      }
+    }
+
+    if (budget.tokensPerNode !== undefined) {
+      for (const id of this.nodeAborts.keys()) {
+        if (this.nodeBudgetStops.has(id)) continue;
+        const spent = this.store.tokensFor(id);
+        if (spent > budget.tokensPerNode) {
+          this.nodeBudgetStops.set(
+            id,
+            `node token budget exhausted: ${spent} tokens spent of ${budget.tokensPerNode} allowed`,
+          );
+          this.nodeAborts.get(id)?.abort();
+        }
+      }
+    }
+  }
+
+  private stopRun(reason: string): void {
+    this.runBudgetStop = reason;
+    for (const controller of this.nodeAborts.values()) controller.abort();
   }
 
   private nodeById(id: string): WorkflowNode {
@@ -95,10 +161,30 @@ export class Engine {
     });
   }
 
+  /**
+   * A dependency stops holding a node back once it is `done` — or once it was
+   * skipped because a routing condition took the run down a different branch.
+   * A branch that was never taken is not a failure and must not block the
+   * node the branches rejoin at; a branch that *failed* still does.
+   */
+  private depCleared(depId: string): boolean {
+    const dep = this.store.node(depId);
+    return dep.status === 'done' || (dep.status === 'skipped' && dep.skipReason === 'condition');
+  }
+
   private depsSatisfied(id: string): boolean {
-    return this.wf.graph
-      .directDependencies(id)
-      .every((dep) => this.store.node(dep).status === 'done');
+    return this.wf.graph.directDependencies(id).every((dep) => this.depCleared(dep));
+  }
+
+  /**
+   * True when every path into a node came from a branch that was not taken —
+   * nothing upstream of it actually ran, so there is nothing for it to do.
+   * This is what makes a skip cascade down its own arm of the graph while a
+   * node with a live path into it still runs.
+   */
+  private onlyUntakenBranchesInto(id: string): boolean {
+    const deps = this.wf.graph.directDependencies(id);
+    return deps.length > 0 && deps.every((dep) => this.store.node(dep).status === 'skipped');
   }
 
   /**
@@ -264,17 +350,42 @@ export class Engine {
   }
 
   private markDownstreamSkipped(id: string): void {
+    // When the whole run is out of budget, that is the reason worth recording
+    // on every node it takes down — not "upstream didn't finish", which is
+    // true but explains nothing.
+    const reason = this.runBudgetStop ?? `upstream ${id} did not complete`;
     for (const downstream of this.wf.graph.downstreamOf(id)) {
       const status = this.store.node(downstream).status;
       if (status === 'idle' || status === 'waiting') {
-        this.store.setStatus(downstream, 'skipped', `upstream ${id} did not complete`);
+        this.store.setSkipped(downstream, 'upstream', reason);
       }
     }
+  }
+
+  /**
+   * The first incoming condition that does not hold, once every dependency is
+   * done. All of them must hold for a node to run — a conditional edge is a
+   * dependency that also has an opinion, and an unmet opinion means this
+   * branch is not the one being taken.
+   */
+  private unmetCondition(id: string): ConditionalEdge | undefined {
+    return this.wf.graph
+      .conditionsInto(id)
+      .find(
+        (edge) => !evaluateCondition(edge.condition, this.store.node(edge.condition.nodeId).output),
+      );
   }
 
   private async runNode(node: WorkflowNode): Promise<void> {
     const workingDir = this.workingDirFor(node.id);
     this.store.setWorkingDir(node.id, workingDir);
+
+    // This node's own abort signal, chained to the run's: a budget can stop
+    // just this node, ctrl+c still stops all of them.
+    const controller = new AbortController();
+    if (this.signal.aborted) controller.abort();
+    else this.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    this.nodeAborts.set(node.id, controller);
 
     const ctx: ExecuteContext = {
       runId: this.store.runId,
@@ -289,7 +400,7 @@ export class Engine {
       ports: this.opts.ports,
       sessions: this.opts.sessions,
       acquireSessionSlot: () => this.sessionSlots.acquire(),
-      signal: this.signal,
+      signal: controller.signal,
     };
 
     const executor = this.opts.executors[node.type.id];
@@ -329,23 +440,53 @@ export class Engine {
       }
     } catch (err) {
       sawError = true;
-      this.store.setStatus(node.id, 'error', err instanceof Error ? err.message : String(err));
+      // A session aborted by a budget reports whatever its runner threw on the
+      // way out; the budget is the real reason and the one worth recording.
+      const budgetStop = this.nodeBudgetStops.get(node.id) ?? this.runBudgetStop;
+      this.store.setStatus(
+        node.id,
+        'error',
+        budgetStop ?? (err instanceof Error ? err.message : String(err)),
+      );
+    } finally {
+      this.nodeAborts.delete(node.id);
     }
     if (sawError || this.store.node(node.id).status === 'error') {
-      // A declared loop-back turns this failure into another attempt; without
-      // one, the branch stops here exactly as it always has.
-      if (!this.fireLoopback(node.id)) this.markDownstreamSkipped(node.id);
+      // A budget stop is final: retrying past a ceiling is exactly what the
+      // ceiling exists to prevent. Every other failure may still loop back.
+      const stoppedByBudget =
+        this.nodeBudgetStops.has(node.id) || this.runBudgetStop !== null;
+      if (stoppedByBudget || !this.fireLoopback(node.id)) this.markDownstreamSkipped(node.id);
     }
   }
 
   private startEligible(): void {
-    // Interrupted: let in-flight nodes unwind (they'll reject on the shared
-    // signal) but never begin new work.
-    if (this.signal.aborted) return;
+    // Interrupted, or out of budget: let in-flight nodes unwind (they'll
+    // reject on the shared signal) but never begin new work.
+    if (this.signal.aborted || this.runBudgetStop !== null) return;
     for (const id of this.wf.order) {
       const node = this.nodeById(id);
       if (this.store.node(id).status !== 'idle') continue;
       if (!this.depsSatisfied(id)) continue;
+
+      // Nothing upstream actually ran: this node is on the arm of the graph
+      // that was not taken. Skipping it here is what cascades a routing
+      // decision down its own branch — `wf.order` is topological, so the
+      // cascade completes within this single pass.
+      if (this.onlyUntakenBranchesInto(id)) {
+        this.store.setSkipped(id, 'condition', 'upstream branch was not taken');
+        continue;
+      }
+
+      // Every dependency is settled, so every condition can now be answered.
+      // An unmet one skips this node — this is how a graph routes rather than
+      // merely sequences.
+      const unmet = this.unmetCondition(id);
+      if (unmet) {
+        this.store.setSkipped(id, 'condition', `condition not met: \`${unmet.condition.source}\``);
+        continue;
+      }
+
       // A Discuss node holds the whole run: nothing new starts while one is active.
       if (this.discussActive()) break;
       const needsLock = this.takesMainTreeLock(node);
@@ -364,19 +505,30 @@ export class Engine {
   }
 
   async run(): Promise<void> {
+    this.runStartedAt = Date.now();
+    // Token counts live in the run-state, so every commit is the moment a
+    // token budget can newly be exceeded.
+    const unsubscribe = this.store.subscribe(() => this.checkBudgets());
+    // A wall-clock budget has no such event to hang off; it needs a clock.
+    const timer =
+      this.wf.settings.budget?.minutesPerRun !== undefined
+        ? setInterval(() => this.checkBudgets(), 1_000)
+        : undefined;
+    timer?.unref?.();
+
     try {
       while (!this.store.allTerminal()) {
         this.startEligible();
         if (this.running.size === 0) {
           if (!this.store.allTerminal()) {
-            // Defensive: nothing running and nothing startable — mark the
-            // stragglers so the run terminates rather than spinning.
-            const reason = this.signal.aborted
-              ? 'run interrupted'
-              : 'unreachable: upstream never completed';
+            // Nothing running and nothing startable — mark the stragglers so
+            // the run terminates rather than spinning.
+            const reason =
+              this.runBudgetStop ??
+              (this.signal.aborted ? 'run interrupted' : 'unreachable: upstream never completed');
             for (const id of this.wf.order) {
               if (this.store.node(id).status === 'idle') {
-                this.store.setStatus(id, 'skipped', reason);
+                this.store.setSkipped(id, 'upstream', reason);
               }
             }
           }
@@ -385,6 +537,8 @@ export class Engine {
         await Promise.race(this.running.values());
       }
     } finally {
+      unsubscribe();
+      if (timer) clearInterval(timer);
       this.store.markFinished(this.signal.aborted);
     }
   }

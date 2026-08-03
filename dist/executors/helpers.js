@@ -66,6 +66,40 @@ export function extractJson(text) {
         throw new Error('agent response contained no parseable JSON object');
     return last;
 }
+/**
+ * Acceptance criteria reaching a node through its upstream context — the
+ * contract a Spec node set for this run.
+ *
+ * Read back out of the serialized upstream outputs rather than passed down a
+ * side channel: upstream output *is* how one node learns what another
+ * decided, and a criterion the downstream prompt can quote is a criterion the
+ * downstream node was actually given.
+ */
+export function acceptanceCriteriaFrom(upstream) {
+    for (const input of upstream) {
+        // A truncated output may have lost criteria mid-array; verifying against
+        // half a contract is worse than verifying against none.
+        if (input.truncated)
+            continue;
+        let parsed;
+        try {
+            parsed = JSON.parse(input.outputJson);
+        }
+        catch {
+            continue;
+        }
+        const criteria = parsed?.acceptanceCriteria;
+        if (!Array.isArray(criteria))
+            continue;
+        const usable = criteria.filter((c) => typeof c === 'object' &&
+            c !== null &&
+            typeof c.id === 'string' &&
+            typeof c.text === 'string');
+        if (usable.length > 0)
+            return usable;
+    }
+    return [];
+}
 export function nodeModel(ctx, configModel) {
     return configModel ?? ctx.settings.model;
 }

@@ -35,6 +35,11 @@ export declare class RunStateStore {
     setBaseline(baseline: RunBaseline): void;
     setStatus(nodeId: string, status: NodeStatus, detail?: string): void;
     /**
+     * Skip a node, recording *why* — the distinction downstream scheduling turns
+     * on (see `NodeRunState.skipReason`).
+     */
+    setSkipped(nodeId: string, reason: 'condition' | 'upstream', detail: string): void;
+    /**
      * Accumulate token usage reported by a runner. Deltas, not totals: every
      * API response adds its own usage, so the count climbs live during a
      * session and survives across attempts (a loop-back re-run adds to the
@@ -71,6 +76,10 @@ export declare class RunStateStore {
     liveOutputFor(nodeId: string): string;
     appendDiscussMessage(nodeId: string, entry: DiscussTranscriptEntry): void;
     setSessionId(nodeId: string, sessionId: string): void;
+    /** Tokens one node has consumed so far, across every attempt. */
+    tokensFor(nodeId: string): number;
+    /** Tokens the whole run has consumed so far. */
+    totalTokens(): number;
     markFinished(interrupted?: boolean): void;
     allTerminal(): boolean;
 }

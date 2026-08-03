@@ -293,6 +293,7 @@ describe('default workflow template', () => {
     const wf = loadWorkflowFromString(DEFAULT_WORKFLOW_YAML);
     expect(wf.nodes.map((n) => n.type.id)).toEqual([
       'discuss',
+      'spec',
       'implement',
       'test',
       'validate',
@@ -321,16 +322,17 @@ describe('default workflow template', () => {
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
     // Loop-backs are return paths, not dependencies: implement must not wait
     // on the nodes that can send work back to it.
-    expect(wf.graph.directDependencies('implement')).toEqual(['discuss']);
+    expect(wf.graph.directDependencies('implement')).toEqual(['spec']);
   });
 });
 
 describe('node type registry', () => {
-  it('registers all eight built-in types', () => {
+  it('registers all nine built-in types', () => {
     expect([...nodeTypeRegistry.keys()].sort()).toEqual(
       [
         'approval-gate',
         'discuss',
+        'spec',
         'git-ops',
         'implement',
         'review',

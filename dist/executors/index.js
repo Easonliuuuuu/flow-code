@@ -1,10 +1,12 @@
 import { executeGitOps, executeImplement, executeReview, executeValidate } from './agents.js';
 import { executeDiscuss } from './discuss.js';
+import { executeSpec } from './spec.js';
 import { executeApprovalGate } from './gate.js';
 import { executeTest } from './test.js';
 import { executeWorktreeAgent } from './worktree.js';
 export const builtinExecutors = {
     discuss: executeDiscuss,
+    spec: executeSpec,
     implement: executeImplement,
     test: executeTest,
     validate: executeValidate,

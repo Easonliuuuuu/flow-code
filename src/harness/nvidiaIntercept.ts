@@ -4,7 +4,13 @@
  * keyed to this runner's own tool names — there is no SDK hook to wire into.
  */
 import type { CapabilitySet } from '../capabilities.js';
-import { outsideWorkingDir, type PermissionDecision } from './intercept.js';
+import {
+  CONTROL_ARTIFACT_IN_COMMAND,
+  CONTROL_DIR_DENIAL,
+  insideControlDir,
+  outsideWorkingDir,
+  type PermissionDecision,
+} from './intercept.js';
 import { classifyCommand } from './gitCommands.js';
 import { EDIT_TOOL_NAMES, EXEC_TOOL_NAMES, READ_TOOL_NAMES } from './nvidiaTools.js';
 import type { RunStateStore } from '../runstate/store.js';
@@ -70,6 +76,14 @@ export function createNvidiaInterceptor(opts: NvidiaInterceptorOptions): NvidiaI
           message: `flow-code: ${target} resolves outside this node's working directory (${workingDir}).`,
         };
       }
+      // Reading the control directory is fine; writing to it is never.
+      if (needed === 'edit' && target !== undefined && insideControlDir(workingDir, target)) {
+        return {
+          behavior: 'deny',
+          missingCapability: 'control-directory',
+          message: CONTROL_DIR_DENIAL,
+        };
+      }
       return { behavior: 'allow' };
     }
 
@@ -82,6 +96,13 @@ export function createNvidiaInterceptor(opts: NvidiaInterceptorOptions): NvidiaI
         };
       }
       const command = typeof input['command'] === 'string' ? input['command'] : '';
+      if (CONTROL_ARTIFACT_IN_COMMAND.test(command)) {
+        return {
+          behavior: 'deny',
+          missingCapability: 'control-directory',
+          message: CONTROL_DIR_DENIAL,
+        };
+      }
       for (const segment of classifyCommand(command)) {
         if (segment.kind === 'git-write' && !caps.has('git-write')) {
           return {

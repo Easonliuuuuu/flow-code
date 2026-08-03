@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sumTokens } from './types.js';
 /**
  * Central run-state store. The engine and harness write into it; the UI (and
  * the persister) subscribe to it. It has no dependency on the rendering
@@ -91,6 +92,24 @@ export class RunStateStore {
         this.commit();
     }
     /**
+     * Skip a node, recording *why* — the distinction downstream scheduling turns
+     * on (see `NodeRunState.skipReason`).
+     */
+    setSkipped(nodeId, reason, detail) {
+        const node = this.node(nodeId);
+        this.state.nodes = {
+            ...this.state.nodes,
+            [nodeId]: {
+                ...node,
+                status: 'skipped',
+                statusDetail: detail,
+                skipReason: reason,
+                endedAt: new Date().toISOString(),
+            },
+        };
+        this.commit();
+    }
+    /**
      * Accumulate token usage reported by a runner. Deltas, not totals: every
      * API response adds its own usage, so the count climbs live during a
      * session and survives across attempts (a loop-back re-run adds to the
@@ -130,7 +149,7 @@ export class RunStateStore {
         };
         // Tokens deliberately survive: they are what the node has already cost,
         // and a new attempt adds to that rather than starting the bill over.
-        const { output: _output, statusDetail: _statusDetail, startedAt: _startedAt, endedAt: _endedAt, ...rest } = node;
+        const { output: _output, statusDetail: _statusDetail, startedAt: _startedAt, endedAt: _endedAt, skipReason: _skipReason, ...rest } = node;
         this.state.nodes = {
             ...this.state.nodes,
             [nodeId]: {
@@ -209,6 +228,14 @@ export class RunStateStore {
         const node = this.node(nodeId);
         this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, sessionId } };
         this.commit();
+    }
+    /** Tokens one node has consumed so far, across every attempt. */
+    tokensFor(nodeId) {
+        return sumTokens(this.node(nodeId).tokens);
+    }
+    /** Tokens the whole run has consumed so far. */
+    totalTokens() {
+        return Object.values(this.state.nodes).reduce((sum, n) => sum + sumTokens(n.tokens), 0);
     }
     markFinished(interrupted = false) {
         this.state.finishedAt = new Date().toISOString();
