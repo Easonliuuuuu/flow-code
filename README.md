@@ -6,13 +6,19 @@
 
 A terminal-native node-graph interface for running and observing agentic coding workflows. Instead of scrolling through chat logs, your coding task's lifecycle renders as a live, interactive graph in your terminal — spec discussion, implementation, validation, review, and git ops.
 
+```mermaid
+flowchart LR
+    Discuss["Discuss"] --> Implement["Implement"] --> Test["Test"] --> Validate["Validate"] --> Review["Review"] --> Gate["Gate"] --> GitOps["Git-ops"]
+    Validate -. "loop-back (on failure)" .-> Implement
 ```
-┌─────────┐    ┌───────────┐    ┌──────┐    ┌──────────┐    ┌────────┐    ┌──────┐    ┌─────────┐
-│ Discuss │ ─▶ │ Implement │ ─▶ │ Test │ ─▶ │ Validate │ ─▶ │ Review │ ─▶ │ Gate │ ─▶ │ Git-ops │
-└─────────┘    └───────────┘    └──────┘    └──────────┘    └────────┘    └──────┘    └─────────┘
-                     ▲                           │
-                     └──────── loop-back ────────┘
-                        (on a failing verdict)
+
+```
+┌─────────┐     ┌───────────┐     ┌──────┐     ┌──────────┐     ┌────────┐     ┌──────┐     ┌─────────┐
+│ Discuss │ ──> │ Implement │ ──> │ Test │ ──> │ Validate │ ──> │ Review │ ──> │ Gate │ ──> │ Git-ops │
+└─────────┘     └───────────┘     └──────┘     └──────────┘     └────────┘     └──────┘     └─────────┘
+                      ▲                             │
+                      └───────── loop-back ─────────┘
+                          (on a failing verdict)
 ```
 
 Each node is a live card showing status spinners, token consumption, model badges, and real-time execution logs.
