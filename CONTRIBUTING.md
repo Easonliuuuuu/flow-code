@@ -20,8 +20,10 @@ npm run lint        # eslint src test
 npm test            # vitest run
 ```
 
-## NVIDIA integration tests
+## Claude integration tests
 
-`test/*.integration.test.ts` make real calls to NVIDIA's NIM API rather than mocking it — they run separately via `npm run test:integration`, never as part of `npm test`, and skip themselves (not fail) when `NVIDIA_API_KEY` isn't set.
+`test/*.integration.test.ts` make real calls to the Claude Agent SDK rather than mocking it — they run separately via `npm run test:integration`, never as part of `npm test`, and skip themselves (not fail) when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is set.
 
-`.github/workflows/nvidia-integration.yml` runs this suite in CI on push/PR into `main`, gated on a repo secret named `NVIDIA_API_KEY` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `NVIDIA_API_KEY`.
+`.github/workflows/claude-integration.yml` runs this suite nightly (and on demand via `workflow_dispatch`), gated on a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `CLAUDE_CODE_OAUTH_TOKEN` (generate one with `claude setup-token`, or use a Claude CLI/subscription login).
+
+This suite previously ran an NVIDIA NIM-backed version (`nvidia-integration.yml`) on every push to `main`; it was moved off NVIDIA's throttled free tier and off the per-push trigger after it failed the large majority of runs against shared GitHub Actions IP rate limiting.

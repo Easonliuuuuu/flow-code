@@ -1,15 +1,16 @@
 /**
- * Real network calls to NVIDIA's NIM API — no mocking. Requires a live
- * NVIDIA_API_KEY; skips entirely (not "fails") when it's absent so this
- * never blocks `npm test` or CI for contributors without the secret. Run
- * explicitly via `npm run test:integration`.
+ * Real network calls to the Claude Agent SDK — no mocking. Requires live
+ * Claude credentials (CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY); skips
+ * entirely (not "fails") when neither is set so this never blocks
+ * `npm test` or CI for contributors without one. Run explicitly via
+ * `npm run test:integration`.
  *
- * Coverage: the NVIDIA runner's full tool surface — discovery reads
+ * Coverage: the Claude runner's full tool surface — discovery reads
  * (list_dir/glob/grep), edits (write_file/edit_file), shell and git
  * commands — plus capability-boundary denials (exec, git-write,
  * working-directory escapes) and one real two-node Engine run
  * (implement -> validate). Kept deliberately lean: each test is real
- * network traffic against NVIDIA's rate-limited free tier.
+ * network traffic.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,15 +18,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { capabilitySet } from '../src/capabilities.js';
 import { Engine } from '../src/engine/engine.js';
-import { builtinExecutors, NvidiaSessionRunner } from '../src/executors/index.js';
+import { builtinExecutors, SdkSessionRunner } from '../src/executors/index.js';
 import { recordBaseline } from '../src/git/ops.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { fakePorts, makeTempGitRepo, repoGit, workflowFromYaml } from './helpers.js';
 
-const hasKey = Boolean(process.env['NVIDIA_API_KEY']);
+const hasCreds = Boolean(process.env['CLAUDE_CODE_OAUTH_TOKEN'] || process.env['ANTHROPIC_API_KEY']);
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'flow-code-nvidia-integration-'));
+  return mkdtempSync(join(tmpdir(), 'flow-code-claude-integration-'));
 }
 
 function storeFor(dir: string, nodeIds: string[]): RunStateStore {
@@ -36,12 +37,11 @@ function storeFor(dir: string, nodeIds: string[]): RunStateStore {
 const traceText = Boolean(process.env['INTEGRATION_TRACE']);
 
 /**
- * The default (meta/llama-3.1-70b-instruct) is reliable enough for real runs
- * but occasionally skips or fumbles an edit on the free tier, which makes a
- * "did the fix actually land" assertion flaky. These tests exercise the tool
- * surface, so pin a stronger model; override with NVIDIA_INTEGRATION_MODEL.
+ * Pinned rather than left to the SDK's own default, so a model swap upstream
+ * can't silently change what these tool-surface assertions are exercising;
+ * override with CLAUDE_INTEGRATION_MODEL.
  */
-const integrationModel = process.env['NVIDIA_INTEGRATION_MODEL'] ?? 'meta/llama-3.3-70b-instruct';
+const integrationModel = process.env['CLAUDE_INTEGRATION_MODEL'] ?? 'claude-haiku-4-5-20251001';
 
 function truncate(text: string, max: number): string {
   const single = text.replace(/\s+/g, ' ').trim();
@@ -120,7 +120,7 @@ function writeBuggyProject(dir: string): void {
   );
 }
 
-describe.skipIf(!hasKey)('NVIDIA API integration', () => {
+describe.skipIf(!hasCreds)('Claude API integration', () => {
   it('fixes a real bug end-to-end: reads, edits, verifies via a shell command', async () => {
     const dir = tempDir();
     writeFileSync(
@@ -133,7 +133,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
         "assert.equal(add(2, 3), 5);\nconsole.log('all tests passed');\n",
     );
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(dir, ['impl']);
     const unsub = watchRun(store, 'impl');
     try {
@@ -166,7 +166,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
     const original = 'export function add(a, b) {\n  return a - b;\n}\n';
     writeFileSync(join(dir, 'math.js'), original);
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(dir, ['review']);
     const unsub = watchRun(store, 'review');
     try {
@@ -195,14 +195,12 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
 
   // Deliberately lightweight: exercises list_dir/glob/grep without also
   // paying for a multi-file fix-and-verify round trip (edit_file/run_shell
-  // are already covered by the end-to-end test above) — this was the most
-  // expensive test in the suite and the most consistent source of CI
-  // timeouts under NVIDIA's free-tier throttling.
+  // are already covered by the end-to-end test above).
   it('discovers the project layout with list_dir, glob, and grep', async () => {
     const dir = tempDir();
     writeBuggyProject(dir);
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(dir, ['impl']);
     const unsub = watchRun(store, 'discovery');
     try {
@@ -236,7 +234,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
     repoGit(dir, 'commit', '-q', '-m', 'add broken math');
     const baseHead = repoGit(dir, 'rev-parse', 'HEAD');
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(dir, ['git-ops']);
     const unsub = watchRun(store, 'git-workflow');
     try {
@@ -277,7 +275,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
     const baseHead = repoGit(dir, 'rev-parse', 'HEAD');
     const mathBefore = readFileSync(join(dir, 'src', 'math.js'), 'utf8');
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(dir, ['readonly']);
     const unsub = watchRun(store, 'git-read-denials');
     try {
@@ -314,7 +312,7 @@ describe.skipIf(!hasKey)('NVIDIA API integration', () => {
     const token = 'SECRET_TOKEN_9f3a';
     writeFileSync(join(parent, 'secret.txt'), `${token}\n`);
 
-    const runner = new NvidiaSessionRunner();
+    const runner = new SdkSessionRunner();
     const store = storeFor(workingDir, ['impl']);
     const unsub = watchRun(store, 'escape');
     try {
@@ -386,7 +384,7 @@ edges:
           repoRoot: dir,
           baseline,
           ports: fakePorts(),
-          sessions: new NvidiaSessionRunner(),
+          sessions: new SdkSessionRunner(),
           executors: builtinExecutors,
         });
 
