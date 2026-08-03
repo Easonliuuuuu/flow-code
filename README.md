@@ -30,7 +30,7 @@ Each node is a live card showing status spinners, token consumption, model badge
 Install globally and run in any repository in seconds:
 
 ```bash
-npm install -g flow-code
+npm install -g @easonliuuuuu/flow-code
 
 # 1. Initialize workflow & select AI provider/model
 flow-code init
@@ -38,6 +38,8 @@ flow-code init
 # 2. Run the agentic workflow graph
 flow-code run
 ```
+
+The package is scoped, but the command it installs is plain `flow-code`.
 
 *Or run locally from source:*
 ```bash
