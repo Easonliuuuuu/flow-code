@@ -97,6 +97,44 @@ describe('the openspec preset scaffolds a valid workflow', () => {
   });
 });
 
+describe('the spec-kit preset scaffolds a valid workflow', () => {
+  const preset = getPreset('spec-kit')!;
+
+  it('is registered with no required skills — there is no canonical Spec Kit skill package', () => {
+    expect(presetNames()).toContain('spec-kit');
+    expect(preset.requiredSkills).toEqual([]);
+  });
+
+  it('loads and validates like any hand-written workflow, with no skill fixtures needed', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.order).toEqual(['specify', 'plan', 'implement', 'test', 'validate', 'gate', 'git-ops']);
+  });
+
+  it('puts the only conversational skill on the only interactive node', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    const specify = wf.nodes.find((n) => n.id === 'specify')!;
+    expect(specify.type.interactive).toBe(true);
+    for (const node of wf.nodes.filter((n) => n.id !== 'specify')) {
+      expect(node.type.interactive).toBe(false);
+    }
+  });
+
+  it('gates the git-mutating step, and does not retry a rejected gate', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.graph.directDependencies('git-ops')).toEqual(['gate']);
+    expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
+  });
+
+  it('judges validate against the plan directly, so a retry never rewrites its own contract', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.graph.directDependencies('validate').sort()).toEqual(['plan', 'test']);
+  });
+});
+
 describe('every preset', () => {
   it('produces a workflow whose test node still runs explicit commands', () => {
     for (const preset of listPresets()) {
