@@ -452,4 +452,95 @@ describe('canvas zoom', () => {
       unmount();
     }
   });
+
+  /**
+   * `impl` fans out into four parallel reviewers — tall enough, stacked in one
+   * layer, that the graph is a poor fit for a docked panel's ~40%-of-terminal
+   * canvas but a fine fit for the terminal on its own (see the 4-node math in
+   * the comment above `autoZoom` in App.tsx: 27 rows of graph against an
+   * 11-row docked canvas but a 28-row undocked one).
+   */
+  const FANOUT_WORKFLOW_YAML = `settings:
+  model: sonnet
+
+nodes:
+  - id: impl
+    type: implement
+    config:
+      instructions: do it
+  - id: revA
+    type: review
+  - id: revB
+    type: review
+  - id: revC
+    type: review
+  - id: revD
+    type: review
+edges:
+  - { from: impl, to: revA }
+  - { from: impl, to: revB }
+  - { from: impl, to: revC }
+  - { from: impl, to: revD }
+`;
+
+  function mountFanoutApp(): { stdout: FakeStdout; stdin: NodeJS.ReadStream; unmount: () => void } {
+    const repoRoot = makeTempGitRepo();
+    mkdirSync(join(repoRoot, '.flow-code'), { recursive: true });
+    writeFileSync(join(repoRoot, WORKFLOW_RELATIVE_PATH), FANOUT_WORKFLOW_YAML);
+    const workflow = workflowFromYaml(FANOUT_WORKFLOW_YAML);
+    const store: RunStateStore = storeFor(workflow, repoRoot);
+    const ports = new UiInteractionPorts();
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const modelContext: ModelContext = {
+      providerId: 'claude',
+      providerDefaultModel: undefined,
+      workflowSettingsModel: 'sonnet',
+    };
+    const instance = render(
+      React.createElement(App, {
+        workflow,
+        store,
+        ports,
+        modelContext,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    return { stdout, stdin, unmount: () => instance.unmount() };
+  }
+
+  // The header carries the zoom indicator explicitly (" · compact" / " ·
+  // overview") when density isn't full, so it can't be fooled the way
+  // `zoomOf` above is by "(Implement)" showing up inside the model picker's
+  // own title once a panel is open over the canvas.
+  function headerDensity(stdout: FakeStdout): 'full' | 'compact' | 'overview' {
+    const header = lastFrameLines(stdout)[0] ?? '';
+    if (header.includes('· overview')) return 'overview';
+    if (header.includes('· compact')) return 'compact';
+    return 'full';
+  }
+
+  it('does not re-densify the graph just because a docked panel opened', async () => {
+    const { stdout, stdin, unmount } = mountFanoutApp();
+    try {
+      await settle();
+      expect(headerDensity(stdout)).toBe('full');
+
+      // Opening the model picker docks a panel across ~60% of the terminal,
+      // leaving a canvas far short of this graph's height. Reflowing every
+      // card to fit that transient panel — and back on close — used to move
+      // whichever badge a click a moment later would land on.
+      stdin.write('m');
+      await settle();
+      expect(headerDensity(stdout)).toBe('full');
+
+      stdin.write('\x1b');
+      await settle();
+      expect(headerDensity(stdout)).toBe('full');
+    } finally {
+      unmount();
+    }
+  });
 });
