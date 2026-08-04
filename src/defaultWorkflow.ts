@@ -25,7 +25,6 @@ settings:
   # dimension unbounded. A budget stop is final — it never retries, because
   # retrying past a ceiling is what the ceiling exists to prevent.
   budget:
-    tokensPerNode: 300000
     tokensPerRun: 2000000
     minutesPerRun: 60
 
