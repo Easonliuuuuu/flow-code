@@ -1,0 +1,62 @@
+name: Labeler
+
+# `pull_request` rather than `pull_request_target`: this repo takes no fork PRs,
+# and pull_request_target runs the base branch's workflow with write access to
+# the repo, which is the trigger every labeler privilege-escalation writeup is
+# about. Fork PRs would simply not get labeled here, which is the safe failure.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      # Area labels, from the paths the PR touches.
+      - uses: actions/labeler@v7
+        with:
+          # Drop an area label again when the PR stops touching that area.
+          # Only labels named in .github/labeler.yml are ever removed, so
+          # hand-applied ones (provider:, blocked, bug, …) are left alone.
+          sync-labels: true
+
+      # Type label, from the conventional-commit prefix in the PR title.
+      - name: Label from the PR title
+        env:
+          # Via env, never inlined into the script: a PR title is untrusted
+          # input, and `${{ }}` interpolation inside run: is shell injection.
+          TITLE: ${{ github.event.pull_request.title }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          labels=()
+
+          # `type` is everything before the first `(` or `:`, minus a trailing
+          # `!` — an unscoped breaking change is `feat!: …`, still a feat.
+          type="${TITLE%%[(:]*}"
+          case "${type%!}" in
+            feat) labels+=("enhancement") ;;
+            fix)  labels+=("bug") ;;
+            docs) labels+=("documentation") ;;
+            *)    ;;  # refactor/chore/test/ci/build carry no type label
+          esac
+
+          # `feat(scope)!: …` is the conventional marker for a breaking change.
+          if [[ "$TITLE" =~ ^[a-z]+(\([^\)]*\))?!: ]]; then
+            labels+=("breaking-change")
+          fi
+
+          if [ ${#labels[@]} -eq 0 ]; then
+            echo "No type label for: $TITLE"
+            exit 0
+          fi
+
+          args=()
+          for label in "${labels[@]}"; do args+=(-f "labels[]=$label"); done
+          gh api "repos/$REPO/issues/$PR/labels" "${args[@]}" --jq '.[].name'
