@@ -1,0 +1,64 @@
+# Path globs -> area labels, applied by .github/workflows/labeler.yml.
+# Mirrors the src/ layout: when a folder moves, update it here too.
+
+"area: ui":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/ui/**"
+
+"area: engine":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/engine/**"
+          - "src/runstate/**"
+
+"area: executors":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/executors/**"
+          - "src/harness/**"
+
+"area: workflow":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/workflow/**"
+          - "src/registry/**"
+          - "src/defaultWorkflow.ts"
+          - "src/presets.ts"
+          - "src/capabilities.ts"
+
+"area: skills":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/skills/**"
+
+"area: git":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/git/**"
+          - "src/worktrees/**"
+
+"area: cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/cli.ts"
+          - "src/index.ts"
+          - "src/init/**"
+
+"area: docs":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "README.md"
+          - "CONTRIBUTING.md"
+          - "docs/**"
+          - "scripts/gen-node-types-doc.mjs"
+
+"area: ci":
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "package.json"
+          - "package-lock.json"
+          - "eslint.config.js"
+          - "tsconfig*.json"
+          - "vitest*.config.ts"
