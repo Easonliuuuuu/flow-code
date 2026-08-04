@@ -4,7 +4,7 @@ description: Stage and commit all changes using conventional commits format, the
 license: MIT
 metadata:
   author: local
-  version: "1.1"
+  version: "1.2"
 ---
 
 Stage and commit all changes using the conventional commits format, then optionally push the branch and open a PR whose description mirrors the commit body.
@@ -41,6 +41,11 @@ Stage and commit all changes using the conventional commits format, then optiona
    - `test` — adds or fixes tests
    - `ci` — CI/CD pipeline changes
    - `build` — build system, Dockerfile, packaging
+
+   **Breaking changes** — release-please reads these to decide on a major version bump, so mark them explicitly whenever the change breaks an existing public API, CLI flag, config shape, or other consumer-facing contract:
+   - Add `!` right after the type/scope: `feat(engine)!: drop support for the legacy config format`
+   - And add a `BREAKING CHANGE: <description>` footer at the end of the body explaining what breaks and how to migrate.
+   Only `feat`/`fix` (plain or with `!`) actually trigger a release-please version bump — other types are release-please no-ops regardless of `!`.
 
    **Scope** (in parentheses) — the bare name (no path, no slash) of the folder or file most responsible for the change, e.g. `ops.ts`, `engine`, `ci.yml`. Use a single file's name when the change is concentrated there; use the containing folder's name when several files in it changed together. Omit only when changes span unrelated top-level areas with no shared folder.
 
@@ -89,6 +94,20 @@ Stage and commit all changes using the conventional commits format, then optiona
    ```
    ```
    chore(package.json): bump vitest to 3.2.7
+   ```
+   ```
+   feat(cli)!: require --workflow instead of inferring it from cwd
+
+   Changes:
+   - cli.ts: remove cwd-based workflow inference, require an explicit --workflow flag
+
+   Motivation: inference silently picked the wrong workflow in nested repos;
+   an explicit flag removes the ambiguity.
+
+   BREAKING CHANGE: --workflow is now required. Scripts relying on cwd-based
+   inference will fail until they pass the flag explicitly.
+
+   Testing: vitest 12/12 passed, including cli.test.ts
    ```
 
 3. **Stage changes**
