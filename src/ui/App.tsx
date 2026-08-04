@@ -1166,9 +1166,9 @@ export function App({
               ) : null}
             </Text>
           </PanelTitle>
-          {/* Grows to fill the panel so the transcript stays anchored to the
-              input line and the footer keeps its grip in the corner. */}
-          <Box flexDirection="column" flexGrow={1} justifyContent="flex-end" overflow="hidden">
+          {/* Grows to fill the panel; text starts at the top and the footer
+              keeps its grip in the corner. */}
+          <Box flexDirection="column" flexGrow={1} justifyContent="flex-start" overflow="hidden">
             {discussRows.slice(discussWindow.start, discussWindow.end).map((row) => (
               <Text key={row.key} wrap="truncate-end">
                 <Text color={row.color}>{row.prefix}</Text>
