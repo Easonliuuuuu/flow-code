@@ -20,12 +20,17 @@ import {
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import {
+  BOX_HEIGHT,
   centerOnBox,
   clampOffset,
+  clampZoom,
   computeLayout,
   hitTest,
+  MAX_ZOOM,
   offscreenCounts,
+  rowPitch,
   scrollIntoView,
+  ZOOM_DENSITIES,
   type PositionOverrides,
 } from './layout.js';
 import { disableMouse, enableMouse, LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from './mouse.js';
@@ -165,13 +170,21 @@ export function App({
   const [expanded, setExpanded] = useState(false);
   const [offset, setOffset] = useState({ ox: 0, oy: 0 });
   const [overrides, setOverrides] = useState<PositionOverrides>(new Map());
-  // null = follow the auto rule (compact once the graph outgrows the canvas);
-  // a boolean is the user overruling it with `z`.
-  const [compactOverride, setCompactOverride] = useState<boolean | null>(null);
-  // 'focus' hard-centers the focused node; 'overview' forces mini density and
-  // keeps the gentler scrollIntoView nudge. Independent of compactOverride —
-  // z only has visible effect while in focus mode.
-  const [viewMode, setViewMode] = useState<'focus' | 'overview'>('focus');
+  // How far out the canvas is zoomed: an index into ZOOM_DENSITIES (0 full,
+  // 1 compact, 2 mini). null follows the auto rule — compact once the graph
+  // outgrows the canvas — until the user takes the wheel or a key to it.
+  //
+  // One value, deliberately. Density used to be derived from two independent
+  // states (a compact flag and a focus/overview mode), which meant nothing
+  // could answer "how zoomed am I" and the two could disagree; it also tied
+  // the camera to the zoom, so surveying the graph silently changed how
+  // focus behaved. Camera is its own toggle now.
+  const [zoomOverride, setZoomOverride] = useState<number | null>(null);
+  // Where `o` returns to. Null means "back to the auto rule".
+  const zoomBeforeMiniRef = useRef<number | null>(null);
+  // 'center' hard-centers the focused node at the focus anchor; 'nudge' only
+  // scrolls it into view. Independent of zoom.
+  const [camera, setCamera] = useState<'center' | 'nudge'>('center');
   const [inputBuffer, setInputBuffer] = useState('');
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
@@ -194,6 +207,13 @@ export function App({
   const [panelDragMode, setPanelDragMode] = useState<'move' | 'resize' | null>(null);
   const dragRef = useRef<{ id: string; lastX: number; lastY: number } | null>(null);
   const panelDragRef = useRef<PanelDrag | null>(null);
+
+  // The node whichever per-node panel (model picker, skill picker, settings
+  // editor) is currently open belongs to, or null when none is. Those panels
+  // read and write `focusedNode`, so focus moving out from under one — which
+  // only a mouse click can do, since their key handlers swallow tab — would
+  // have them render one node's state and commit it to another.
+  const [panelNodeId, setPanelNodeId] = useState<string | null>(null);
 
   // Model picker: opened with `m` on the focused node (or a click on its
   // model badge). Renders in the same status panel as Discuss/Approval/etc.
@@ -315,10 +335,18 @@ export function App({
   const panelHeight = activeRect.h;
   const canvasWidth = columns - 2;
 
-  // Full cards first, then compact ones if they don't fit: the decision is
-  // made from the full layout's height so it can't oscillate (compacting
-  // never makes the graph taller, so a graph that fits compact and triggered
-  // the switch stays switched).
+  // The starting zoom, until the user takes the wheel or a key to it: full
+  // cards, stepping out to compact if they don't fit. Decided from the full
+  // layout's height so it can't oscillate — compacting never makes the graph
+  // taller, so a graph that fits compact and triggered the step stays stepped.
+  //
+  // Measured on the *un-dragged* layout. Overrides move one node at a time by
+  // arbitrary amounts, so folding them in let a single downward drag inflate
+  // the height past the canvas and re-densify every card in the graph — and
+  // since compacting shortens it again, drag it back and the whole thing
+  // flips a second time. Density is a property of the graph, not of where you
+  // happen to have parked one node.
+  const measuredLayout = useMemo(() => computeLayout(workflow), [workflow]);
   const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
   const compactLayout = useMemo(
     () => computeLayout(workflow, overrides, { density: 'compact' }),
@@ -328,14 +356,30 @@ export function App({
     () => computeLayout(workflow, overrides, { density: 'mini' }),
     [workflow, overrides],
   );
-  const autoCompact = fullLayout.height > canvasHeight;
-  const compact = compactOverride ?? autoCompact;
-  const layout = viewMode === 'overview' ? miniLayout : compact ? compactLayout : fullLayout;
+  const autoZoom = measuredLayout.height > canvasHeight ? 1 : 0;
+  const zoom = zoomOverride ?? autoZoom;
+  const density = ZOOM_DENSITIES[zoom]!;
+  const layout = density === 'mini' ? miniLayout : density === 'compact' ? compactLayout : fullLayout;
   const viewport = { ...offset, width: canvasWidth, height: canvasHeight };
   // Panning is clamped so it can never leave the graph off-screen entirely,
   // and goes through one helper so the keyboard and the scroll wheel agree.
   const panBy = (dx: number, dy: number): void => {
     setOffset((o) => clampOffset(layout, { ox: o.ox + dx, oy: o.oy + dy, width: canvasWidth, height: canvasHeight }));
+  };
+
+  /**
+   * Step the zoom. Positive is coarser (further out). Writing an explicit
+   * level rather than nudging a nullable one means the first step from `auto`
+   * lands where the user can see it went, and the auto rule stops fighting
+   * them from then on.
+   */
+  const zoomBy = (steps: number): void => {
+    zoomBeforeMiniRef.current = null;
+    // Functional, because a spun wheel delivers several events in one stdin
+    // chunk and they are handled in one pass with no render between them.
+    // Reading the rendered `zoom` here meant every step after the first in a
+    // burst recomputed from the same stale level and collapsed into one.
+    setZoomOverride((prev) => clampZoom((prev ?? autoZoom) + steps));
   };
   const offscreen = offscreenCounts(layout, viewport);
   const offscreenHint = [
@@ -403,6 +447,7 @@ export function App({
     }
     setPickerCursor(0);
     setPickerFreeText(null);
+    setPanelNodeId(nodeId);
     setPickerOpen(true);
     modelListLoaderFor(modelContext.providerId).ensureLoaded();
   };
@@ -419,16 +464,44 @@ export function App({
     setSkillPickerCursor(0);
     setSkillPickerQuery('');
     setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
+    setPanelNodeId(nodeId);
     setSkillPickerOpen(true);
   };
 
   const editorFields = focusedNode ? editableFields(focusedNode) : [];
   const editorField = editorFields[Math.min(editorCursor, editorFields.length - 1)];
 
-  const openEditor = (): void => {
+  const openEditor = (nodeId: string): void => {
     setEditorCursor(0);
     setEditorBuffer(null);
+    setPanelNodeId(nodeId);
     setEditorOpen(true);
+  };
+
+  /**
+   * Close any per-node panel the focus has moved out from under. A click that
+   * lands on another card is the only way to get here — every one of these
+   * panels swallows tab — and leaving one open would have it go on rendering
+   * the node it was opened for while `confirmSkills`/`confirmModel`/
+   * `commitEditorField` wrote that node's pending edit to the newly focused
+   * one. Opening a panel by clicking a badge sets both in the same commit, so
+   * this can't close the panel it just opened.
+   */
+  useEffect(() => {
+    if (panelNodeId === null || panelNodeId === focusedId) return;
+    setPickerOpen(false);
+    setSkillPickerOpen(false);
+    setEditorOpen(false);
+    setEditorBuffer(null);
+    setPanelNodeId(null);
+  }, [focusedId, panelNodeId]);
+
+  /** Dismiss whichever per-node panel is open and release its claim on focus. */
+  const closeNodePanel = (): void => {
+    setPickerOpen(false);
+    setSkillPickerOpen(false);
+    setEditorOpen(false);
+    setPanelNodeId(null);
   };
 
   /**
@@ -527,22 +600,38 @@ export function App({
     setModelTick((t) => t + 1);
   };
 
-  // Focus mode hard-centers the focused node near the upper-left of the
-  // canvas; overview mode keeps the gentler nudge — the point there is
-  // surveying many nodes, not spotlighting one.
+  // 'center' hard-centers the focused node near the upper-left of the canvas;
+  // 'nudge' only scrolls it into view — what you want while surveying many
+  // nodes rather than spotlighting one. A preference of its own, not a
+  // side effect of how far out the canvas happens to be zoomed.
+  //
+  // Hard-centering fires only when the *subject* changes (focus moved, or the
+  // view switched under it). It used to fire on any layout change, which made
+  // dragging a node self-amplifying: each mouse event moved the box, the
+  // re-center panned the viewport by the same amount, and the next event's
+  // delta was measured against that pan — six cells of pointer travel sent a
+  // node twenty-one cells and dragged the camera along with it, so the whole
+  // rest of the graph appeared to slide out of order. Every other layout
+  // change now gets the gentler nudge, which is a no-op while the box is
+  // already on screen and still edge-scrolls when a drag reaches the border.
+  const centeredForRef = useRef<string | null>(null);
   useEffect(() => {
     if (!focusedId) return;
     const box = layout.boxes.get(focusedId);
     if (!box) return;
+    const subject = `${focusedId} ${camera} ${density}`;
+    const subjectChanged = centeredForRef.current !== subject;
+    centeredForRef.current = subject;
     setOffset((prev) => {
       const viewport = { ...prev, width: canvasWidth, height: canvasHeight };
-      const next = viewMode === 'focus' ? centerOnBox(box, viewport) : scrollIntoView(box, viewport);
+      const next =
+        camera === 'center' && subjectChanged ? centerOnBox(box, viewport) : scrollIntoView(box, viewport);
       const clamped = clampOffset(layout, { ...next, width: canvasWidth, height: canvasHeight });
       // Bail out (same reference) rather than a same-valued new object, so
       // React skips the redundant re-render when the box was already in view.
       return clamped.ox === prev.ox && clamped.oy === prev.oy ? prev : clamped;
     });
-  }, [focusedId, layout, viewMode, canvasWidth, canvasHeight]);
+  }, [focusedId, layout, camera, density, canvasWidth, canvasHeight]);
 
   // Auto-focus a gate when its approval request arrives.
   useEffect(() => {
@@ -600,6 +689,26 @@ export function App({
   }, [discussState, discussTranscriptWidth]);
   const discussWindow = tailWindow(discussRows.length, Math.max(1, panelHeight - 5), discussPin);
 
+  /**
+   * Whether a prompt is blocking on this node. A blocking prompt owns the
+   * keyboard outright, so `m`/`s` can't reach the pickers while one is up
+   * (see the mode chain in useInput) — and the mouse has to honour the same
+   * rule. A badge click that opened a picker underneath one of these left it
+   * invisible behind the higher-priority panel and keyboard-unreachable, then
+   * sprang it on you the moment the prompt was answered. Discuss is judged
+   * per node, since a paused discussion elsewhere in the graph is exactly the
+   * case tabbing away is meant to allow.
+   */
+  const blockingPromptFor = (nodeId: string): boolean =>
+    pendingApproval !== null ||
+    pendingConvergence !== null ||
+    pendingTestCommands !== null ||
+    (discussActive && discussState?.nodeId === nodeId);
+
+  // The order renderGraph paints cards in — last one wins where two overlap,
+  // so hit-testing has to walk it backwards to agree with what's on screen.
+  const drawOrder = useMemo(() => workflow.nodes.map((n) => n.id), [workflow]);
+
   // Everything the mouse handler reads, mirrored into a ref. The handler is
   // registered once (see below) so it can't take these as effect deps: doing
   // so re-ran the effect on every render, writing mouse mode-set escapes into
@@ -616,8 +725,12 @@ export function App({
     rows,
     canvasWidth,
     canvasHeight,
+    density,
+    drawOrder,
     openModelPicker,
     openSkillPicker,
+    blockingPromptFor,
+    zoomBy,
   });
   useEffect(() => {
     mouseStateRef.current = {
@@ -632,8 +745,12 @@ export function App({
       rows,
       canvasWidth,
       canvasHeight,
+      density,
+      drawOrder,
       openModelPicker,
       openSkillPicker,
+      blockingPromptFor,
+      zoomBy,
     };
   });
 
@@ -672,8 +789,12 @@ export function App({
           rows,
           canvasWidth,
           canvasHeight,
+          density,
+          drawOrder,
           openModelPicker,
           openSkillPicker,
+          blockingPromptFor,
+          zoomBy,
         } = mouseStateRef.current;
         const overPanel =
           panelOpen &&
@@ -692,20 +813,39 @@ export function App({
           if (overPanel) continue; // clicks inside panel content (not its border) aren't a canvas drag
           const canvasX = event.x + offset.ox;
           const canvasY = event.y - HEADER_ROWS + offset.oy;
-          const id = hitTest(layout, canvasX, canvasY);
+          const id = hitTest(layout, canvasX, canvasY, drawOrder);
           if (id) {
             setFocusIdx(Math.max(0, workflow.order.indexOf(id)));
             const box = layout.boxes.get(id);
-            // The model badge is the only thing ever drawn on a box's type-label
-            // row (see canvas.ts); clicking that row when a badge is present
-            // opens the picker instead of starting a position drag, and every
-            // other row is unaffected.
-            if (box && canvasY === box.y + 2 && nodeModelBadge(workflow, id) !== null) {
+            // The model/skill badge is the only thing ever drawn on a box's
+            // type-label row (see canvas.ts); clicking that row when a badge is
+            // present opens the picker instead of starting a position drag, and
+            // every other row is unaffected.
+            //
+            // Row 2 is the type-label row on a *full* card only. A compact card
+            // is three rows — border, title, border — and draws no badge at all,
+            // so without the height check a click on its bottom border opened a
+            // picker out of nowhere; auto-compacting means that was one third of
+            // every card as soon as the graph outgrew the canvas.
+            const onBadgeRow =
+              box !== undefined && box.h === BOX_HEIGHT && canvasY === box.y + 2 && !blockingPromptFor(id);
+            const badge = !onBadgeRow
+              ? null
+              : nodeModelBadge(workflow, id) !== null
+                ? 'model'
+                : nodeSkillBadge(workflow, id) !== null
+                  ? 'skill'
+                  : null;
+            if (badge === 'model') {
               openModelPicker(id);
-            } else if (box && canvasY === box.y + 2 && nodeSkillBadge(workflow, id) !== null) {
+            } else if (badge === 'skill') {
               openSkillPicker(id);
             } else {
-              dragRef.current = { id, lastX: canvasX, lastY: canvasY };
+              // Screen coordinates, deliberately: a canvas-relative origin
+              // folds any viewport pan that happens mid-drag into the next
+              // delta, which is half of what made dragging run away. What the
+              // pointer travels is what the node moves.
+              dragRef.current = { id, lastX: event.x, lastY: event.y };
             }
           }
         } else if (event.kind === 'drag' && panelDragRef.current) {
@@ -718,19 +858,35 @@ export function App({
               : applyPanelMove(drag.origin, dx, dy, { columns, rows }),
           );
         } else if (event.kind === 'drag' && dragRef.current) {
-          const canvasX = event.x + offset.ox;
-          const canvasY = event.y - HEADER_ROWS + offset.oy;
           const drag = dragRef.current;
-          const dx = canvasX - drag.lastX;
-          const dy = canvasY - drag.lastY;
+          const box = layout.boxes.get(drag.id);
+          if (!box) continue;
+          // Clamped against where the box actually is, so the delta that gets
+          // banked is the delta that gets drawn. Leaving the clamp to
+          // computeLayout instead let the stored override drift away from the
+          // rendered position, which is only harmless while every reader
+          // re-applies the identical clamp — and `dyRows` is now replayed
+          // against three different base layouts.
+          const dx = Math.max(event.x - drag.lastX, -box.x);
+          const dy = Math.max(event.y - drag.lastY, -box.y);
           if (dx !== 0 || dy !== 0) {
-            drag.lastX = canvasX;
-            drag.lastY = canvasY;
+            // Advance only by what was actually applied, so a clamped axis
+            // doesn't bank the leftover for the next event either.
+            drag.lastX += dx;
+            drag.lastY += dy;
+            // Recorded in the zoom-invariant units the overrides are stored
+            // in, against the layout the drag is actually happening on, so an
+            // arrangement made zoomed out is still that arrangement zoomed in.
+            const pitch = rowPitch(density);
+            const span = Math.max(1, layout.baseWidth);
             setOverrides((prev) => {
               const next = new Map(prev);
-              const cur = next.get(drag.id) ?? { dx: 0, dy: 0 };
+              const cur = next.get(drag.id) ?? { dxFrac: 0, dyRows: 0 };
               // Session-only: never written back to the workflow file.
-              next.set(drag.id, { dx: cur.dx + dx, dy: cur.dy + dy });
+              next.set(drag.id, {
+                dxFrac: cur.dxFrac + dx / span,
+                dyRows: cur.dyRows + dy / pitch,
+              });
               return next;
             });
           }
@@ -739,7 +895,14 @@ export function App({
           panelDragRef.current = null;
           setPanelDragMode(null);
         } else if (event.kind === 'scroll') {
-          if (overPanel && discussPanelOpen) {
+          // Ctrl+wheel zooms the canvas — but only over the canvas. Over an
+          // open panel the wheel belongs to whatever is being read there, and
+          // a stray ctrl while scrolling a conversation should not resize the
+          // graph behind it. Wheel-up is zoom *in*, matching every other
+          // zoomable surface.
+          if (event.ctrl && !overPanel) {
+            zoomBy(event.direction === 'down' ? 1 : -1);
+          } else if (overPanel && discussPanelOpen) {
             setDiscussPin(
               pinAfterScroll(mouseStateRef.current.discussWindow, event.direction === 'down' ? -3 : 3),
             );
@@ -943,13 +1106,13 @@ export function App({
     // above are active, so this can never collide with them.
     if (pickerOpen && focusedNode) {
       if (key.escape) {
-        setPickerOpen(false);
+        closeNodePanel();
         return;
       }
       if (pickerFreeText !== null) {
         if (key.return) {
           const text = pickerFreeText.trim();
-          setPickerOpen(false);
+          closeNodePanel();
           if (text.length > 0) confirmModel(focusedNode.id, text);
           return;
         }
@@ -968,7 +1131,7 @@ export function App({
       if (key.upArrow || input === 'k') setPickerCursor((c) => (c + models.length - 1) % models.length);
       else if (key.downArrow || input === 'j') setPickerCursor((c) => (c + 1) % models.length);
       else if (key.return) {
-        setPickerOpen(false);
+        closeNodePanel();
         confirmModel(focusedNode.id, models[pickerCursor]!);
       }
       return;
@@ -983,7 +1146,7 @@ export function App({
         // Escape backs out of the field being typed, then out of the panel:
         // an abandoned edit shouldn't cost you the panel too.
         if (editorBuffer !== null) setEditorBuffer(null);
-        else setEditorOpen(false);
+        else closeNodePanel();
         return;
       }
       if (editorBuffer === null) {
@@ -1023,11 +1186,11 @@ export function App({
           setSkillPickerQuery('');
           return;
         }
-        setSkillPickerOpen(false);
+        closeNodePanel();
         return;
       }
       if (key.return) {
-        setSkillPickerOpen(false);
+        closeNodePanel();
         confirmSkills(focusedNode.id, skillPickerSelected);
         return;
       }
@@ -1081,11 +1244,23 @@ export function App({
       else if (focusedNode) openSkillPicker(focusedNode.id);
     } else if (input === 'e') {
       if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      else if (focusedNode) openEditor();
+      else if (focusedNode) openEditor(focusedNode.id);
     } else if (input === 'z') {
-      setCompactOverride(!compact);
+      // One step along the zoom axis: full ←→ compact, and out of mini into
+      // compact rather than jumping two stops at once.
+      zoomBy(zoom === 1 ? -1 : 1);
     } else if (input === 'o') {
-      setViewMode((m) => (m === 'focus' ? 'overview' : 'focus'));
+      // Jump to the far end and back. Returning restores the zoom you left —
+      // including "follow the auto rule" if you never set one.
+      if (zoom === MAX_ZOOM) {
+        setZoomOverride(zoomBeforeMiniRef.current);
+        zoomBeforeMiniRef.current = null;
+      } else {
+        zoomBeforeMiniRef.current = zoomOverride;
+        setZoomOverride(MAX_ZOOM);
+      }
+    } else if (input === 'c') {
+      setCamera((m) => (m === 'center' ? 'nudge' : 'center'));
     } else if (key.leftArrow) {
       panBy(-PAN_STEP_X, 0);
     } else if (key.rightArrow) {
@@ -1172,7 +1347,8 @@ export function App({
         {/* Lives in the header rather than the bottom hint line because the
             hint line disappears behind a docked panel — which is exactly when
             the canvas is smallest and the most nodes are off-screen. */}
-        {viewMode === 'overview' ? <Text dimColor> · overview</Text> : null}
+        {density === 'mini' ? <Text dimColor> · overview</Text> : null}
+        {camera === 'nudge' ? <Text dimColor> · free camera</Text> : null}
         {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
@@ -1672,9 +1848,8 @@ export function App({
       ) : (
         <Text dimColor>
           tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧ anywhere):
-          pan ·{' '}
-          {viewMode === 'focus' ? `z: ${compact ? 'full cards' : 'compact'} · ` : ''}
-          o: {viewMode === 'focus' ? 'overview' : 'focus'} · q: quit
+          pan · ctrl+wheel/z: zoom ({density}) · o: {density === 'mini' ? 'back' : 'overview'} · c:
+          camera · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
         </Text>
       )}

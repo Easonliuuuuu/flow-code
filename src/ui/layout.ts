@@ -51,10 +51,52 @@ export interface Layout {
   boxes: Map<string, NodeBox>;
   width: number;
   height: number;
+  /**
+   * The graph's width before any drag overrides were applied. Horizontal
+   * offsets are stored as a fraction of this (see PositionOverrides), and it
+   * has to be the *un-dragged* width or dragging one node would rescale
+   * everybody else's offset along with it.
+   */
+  baseWidth: number;
 }
 
-/** Session-only position overrides from mouse dragging; never persisted. */
-export type PositionOverrides = Map<string, { dx: number; dy: number }>;
+/**
+ * The zoom axis, coarsest-last. Card density is the only thing a terminal can
+ * actually zoom — there are no half-cells — so these three are the stops.
+ */
+export const ZOOM_DENSITIES = ['full', 'compact', 'mini'] as const;
+export type Density = (typeof ZOOM_DENSITIES)[number];
+export const MAX_ZOOM = ZOOM_DENSITIES.length - 1;
+
+/** Clamp an arbitrary integer onto the zoom axis. */
+export function clampZoom(zoom: number): number {
+  return Math.min(MAX_ZOOM, Math.max(0, Math.round(zoom)));
+}
+
+/**
+ * Session-only position overrides from mouse dragging; never persisted.
+ *
+ * Both axes are stored in units that survive a zoom, because arranging the
+ * graph zoomed out and then zooming in to work is the whole point of having a
+ * zoom: a raw cell offset recorded at one density and replayed at another
+ * lands somewhere else entirely.
+ *
+ * `dyRows` is in card pitches, which differ per density (7 rows full, 4
+ * compact, 2 mini) — cells would overshoot by that ratio and stack dragged
+ * nodes on top of each other. `dxFrac` is a fraction of the graph's own
+ * un-dragged width: full and compact share identical card widths so anything
+ * would carry between those two, but mini's columns are roughly half as wide,
+ * and a node parked a third of the way across the graph should stay a third
+ * of the way across it at every zoom.
+ */
+export type PositionOverrides = Map<string, { dxFrac: number; dyRows: number }>;
+
+/** Cell distance between the tops of two stacked cards at this density. */
+export function rowPitch(density: Density = 'full'): number {
+  const boxHeight =
+    density === 'mini' ? MINI_BOX_HEIGHT : density === 'compact' ? COMPACT_BOX_HEIGHT : BOX_HEIGHT;
+  return boxHeight + GAP_Y;
+}
 
 /**
  * Wide enough for the text the card actually wants to show. The subtitle is
@@ -63,7 +105,7 @@ export type PositionOverrides = Map<string, { dx: number; dy: number }>;
  * boxes — and so reflow the whole graph — every time a running agent
  * reported a different tool call.
  */
-function boxWidth(node: Workflow['nodes'][number], density: 'full' | 'compact' | 'mini' = 'full'): number {
+function boxWidth(node: Workflow['nodes'][number], density: Density = 'full'): number {
   if (density === 'mini') {
     // No border, no denial bang, no summary — just "glyph id".
     const content = Math.max(node.id.length + 2, MINI_MIN_BOX_CONTENT);
@@ -86,7 +128,7 @@ export interface LayoutOptions {
    * as focus moves; the full detail of one node is a keypress away in the
    * detail panel. Defaults to 'full'.
    */
-  density?: 'full' | 'compact' | 'mini';
+  density?: Density;
 }
 
 /**
@@ -139,12 +181,24 @@ export function computeLayout(
     x += layerWidth + GAP_X;
   }
 
+  // Captured before overrides move anything: this is the yardstick `dxFrac`
+  // is measured against, and it has to mean the same thing on every call or a
+  // node's own drag would rescale it.
+  let baseWidth = 0;
+  for (const box of boxes.values()) baseWidth = Math.max(baseWidth, box.x + box.w);
+
   if (overrides) {
-    for (const [id, { dx, dy }] of overrides) {
+    const pitch = rowPitch(options.density ?? 'full');
+    for (const [id, { dxFrac, dyRows }] of overrides) {
       const box = boxes.get(id);
       if (box) {
-        box.x = Math.max(0, box.x + dx);
-        box.y = Math.max(0, box.y + dy);
+        // A safety net, not the real clamp: the drag handler limits the delta
+        // it stores against the box's current position, so what is banked and
+        // what is drawn stay the same number. This only catches an offset
+        // recorded at one zoom and replayed at another whose base position is
+        // nearer the origin.
+        box.x = Math.max(0, box.x + Math.round(dxFrac * baseWidth));
+        box.y = Math.max(0, box.y + Math.round(dyRows * pitch));
       }
     }
   }
@@ -155,7 +209,7 @@ export function computeLayout(
     width = Math.max(width, box.x + box.w);
     height = Math.max(height, box.y + box.h);
   }
-  return { boxes, width, height };
+  return { boxes, width, height, baseWidth };
 }
 
 export interface Viewport {
@@ -233,9 +287,35 @@ export function offscreenCounts(
   return counts;
 }
 
-export function hitTest(layout: Layout, x: number, y: number): string | null {
+/**
+ * Which node is under this canvas cell.
+ *
+ * `drawOrder` must be the order `renderGraph` paints boxes in (i.e.
+ * `workflow.nodes`), because painting is last-wins: where two dragged cards
+ * overlap, the one drawn later is the one you can see. Without it this walks
+ * the layout's own layer order instead, and the two disagree often enough
+ * that clicking a card stacked on top of another grabbed the one underneath —
+ * which, once arranging nodes by hand is a normal thing to do, means the node
+ * you just dropped somewhere is the one you can no longer pick up. Optional
+ * only so callers that never overlap boxes needn't thread it through.
+ */
+export function hitTest(
+  layout: Layout,
+  x: number,
+  y: number,
+  drawOrder?: readonly string[],
+): string | null {
+  const hits = (box: NodeBox): boolean =>
+    x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h;
+  if (drawOrder) {
+    for (let i = drawOrder.length - 1; i >= 0; i--) {
+      const box = layout.boxes.get(drawOrder[i]!);
+      if (box && hits(box)) return box.id;
+    }
+    return null;
+  }
   for (const box of layout.boxes.values()) {
-    if (x >= box.x && x < box.x + box.w && y >= box.y && y < box.y + box.h) return box.id;
+    if (hits(box)) return box.id;
   }
   return null;
 }
