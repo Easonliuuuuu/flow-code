@@ -45,7 +45,9 @@
     "lint": "eslint src test",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:integration": "vitest run --config vitest.integration.config.ts"
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "docs:node-types": "node scripts/gen-node-types-doc.mjs",
+    "docs:check": "node scripts/gen-node-types-doc.mjs --check"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",

@@ -21,3 +21,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
+
+      # docs/node-types.md is generated from the node type registry; this fails
+      # if a registry change landed without regenerating it.
+      - run: npm run docs:check
