@@ -10,6 +10,8 @@ export interface MouseEvent {
   x: number;
   y: number;
   button: number;
+  /** Ctrl held. Distinguishes zooming from panning on the wheel. */
+  ctrl: boolean;
   /** Only set when kind is 'scroll'. */
   direction?: 'up' | 'down';
 }
@@ -30,6 +32,15 @@ const SGR_PATTERN = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
 /** Bit 6 of the SGR button code marks wheel events (button numbers 64-67). */
 const WHEEL_BIT = 64;
 
+/**
+ * Modifier bits the terminal ORs into the button code: 4 shift, 8 meta, 16
+ * ctrl. Only ctrl is read — it is what separates a zoom from a pan on the
+ * wheel. Note that several terminals (iTerm2, GNOME Terminal, Windows
+ * Terminal) bind ctrl+wheel to their own font sizing and never forward these,
+ * which is why zoom stays reachable from the keyboard as well.
+ */
+const CTRL_BIT = 16;
+
 /** Matches a bare SGR mouse sequence once ink has stripped its leading ESC. */
 export const LEAKED_MOUSE_SEQUENCE = /^\[<\d+;\d+;\d+[Mm]$/;
 
@@ -40,14 +51,15 @@ export function parseMouseEvents(data: string): MouseEvent[] {
     const x = Number(match[2]) - 1;
     const y = Number(match[3]) - 1;
     const release = match[4] === 'm';
+    const ctrl = (code & CTRL_BIT) !== 0;
     if ((code & WHEEL_BIT) !== 0) {
       const direction = (code & 0b1) === 0 ? 'up' : 'down';
-      events.push({ kind: 'scroll', x, y, button: code & 0b11, direction });
+      events.push({ kind: 'scroll', x, y, button: code & 0b11, ctrl, direction });
       continue;
     }
     const button = code & 0b11;
     const motion = (code & 32) !== 0;
-    events.push({ kind: release ? 'release' : motion ? 'drag' : 'press', x, y, button });
+    events.push({ kind: release ? 'release' : motion ? 'drag' : 'press', x, y, button, ctrl });
   }
   return events;
 }

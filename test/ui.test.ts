@@ -18,7 +18,9 @@ import {
   MINI_MAX_BOX_CONTENT,
   MINI_MIN_BOX_CONTENT,
   offscreenCounts,
+  rowPitch,
   scrollIntoView,
+  ZOOM_DENSITIES,
 } from '../src/ui/layout.js';
 import { LEAKED_MOUSE_SEQUENCE, parseMouseEvents } from '../src/ui/mouse.js';
 import {
@@ -82,10 +84,38 @@ describe('graph auto-layout', () => {
 
   it('applies session-only drag overrides without mutating base layout', () => {
     const base = computeLayout(WF);
-    const overridden = computeLayout(WF, new Map([['impl', { dx: 10, dy: 3 }]]));
+    const overrides = new Map([
+      ['impl', { dxFrac: 10 / base.baseWidth, dyRows: 3 / rowPitch('full') }],
+    ]);
+    const overridden = computeLayout(WF, overrides);
     expect(overridden.boxes.get('impl')!.x).toBe(base.boxes.get('impl')!.x + 10);
     expect(overridden.boxes.get('impl')!.y).toBe(base.boxes.get('impl')!.y + 3);
     expect(computeLayout(WF).boxes.get('impl')!.x).toBe(base.boxes.get('impl')!.x);
+  });
+
+  it('replays a drag at every zoom in its own units, so an arrangement survives zooming', () => {
+    // One card pitch down and a fifth of the graph across — the arrangement
+    // ctrl+wheel, `z` and `o` all have to preserve.
+    const overrides = new Map([['impl', { dxFrac: 0.2, dyRows: 1 }]]);
+    for (const density of ZOOM_DENSITIES) {
+      const base = computeLayout(WF, undefined, { density });
+      const moved = computeLayout(WF, overrides, { density });
+      const box = moved.boxes.get('impl')!;
+      const from = base.boxes.get('impl')!;
+      expect(box.y - from.y).toBe(rowPitch(density));
+      // Scaled to that zoom's own graph width, not replayed as raw cells:
+      // mini's columns are roughly half as wide as a full card's.
+      expect(box.x - from.x).toBe(Math.round(0.2 * base.baseWidth));
+    }
+  });
+
+  it('reports baseWidth from the un-dragged graph, so one drag cannot rescale another', () => {
+    const base = computeLayout(WF);
+    // Far enough right to push the graph's own right edge out past where the
+    // auto-layout put it.
+    const dragged = computeLayout(WF, new Map([['impl', { dxFrac: 2, dyRows: 0 }]]));
+    expect(dragged.width).toBeGreaterThan(base.width);
+    expect(dragged.baseWidth).toBe(base.baseWidth);
   });
 
   it('scrollIntoView brings an out-of-viewport box into view', () => {
@@ -216,6 +246,25 @@ nodes:
     const impl = layout.boxes.get('impl')!;
     expect(hitTest(layout, impl.x + 1, impl.y + 1)).toBe('impl');
     expect(hitTest(layout, impl.x + impl.w + 3, impl.y)).toBeNull();
+  });
+
+  it('hitTest picks the card drawn on top where two overlap, not the first laid out', () => {
+    // Drag `rev` back over `impl`. renderGraph paints in workflow.nodes order,
+    // so `rev` — later in that order — is the one actually visible here.
+    const base = computeLayout(WF);
+    const rev = base.boxes.get('rev')!;
+    const impl = base.boxes.get('impl')!;
+    const layout = computeLayout(
+      WF,
+      new Map([['rev', { dxFrac: (impl.x - rev.x) / base.baseWidth, dyRows: -rev.y / rowPitch('full') }]]),
+    );
+    expect(layout.boxes.get('rev')).toEqual(expect.objectContaining({ x: impl.x, y: impl.y }));
+
+    const drawOrder = WF.nodes.map((n) => n.id);
+    expect(drawOrder.indexOf('rev')).toBeGreaterThan(drawOrder.indexOf('impl'));
+    // Without the draw order this returns 'impl' — the card underneath, which
+    // is why a node dropped on top of another could not be picked up again.
+    expect(hitTest(layout, impl.x + 1, impl.y + 1, drawOrder)).toBe('rev');
   });
 });
 
@@ -628,9 +677,15 @@ describe('loop-back rendering', () => {
 
 describe('mouse parsing (SGR)', () => {
   it('parses press, drag, and release with 0-based coordinates', () => {
-    expect(parseMouseEvents('\x1b[<0;5;3M')).toEqual([{ kind: 'press', x: 4, y: 2, button: 0 }]);
-    expect(parseMouseEvents('\x1b[<32;6;3M')).toEqual([{ kind: 'drag', x: 5, y: 2, button: 0 }]);
-    expect(parseMouseEvents('\x1b[<0;6;3m')).toEqual([{ kind: 'release', x: 5, y: 2, button: 0 }]);
+    expect(parseMouseEvents('\x1b[<0;5;3M')).toEqual([
+      { kind: 'press', x: 4, y: 2, button: 0, ctrl: false },
+    ]);
+    expect(parseMouseEvents('\x1b[<32;6;3M')).toEqual([
+      { kind: 'drag', x: 5, y: 2, button: 0, ctrl: false },
+    ]);
+    expect(parseMouseEvents('\x1b[<0;6;3m')).toEqual([
+      { kind: 'release', x: 5, y: 2, button: 0, ctrl: false },
+    ]);
   });
 
   it('ignores non-mouse input entirely (graceful no-mouse fallback)', () => {
@@ -639,10 +694,26 @@ describe('mouse parsing (SGR)', () => {
 
   it('parses wheel up/down as scroll events, not clicks', () => {
     expect(parseMouseEvents('\x1b[<64;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 0, direction: 'up' },
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, direction: 'up' },
     ]);
     expect(parseMouseEvents('\x1b[<65;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 1, direction: 'down' },
+      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: false, direction: 'down' },
+    ]);
+  });
+
+  it('separates ctrl+wheel from a plain wheel, so zoom and pan stay distinct', () => {
+    // The terminal ORs modifier bits into the button code; masking them off
+    // made ctrl+wheel indistinguishable from a bare wheel, so a zoom gesture
+    // silently panned instead.
+    expect(parseMouseEvents('\x1b[<80;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: true, direction: 'up' },
+    ]);
+    expect(parseMouseEvents('\x1b[<81;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: true, direction: 'down' },
+    ]);
+    // Shift is a modifier too, and must not read as ctrl.
+    expect(parseMouseEvents('\x1b[<68;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, direction: 'up' },
     ]);
   });
 
