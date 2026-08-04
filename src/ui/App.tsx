@@ -74,6 +74,16 @@ interface PanelDrag {
 const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
 
+/**
+ * Prose (chat transcript, agent output, critique summaries) wraps to this at
+ * most, however wide the panel itself is — a docked panel spans the full
+ * terminal, and conversational sentences stretched across a very wide window
+ * read as a sparse left-aligned column with a dead void on the right rather
+ * than as text. Tabular content (diffs) isn't subject to this; it needs the
+ * full width to avoid wrapping code lines.
+ */
+const MAX_PROSE_WIDTH = 100;
+
 /** Spinner/elapsed-clock cadence: fast enough to read as motion, slow enough not to churn frames. */
 const ANIMATION_INTERVAL_MS = 120;
 
@@ -675,7 +685,7 @@ export function App({
 
   // Wrapped transcript rows for the Discuss panel, and the scrollback window
   // into them (see tailWindow's doc comment for the follow/pin model).
-  const discussTranscriptWidth = Math.max(10, activeRect.w - 6);
+  const discussTranscriptWidth = Math.max(10, Math.min(activeRect.w - 6, MAX_PROSE_WIDTH));
   // Panel width minus borders, padding, the "> " prompt and the caret cell.
   const discussInputWidth = Math.max(4, activeRect.w - 7);
   const discussRows = useMemo(() => {
@@ -1519,10 +1529,10 @@ export function App({
             // uncapped variable-height block did for the skill picker's
             // search line earlier — see `visible` below, which reserves
             // exactly this many rows plus one for the label.
-            const summaryLines = wrapText(pendingApproval.req.agentSummary, Math.max(10, activeRect.w - 4)).slice(
-              0,
-              4,
-            );
+            const summaryLines = wrapText(
+              pendingApproval.req.agentSummary,
+              Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH)),
+            ).slice(0, 4);
             return (
               <Box flexDirection="column">
                 <Text color="magenta" bold>
@@ -1543,7 +1553,13 @@ export function App({
                 ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
               ]);
               const summaryBudget = pendingApproval.req.agentSummary
-                ? Math.min(4, wrapText(pendingApproval.req.agentSummary, Math.max(10, activeRect.w - 4)).length) + 1
+                ? Math.min(
+                    4,
+                    wrapText(
+                      pendingApproval.req.agentSummary,
+                      Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH)),
+                    ).length,
+                  ) + 1
                 : 0;
               const visible = Math.max(1, panelHeight - 6 - summaryBudget);
               const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
@@ -1773,7 +1789,7 @@ export function App({
             // Agent output is prose, not a table: wrap it to the panel's inner
             // width (borders + paddingX) so long sentences stay readable
             // instead of running past the right edge and being cut off.
-            const outputWidth = Math.max(10, activeRect.w - 4);
+            const outputWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
             const liveLines =
               live.length > 0
                 ? live
