@@ -86,11 +86,14 @@ export const executeApprovalGate: NodeExecutor = async function* (ctx) {
   });
 
   const decidedAt = new Date().toISOString();
+  // Diffs ride along on the result so the detail panel can re-show the same
+  // green/red view after the decision — the live approval panel is only
+  // reachable while the gate is actually waiting.
   if (decision === 'approve') {
-    yield { type: 'result', output: { decision: 'approved', decidedAt } };
+    yield { type: 'result', output: { decision: 'approved', decidedAt, diffs } };
     yield { type: 'status', status: 'done', detail: 'approved' };
   } else {
-    yield { type: 'result', output: { decision: 'rejected', decidedAt } };
+    yield { type: 'result', output: { decision: 'rejected', decidedAt, diffs } };
     yield { type: 'status', status: 'error', detail: 'rejected by user' };
   }
 };
