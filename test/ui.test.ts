@@ -150,17 +150,18 @@ nodes:
     expect(layout.boxes.get('verbose')!.w - 2).toBe(MAX_BOX_CONTENT);
   });
 
-  it('compact layout keeps the columns and shortens every card', () => {
+  it('compact layout shrinks both width and height', () => {
     const full = computeLayout(WF);
     const compact = computeLayout(WF, undefined, { density: 'compact' });
     expect(compact.boxes.get('impl')!.h).toBe(COMPACT_BOX_HEIGHT);
     expect(compact.height).toBeLessThan(full.height);
-    // Widths and columns are unchanged — only the vertical footprint shrinks.
-    expect(compact.width).toBe(full.width);
-    expect(compact.boxes.get('rev')!.x).toBe(full.boxes.get('rev')!.x);
+    // No subtitle or type-name row to size for, so the card — and the
+    // columns built from it — narrows too.
+    expect(compact.boxes.get('impl')!.w).toBeLessThan(full.boxes.get('impl')!.w);
+    expect(compact.width).toBeLessThan(full.width);
   });
 
-  it('mini layout shrinks both height and width, unlike compact which only shrinks height', () => {
+  it('mini layout shrinks width further than compact, on top of a shorter height', () => {
     const compact = computeLayout(WF, undefined, { density: 'compact' });
     const mini = computeLayout(WF, undefined, { density: 'mini' });
     expect(mini.boxes.get('impl')!.h).toBe(MINI_BOX_HEIGHT);

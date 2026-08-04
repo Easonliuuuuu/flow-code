@@ -15,6 +15,17 @@ export const MINI_MIN_BOX_CONTENT = 6;
 export const MINI_MAX_BOX_CONTENT = 16;
 
 /**
+ * Compact-card width floor. Narrower than a full card's `MIN_BOX_CONTENT`
+ * since there's no subtitle or type-name row to size for — a long
+ * `instructions` or `topic` no longer widens the box the way it does at full
+ * density. What's left is the title (glyph, id, denial bang) plus enough
+ * room on that same row for a typical `↑tokens ↓tokens` reading to ride its
+ * right edge; metrics longer than that are dropped gracefully rather than
+ * clipped (see canvas.ts), so this doesn't have to fit the worst case.
+ */
+export const COMPACT_MIN_BOX_CONTENT = 18;
+
+/**
  * Where a hard-centered focused box lands in Focus mode: left-of-center
  * horizontally, so more of the downstream (rightward) graph stays visible —
  * the way editors keep the cursor left-of-center rather than dead-center —
@@ -84,10 +95,9 @@ export function clampZoom(zoom: number): number {
  * `dyRows` is in card pitches, which differ per density (7 rows full, 4
  * compact, 2 mini) — cells would overshoot by that ratio and stack dragged
  * nodes on top of each other. `dxFrac` is a fraction of the graph's own
- * un-dragged width: full and compact share identical card widths so anything
- * would carry between those two, but mini's columns are roughly half as wide,
- * and a node parked a third of the way across the graph should stay a third
- * of the way across it at every zoom.
+ * un-dragged width at the density it's replayed against, so a node parked a
+ * third of the way across the graph stays a third of the way across it at
+ * every zoom, even though each density's columns are a different width.
  */
 export type PositionOverrides = Map<string, { dxFrac: number; dyRows: number }>;
 
@@ -110,6 +120,13 @@ function boxWidth(node: Workflow['nodes'][number], density: Density = 'full'): n
     // No border, no denial bang, no summary — just "glyph id".
     const content = Math.max(node.id.length + 2, MINI_MIN_BOX_CONTENT);
     return Math.min(content, MINI_MAX_BOX_CONTENT);
+  }
+  if (density === 'compact') {
+    // Border, title (glyph + id + denial bang) — no type-name or subtitle
+    // row to size for, unlike full. +4 leaves room for the glyph and bang,
+    // same as full's title row; +2 for the border.
+    const content = Math.max(node.id.length + 4, COMPACT_MIN_BOX_CONTENT);
+    return Math.min(content, MAX_BOX_CONTENT) + 2;
   }
   // +4 on the title row leaves room for the status glyph and the denial bang.
   const content = Math.max(
