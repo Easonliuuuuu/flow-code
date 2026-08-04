@@ -119,10 +119,6 @@ function formatActivityRow(entry: ActivityEntry): string {
   return `${time}  ${entry.tool.padEnd(8)} ${summary.padEnd(44)} ${decision}${exit}${duration}`;
 }
 
-function tail<T>(items: T[], n: number): T[] {
-  return items.slice(Math.max(0, items.length - n));
-}
-
 /** Flattens an approval gate's diffs into a scrollable list of lines, one label header per diff. */
 function diffLinesFor(diffs: Array<{ label?: string; diff: string }>): string[] {
   return diffs.flatMap((d) => [
@@ -234,6 +230,11 @@ export function App({
   // null = following the live tail; a number pins the transcript to that
   // absolute row so new messages don't disturb a mid-scroll read.
   const [discussPin, setDiscussPin] = useState<number | null>(null);
+  // Same follow/pin model as discussPin, but for the two halves of the
+  // default node panel (agent output, activity log) — independent, since
+  // one can be much longer than the other.
+  const [outputPin, setOutputPin] = useState<number | null>(null);
+  const [activityPin, setActivityPin] = useState<number | null>(null);
   // null = docked (full width, pinned to the bottom, auto height). Set once the
   // panel is dragged or resized, and persists — including across different
   // panel content (Discuss/Approval/etc.) — until reset with ctrl+p.
@@ -744,6 +745,49 @@ export function App({
   }, [discussState, discussTranscriptWidth]);
   const discussWindow = tailWindow(discussRows.length, Math.max(1, panelHeight - 5), discussPin);
 
+  // Same tail/scroll treatment for the default node panel's two halves —
+  // hoisted out of the panel's render (rather than computed inline like the
+  // rest of that view) so the keyboard and mouse-wheel handlers below can
+  // read the current window too, same reason discussWindow lives up here.
+  const nodePanelActivity = useMemo(
+    () => (focusedNode ? runState.activity.filter((e) => e.nodeId === focusedNode.id) : []),
+    [runState.activity, focusedNode],
+  );
+  const nodePanelOutputWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
+  // Deliberately not memoized: store.liveOutputFor reads a buffer that
+  // mutates outside React state, so it has to be re-read on every render —
+  // keying a memo to `frame` would only pick up new output on the next
+  // animation tick instead of the render that actually revealed the panel.
+  const nodePanelLive = focusedNode ? store.liveOutputFor(focusedNode.id) : '';
+  const nodePanelLiveLines =
+    nodePanelLive.length > 0
+      ? nodePanelLive
+          .trimEnd()
+          .split('\n')
+          .flatMap((line) => wrapText(line.replace(/\t/g, '    '), nodePanelOutputWidth))
+      : [];
+  // Rows left for output + activity: the panel minus its borders, title,
+  // config line, activity separator and footer — mirrors the panel render's
+  // own bodyBudget math (kept in sync there rather than shared, since the
+  // render's version also has to account for the approval-gate replay case).
+  const nodePanelBodyBudget = Math.max(2, panelHeight - 6);
+  const nodePanelOutputBudget = Math.max(1, Math.floor(nodePanelBodyBudget / 2));
+  const nodePanelActivityBudget = Math.max(1, nodePanelBodyBudget - nodePanelOutputBudget);
+  const outputWindow = tailWindow(nodePanelLiveLines.length, nodePanelOutputBudget, outputPin);
+  const activityWindow = tailWindow(nodePanelActivity.length, nodePanelActivityBudget, activityPin);
+  // A page-sized jump for diff scrolling (approval gate, live or replay) —
+  // same panelHeight-based step Discuss's PageUp/PageDown already uses.
+  const diffPageStep = Math.max(1, panelHeight - 6);
+  // Whether the expanded panel is showing a decided approval gate's diff
+  // replay rather than the default output/activity view — same condition
+  // the panel's own render branches on, reused here so the wheel handler
+  // (which can't run that JSX) knows which pin(s) a scroll should move.
+  const nodePanelIsDiffReplay =
+    focusedNode?.type.id === 'approval-gate' &&
+    Array.isArray(
+      (runState.nodes[focusedNode.id]?.output as { diffs?: unknown } | undefined)?.diffs,
+    );
+
   /**
    * Whether a prompt is blocking on this node. A blocking prompt owns the
    * keyboard outright, so `m`/`s` can't reach the pickers while one is up
@@ -773,8 +817,14 @@ export function App({
     offset,
     activeRect,
     panelOpen,
+    expanded,
+    focusedNode,
     discussPanelOpen,
     discussWindow,
+    nodePanelIsDiffReplay,
+    outputWindow,
+    activityWindow,
+    nodePanelOutputBudget,
     pendingApproval,
     columns,
     rows,
@@ -793,8 +843,14 @@ export function App({
       offset,
       activeRect,
       panelOpen,
+      expanded,
+      focusedNode,
       discussPanelOpen,
       discussWindow,
+      nodePanelIsDiffReplay,
+      outputWindow,
+      activityWindow,
+      nodePanelOutputBudget,
       pendingApproval,
       columns,
       rows,
@@ -813,6 +869,14 @@ export function App({
   useEffect(() => {
     setDiscussPin(null);
   }, [discussState?.nodeId, discussActive]);
+
+  // Moving focus to a different node starts its panel following the live
+  // tail too, rather than carrying over a scroll position from whatever was
+  // focused before.
+  useEffect(() => {
+    setOutputPin(null);
+    setActivityPin(null);
+  }, [focusedNode?.id]);
 
   // Auto-focus a discuss node the moment it starts awaiting a reply — same
   // reasoning as the approval-gate effect below: since discussPanelOpen only
@@ -838,7 +902,13 @@ export function App({
           offset,
           activeRect,
           panelOpen,
+          expanded,
+          focusedNode,
           discussPanelOpen,
+          nodePanelIsDiffReplay,
+          outputWindow,
+          activityWindow,
+          nodePanelOutputBudget,
           pendingApproval,
           columns,
           rows,
@@ -851,6 +921,17 @@ export function App({
           blockingPromptFor,
           zoomBy,
         } = mouseStateRef.current;
+        // Rows above the output pane in the default node panel: top border,
+        // title, config line — matches nodePanelBodyBudget's own accounting
+        // (App.tsx, "Rows left for output + activity" comment). The optional
+        // model/skills/tokens/attempt lines above aren't counted here either,
+        // same pre-existing approximation as that budget itself, so a wheel
+        // near the output/activity boundary on a node with several of those
+        // lines showing may land a tick on the wrong half — low-stakes since
+        // it's just one scroll tick.
+        const nodePanelHeaderRows = 3;
+        const nodePanelOpen =
+          expanded && focusedNode !== undefined && !discussPanelOpen && !nodePanelIsDiffReplay;
         const overPanel =
           panelOpen &&
           event.x >= activeRect.x &&
@@ -961,8 +1042,18 @@ export function App({
             setDiscussPin(
               pinAfterScroll(mouseStateRef.current.discussWindow, event.direction === 'down' ? -3 : 3),
             );
-          } else if (pendingApproval) {
-            setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 1 : -1)));
+          } else if (pendingApproval || (overPanel && nodePanelIsDiffReplay)) {
+            // Same 3-row-per-tick step as every other wheel-scrolled surface
+            // here (discuss, node panel below) — this used to move 1 row/tick,
+            // which read as noticeably slower under the mouse for no reason.
+            setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 3 : -3)));
+          } else if (overPanel && nodePanelOpen) {
+            const splitY = activeRect.y + nodePanelHeaderRows + nodePanelOutputBudget;
+            if (event.y < splitY) {
+              setOutputPin(pinAfterScroll(outputWindow, event.direction === 'down' ? -3 : 3));
+            } else {
+              setActivityPin(pinAfterScroll(activityWindow, event.direction === 'down' ? -3 : 3));
+            }
           } else {
             setOffset((o) =>
               clampOffset(layout, {
@@ -1040,6 +1131,19 @@ export function App({
       }
       if (key.pageDown) {
         setDiscussPin(pinAfterScroll(discussWindow, -Math.max(1, panelHeight - 6)));
+        return;
+      }
+      // Escape backs out of a draft first, same as the node-settings editor
+      // and every picker — an abandoned draft shouldn't cost you the
+      // conversation too. With no draft, it's the one modal here that
+      // otherwise has no way to back out short of typing /done or /exit.
+      if (key.escape) {
+        if (inputBuffer.length > 0) {
+          setInputBuffer('');
+        } else {
+          setDiscussPin(null);
+          ports.submitUserMessage(null);
+        }
         return;
       }
       if (key.return) {
@@ -1153,6 +1257,8 @@ export function App({
       }
       if (input === 'j' || key.downArrow) setDiffScroll((s) => s + 1);
       if (input === 'k' || key.upArrow) setDiffScroll((s) => Math.max(0, s - 1));
+      if (key.pageDown) setDiffScroll((s) => s + diffPageStep);
+      if (key.pageUp) setDiffScroll((s) => Math.max(0, s - diffPageStep));
       if (key.tab) setFocusIdx((i) => (i + 1) % workflow.order.length);
       return;
     }
@@ -1298,6 +1404,38 @@ export function App({
           setDiffScroll((s) => Math.max(0, s - 1));
           return;
         }
+        if (key.pageDown) {
+          setDiffScroll((s) => s + diffPageStep);
+          return;
+        }
+        if (key.pageUp) {
+          setDiffScroll((s) => Math.max(0, s - diffPageStep));
+          return;
+        }
+      }
+    }
+
+    // Default node panel (agent output above, activity log below): PageUp/
+    // PageDown scrolls the activity log — usually the longer, more-current
+    // stream — and shift+PageUp/PageDown scrolls the agent output above it.
+    // Falls through so enter/tab still work; excludes the approval-gate
+    // replay above, which has its own diff scroll.
+    if (expanded && focusedNode && !nodePanelIsDiffReplay) {
+      if (key.pageUp) {
+        if (key.shift) {
+          setOutputPin(pinAfterScroll(outputWindow, Math.max(1, nodePanelOutputBudget - 1)));
+        } else {
+          setActivityPin(pinAfterScroll(activityWindow, Math.max(1, nodePanelActivityBudget - 1)));
+        }
+        return;
+      }
+      if (key.pageDown) {
+        if (key.shift) {
+          setOutputPin(pinAfterScroll(outputWindow, -Math.max(1, nodePanelOutputBudget - 1)));
+        } else {
+          setActivityPin(pinAfterScroll(activityWindow, -Math.max(1, nodePanelActivityBudget - 1)));
+        }
+        return;
       }
     }
 
@@ -1483,7 +1621,7 @@ export function App({
               <Text dimColor>… agent is thinking</Text>
             )}
           </Text>
-          <PanelFooter hint="enter: send · tab: other nodes · /done: finish · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="enter: send · esc: end · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pendingTestCommands ? (
         <Box {...panelBoxProps}>
@@ -1616,7 +1754,7 @@ export function App({
               return <DiffLines lines={lines} start={start} visible={visible} />;
             })()}
           </Box>
-          <PanelFooter hint="[a] approve · [r] reject · j/k: scroll diff · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="[a] approve · [r] reject · j/k/PgUp/PgDn: scroll diff · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pickerOpen && focusedNode ? (
         <Box {...panelBoxProps}>
@@ -1844,29 +1982,14 @@ export function App({
                     <Box flexDirection="column" flexGrow={1} overflow="hidden">
                       <DiffLines lines={lines} start={start} visible={visible} />
                     </Box>
-                    <PanelFooter hint="j/k: scroll diff · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                    <PanelFooter hint="j/k/PgUp/PgDn: scroll diff · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
                   </>
                 );
               }
             }
-            const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
-            const live = store.liveOutputFor(focusedNode.id);
-            // Agent output is prose, not a table: wrap it to the panel's inner
-            // width (borders + paddingX) so long sentences stay readable
-            // instead of running past the right edge and being cut off.
-            const outputWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
-            const liveLines =
-              live.length > 0
-                ? live
-                    .trimEnd()
-                    .split('\n')
-                    .flatMap((line) => wrapText(line.replace(/\t/g, '    '), outputWidth))
-                : [];
-            // Rows left for output + activity: the panel minus its borders,
-            // title, config line, activity separator and footer.
-            const bodyBudget = Math.max(2, panelHeight - 6);
-            const outputBudget = Math.max(1, Math.floor(bodyBudget / 2));
-            const activityBudget = Math.max(1, bodyBudget - outputBudget);
+            // activity/liveLines and their scroll windows are hoisted above
+            // (nodePanelActivity, nodePanelLiveLines, outputWindow,
+            // activityWindow) so the keyboard/mouse handlers can reach them.
             return (
               <>
                 <PanelTitle>
@@ -1923,13 +2046,27 @@ export function App({
                       {state.priorAttempts!.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
                     </Text>
                   ) : null}
-                  {tail(liveLines, outputBudget).map((line, i) => (
+                  {nodePanelLiveLines.slice(outputWindow.start, outputWindow.end).map((line, i) => (
                     <Text key={`o${i}`} wrap="truncate-end">
                       {line || ' '}
                     </Text>
                   ))}
-                  {activity.length > 0 ? <Text dimColor>── activity ──</Text> : null}
-                  {tail(activity, activityBudget).map((entry, i) => (
+                  {nodePanelActivity.length > 0 ? (
+                    <Text dimColor>
+                      ── activity ──
+                      {!activityWindow.following ? (
+                        <Text dimColor>
+                          {' '}
+                          ({activityWindow.start} above
+                          {nodePanelActivity.length - activityWindow.end > 0
+                            ? `, ${nodePanelActivity.length - activityWindow.end} below`
+                            : ''}
+                          )
+                        </Text>
+                      ) : null}
+                    </Text>
+                  ) : null}
+                  {nodePanelActivity.slice(activityWindow.start, activityWindow.end).map((entry, i) => (
                     <Text
                       key={`a${i}`}
                       wrap="truncate-end"
@@ -1939,7 +2076,7 @@ export function App({
                     </Text>
                   ))}
                 </Box>
-                <PanelFooter hint="enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                <PanelFooter hint="PgUp/PgDn: scroll activity · shift+PgUp/PgDn: scroll output · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
               </>
             );
           })()}
