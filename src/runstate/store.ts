@@ -94,6 +94,21 @@ export class RunStateStore {
     for (const l of this.listeners) l(this.state);
   }
 
+  /**
+   * Replaces the whole state and notifies subscribers — the write path for a
+   * read-only viewer (`flow-code watch`) driven by a file on disk rather than
+   * by an engine in this process.
+   *
+   * Deliberately not `commit()`: this must never reach the persister. A
+   * viewer that wrote back what it just read would race the process actually
+   * running the workflow, and could resurrect state the run had already moved
+   * past.
+   */
+  applySnapshot(state: RunState): void {
+    this.state = state;
+    for (const l of this.listeners) l(this.state);
+  }
+
   node(id: string): NodeRunState {
     const node = this.state.nodes[id];
     if (!node) throw new Error(`unknown node in run-state: ${id}`);
