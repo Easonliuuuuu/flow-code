@@ -44,7 +44,6 @@ settings:
   concurrency: 1
 
   budget:
-    tokensPerNode: 300000
     tokensPerRun: 2000000
     minutesPerRun: 60
 
@@ -122,7 +121,6 @@ settings:
   concurrency: 1
 
   budget:
-    tokensPerNode: 300000
     tokensPerRun: 2000000
     minutesPerRun: 60
 
