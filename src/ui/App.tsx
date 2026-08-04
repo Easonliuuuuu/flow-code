@@ -346,6 +346,15 @@ export function App({
   // since compacting shortens it again, drag it back and the whole thing
   // flips a second time. Density is a property of the graph, not of where you
   // happen to have parked one node.
+  //
+  // Measured against the *undocked* canvas height, not `canvasHeight` — a
+  // docked panel (opened by `m`/`s`/`e`, an approval gate, …) reserves up to
+  // 60% of the terminal for itself, and a graph tall enough to compact under
+  // that reduced height would auto-compact the instant a panel opened and
+  // un-compact the instant it closed. Every card would resize and shift
+  // position on that swing, right as focus was moving on to the next click —
+  // this is what silently changed the badge a click a moment later landed on.
+  const undockedCanvasHeight = Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
   const measuredLayout = useMemo(() => computeLayout(workflow), [workflow]);
   const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
   const compactLayout = useMemo(
@@ -356,7 +365,7 @@ export function App({
     () => computeLayout(workflow, overrides, { density: 'mini' }),
     [workflow, overrides],
   );
-  const autoZoom = measuredLayout.height > canvasHeight ? 1 : 0;
+  const autoZoom = measuredLayout.height > undockedCanvasHeight ? 1 : 0;
   const zoom = zoomOverride ?? autoZoom;
   const density = ZOOM_DENSITIES[zoom]!;
   const layout = density === 'mini' ? miniLayout : density === 'compact' ? compactLayout : fullLayout;
