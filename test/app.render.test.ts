@@ -360,3 +360,69 @@ describe('App discuss panel rendering', () => {
     }
   });
 });
+
+describe('App frame height', () => {
+  /**
+   * HEADER_ROWS + canvasHeight + FOOTER_ROWS is budgeted to exactly `rows`.
+   * If either single-row line wraps instead of truncating, the frame comes
+   * out one row taller than the terminal, the terminal scrolls to make room,
+   * and the header ends up drawn over the top of the canvas. Ink will happily
+   * emit that frame, so the guard has to live here.
+   */
+  it('never renders more rows than the terminal has, panel open or closed', async () => {
+    const { stdout, stdin, unmount } = mountDiscussApp();
+    try {
+      await settle();
+      expect(lastFrameLines(stdout).length).toBeLessThanOrEqual(ROWS);
+
+      stdin.write('\r'); // enter: open the detail panel
+      await settle();
+      expect(lastFrameLines(stdout).length).toBeLessThanOrEqual(ROWS);
+
+      stdin.write('\r'); // enter again: back to the hint line
+      await settle();
+      expect(lastFrameLines(stdout).length).toBeLessThanOrEqual(ROWS);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('keeps the hint line to one row, truncating rather than wrapping', async () => {
+    const { stdout, stdin, unmount } = mountDiscussApp();
+    try {
+      await settle();
+      // At 100 columns the full key list does not fit, which is fine — the
+      // point is that the overflow is cut off rather than flowed onto a second
+      // row that the frame has no space for. `q: quit` leads so the one key
+      // you cannot discover any other way is the last to go.
+      const lines = lastFrameLines(stdout);
+      expect(lines.at(-1)).toContain('q: quit');
+      expect(lines.at(-2)).not.toContain('tab: focus');
+
+      stdin.write('o'); // mini zoom relabels the hint — still one row
+      await settle();
+      const after = lastFrameLines(stdout);
+      expect(after.length).toBeLessThanOrEqual(ROWS);
+      expect(after.at(-2)).not.toContain('tab: focus');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('reports the focused node in the header, where a docked panel cannot hide it', async () => {
+    const { stdout, stdin, unmount } = mountDiscussApp();
+    try {
+      await settle();
+      expect(lastFrameLines(stdout)[0]).toContain('focused: talk');
+
+      // Still there with the detail panel open, which replaces the hint line.
+      stdin.write('\r');
+      await settle();
+      const frame = lastFrameLines(stdout);
+      expect(frame[0]).toContain('focused: talk');
+      expect(frame.length).toBeLessThanOrEqual(ROWS);
+    } finally {
+      unmount();
+    }
+  });
+});
