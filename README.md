@@ -121,9 +121,23 @@ edges:
 | `flow-code init --preset openspec` | Scaffold using the OpenSpec workflow graph (`explore → propose → apply → archive`) |
 | `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
 | `flow-code run` | Execute the workflow graph |
+| `flow-code watch` | Follow a run started elsewhere — same graph, read-only, in a second window |
 | `flow-code skills` | List available skills attached from `.claude/skills` or plugins |
 | `flow-code doctor` | Diagnose environment, tools, and provider credentials |
 | `flow-code help` | Show full CLI command reference |
+
+---
+
+## 👀 Watching a run from another window
+
+The engine writes the complete run state to `.flow-code/runs/<runId>.json` after every change, so a run can be followed from anywhere else that can read the repo:
+
+```bash
+flow-code run      # window 1 — drives the workflow
+flow-code watch    # window 2 — same graph, read-only
+```
+
+`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened — so you can leave it running on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run instead. It never writes: the keys that edit `workflow.yaml` (`m`, `s`, `e`) are disabled, and the header says whether the process driving the run is still alive.
 
 ---
 

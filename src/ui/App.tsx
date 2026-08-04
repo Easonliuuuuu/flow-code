@@ -6,6 +6,7 @@ import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
 import type { ActivityEntry, RunState } from '../runstate/types.js';
+import { isAttached, isDriverAlive } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
@@ -83,6 +84,13 @@ export interface AppProps {
   /** ctrl+c: interrupt the run rather than just closing the UI over it. */
   onInterrupt: () => void;
   modelContext: ModelContext;
+  /**
+   * Spectator mode (`flow-code watch`): the run belongs to another process,
+   * and this UI only reads its state file. Turns the header into a
+   * what-am-I-attached-to indicator and disables the keys that write to
+   * `workflow.yaml` — see {@link WATCH_READ_ONLY_MESSAGE}.
+   */
+  watch?: boolean;
 }
 
 function formatActivityRow(entry: ActivityEntry): string {
@@ -128,6 +136,15 @@ function PanelFooter({ hint }: { hint: string }): React.ReactElement {
   );
 }
 
+/**
+ * Why `m`/`s`/`e` do nothing while watching: all three write to
+ * `workflow.yaml`, and the run being watched is owned by another process that
+ * reads config off the same file as each node starts. A spectator editing it
+ * would change a run they aren't driving, from a window that shows no sign
+ * that's what just happened.
+ */
+export const WATCH_READ_ONLY_MESSAGE = 'watching — workflow edits are disabled.';
+
 export function App({
   workflow,
   store,
@@ -135,6 +152,7 @@ export function App({
   onExit,
   onInterrupt,
   modelContext,
+  watch = false,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -1056,11 +1074,14 @@ export function App({
     } else if (key.return) {
       setExpanded((e) => !e);
     } else if (input === 'm') {
-      if (focusedNode) openModelPicker(focusedNode.id);
+      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      else if (focusedNode) openModelPicker(focusedNode.id);
     } else if (input === 's') {
-      if (focusedNode) openSkillPicker(focusedNode.id);
+      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      else if (focusedNode) openSkillPicker(focusedNode.id);
     } else if (input === 'e') {
-      if (focusedNode) openEditor();
+      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      else if (focusedNode) openEditor();
     } else if (input === 'z') {
       setCompactOverride(!compact);
     } else if (input === 'o') {
@@ -1103,6 +1124,18 @@ export function App({
     ([status, count]) => `${STATUS_GLYPHS[status as keyof typeof STATUS_GLYPHS]} ${count}`,
   );
 
+  // Watch-mode header. Both facts are pure functions of the state just
+  // applied, so they re-derive on every snapshot with no extra plumbing
+  // between the watcher and this component.
+  const watchAttached = watch && isAttached(runState);
+  // A run that ended is not "stale" — it has no driver because it's over.
+  const driverGone = watchAttached && !finished && !isDriverAlive(runState);
+  const runLabel = watch
+    ? watchAttached
+      ? `watching ${runState.runId.slice(0, 8)}`
+      : 'waiting for a run'
+    : `run ${runState.runId.slice(0, 8)}`;
+
   // Docked panels stay in normal flow (as before); a floating one is drawn
   // absolutely-positioned on top of the canvas, at whatever rect the user
   // last dragged/resized it to. Spread onto whichever panel variant is open.
@@ -1129,11 +1162,12 @@ export function App({
         <Text bold color="cyan">
           flow-code
         </Text>
-        <Text dimColor> run {runState.runId.slice(0, 8)} · </Text>
+        <Text dimColor> {runLabel} · </Text>
         <Text>{headerParts.join('  ')}</Text>
         {runTokens > 0 ? (
           <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
         ) : null}
+        {driverGone ? <Text color="yellow"> · driver gone</Text> : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {/* Lives in the header rather than the bottom hint line because the
             hint line disappears behind a docked panel — which is exactly when
@@ -1637,7 +1671,8 @@ export function App({
         </Box>
       ) : (
         <Text dimColor>
-          tab: focus · enter: details · e: settings · ←→↑↓ (⇧ anywhere): pan ·{' '}
+          tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧ anywhere):
+          pan ·{' '}
           {viewMode === 'focus' ? `z: ${compact ? 'full cards' : 'compact'} · ` : ''}
           o: {viewMode === 'focus' ? 'overview' : 'focus'} · q: quit
           {focusedNode ? ` · focused: ${focusedNode.id}` : ''}

@@ -15,6 +15,8 @@ export function runUi(opts: {
   ports: UiInteractionPorts;
   onInterrupt: () => void;
   modelContext: ModelContext;
+  /** Read-only spectator mode — see `AppProps.watch`. */
+  watch?: boolean;
 }): Promise<void> {
   return new Promise((resolve) => {
     const instance = render(
@@ -23,6 +25,7 @@ export function runUi(opts: {
         store: opts.store,
         ports: opts.ports,
         modelContext: opts.modelContext,
+        ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
         onExit: () => {
           instance.unmount();
           resolve();

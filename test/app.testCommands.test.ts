@@ -50,6 +50,22 @@ function lastFrame(stdout: FakeStdout): string {
   return plain.filter((f) => f.trim().length > 0).at(-1) ?? '';
 }
 
+/**
+ * Waits for `text` to actually reach the screen, instead of sleeping a fixed
+ * interval and hoping. Needed wherever a keypress kicks off async work:
+ * discovery is two hops deep (the agent call, then React's re-render), so a
+ * fixed `settle` is a race that stays hidden until the full suite's load
+ * slows the render down.
+ */
+async function settleUntil(stdout: FakeStdout, text: string, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (lastFrame(stdout).includes(text)) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error(`timed out waiting for ${JSON.stringify(text)} to reach the screen`);
+}
+
 function mount(
   workflow: Workflow,
   store: RunStateStore,
@@ -162,9 +178,8 @@ describe('test-command panel', () => {
       expect(discoverCalls).toBe(0);
 
       stdin.write('d');
-      await settle();
+      await settleUntil(stdout, 'go test ./...');
       expect(discoverCalls).toBe(1);
-      expect(lastFrame(stdout)).toContain('go test ./...');
       expect(lastFrame(stdout)).toContain('go.mod at the repo root');
 
       stdin.write('j');
