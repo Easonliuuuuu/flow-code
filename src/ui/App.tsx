@@ -123,6 +123,32 @@ function tail<T>(items: T[], n: number): T[] {
   return items.slice(Math.max(0, items.length - n));
 }
 
+/** Flattens an approval gate's diffs into a scrollable list of lines, one label header per diff. */
+function diffLinesFor(diffs: Array<{ label?: string; diff: string }>): string[] {
+  return diffs.flatMap((d) => [
+    ...(d.label ? [`── ${d.label} ──`] : []),
+    ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
+  ]);
+}
+
+/** GitHub-style +green/-red diff body, shared by the live approval panel and its post-decision replay. */
+function DiffLines({ lines, start, visible }: { lines: string[]; start: number; visible: number }): React.ReactElement {
+  return (
+    <>
+      {lines.slice(start, start + visible).map((line, i) => (
+        <Text
+          key={i}
+          wrap="truncate-end"
+          {...(line.startsWith('+') ? { color: 'green' } : line.startsWith('-') ? { color: 'red' } : {})}
+          dimColor={line.startsWith('@@') || line.startsWith('──')}
+        >
+          {line || ' '}
+        </Text>
+      ))}
+    </>
+  );
+}
+
 /**
  * Title row of a panel. The whole row is a move zone (see hitTestPanel), so it
  * leads with a drag handle to say so.
@@ -660,6 +686,16 @@ export function App({
       setDiffScroll(0);
     }
   }, [pendingApproval, workflow.order]);
+
+  // Reset diff scroll when focus lands on a different node, so an approval
+  // gate's replayed diff always opens at the top rather than wherever the
+  // previously-viewed node's diff happened to leave it. Skipped while a gate
+  // is actively awaiting a decision — its forced-open panel already owns
+  // `diffScroll`, and tabbing away to peek at other nodes shouldn't lose the
+  // read position in the diff you're deciding on.
+  useEffect(() => {
+    if (!pendingApproval) setDiffScroll(0);
+  }, [focusedId, pendingApproval]);
 
   useEffect(() => {
     if (pendingConvergence) {
@@ -1248,6 +1284,23 @@ export function App({
       return;
     }
 
+    // Approval gate replay: j/k scrolls the persisted diff, same as the live
+    // panel. Falls through (no early return for other keys) so enter/tab
+    // still close the panel / move focus via normal navigation below.
+    if (expanded && focusedNode?.type.id === 'approval-gate') {
+      const output = runState.nodes[focusedNode.id]?.output as { diffs?: unknown } | undefined;
+      if (Array.isArray(output?.diffs)) {
+        if (input === 'j' || key.downArrow) {
+          setDiffScroll((s) => s + 1);
+          return;
+        }
+        if (input === 'k' || key.upArrow) {
+          setDiffScroll((s) => Math.max(0, s - 1));
+          return;
+        }
+      }
+    }
+
     // Normal navigation.
     if (key.tab && key.shift) {
       setFocusIdx((i) => (i + workflow.order.length - 1) % workflow.order.length);
@@ -1548,10 +1601,7 @@ export function App({
           })()}
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             {(() => {
-              const lines = pendingApproval.req.diffs.flatMap((d) => [
-                ...(d.label ? [`── ${d.label} ──`] : []),
-                ...(d.diff.length > 0 ? d.diff.split('\n') : ['(no changes)']),
-              ]);
+              const lines = diffLinesFor(pendingApproval.req.diffs);
               const summaryBudget = pendingApproval.req.agentSummary
                 ? Math.min(
                     4,
@@ -1563,20 +1613,7 @@ export function App({
                 : 0;
               const visible = Math.max(1, panelHeight - 6 - summaryBudget);
               const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
-              return lines.slice(start, start + visible).map((line, i) => (
-                <Text
-                  key={i}
-                  wrap="truncate-end"
-                  {...(line.startsWith('+')
-                    ? { color: 'green' }
-                    : line.startsWith('-')
-                      ? { color: 'red' }
-                      : {})}
-                  dimColor={line.startsWith('@@') || line.startsWith('──')}
-                >
-                  {line || ' '}
-                </Text>
-              ));
+              return <DiffLines lines={lines} start={start} visible={visible} />;
             })()}
           </Box>
           <PanelFooter hint="[a] approve · [r] reject · j/k: scroll diff · drag ⠿/edge: move · ⇲: resize" />
@@ -1784,6 +1821,34 @@ export function App({
         <Box {...panelBoxProps}>
           {(() => {
             const state = runState.nodes[focusedNode.id]!;
+            // A decided approval gate has nothing else worth showing here —
+            // replay the same green/red diff the live panel showed, instead
+            // of the generic (and for this node type, nearly empty) view.
+            if (focusedNode.type.id === 'approval-gate') {
+              const output = state.output as
+                | { decision?: string; diffs?: Array<{ label?: string; diff: string }> }
+                | undefined;
+              if (Array.isArray(output?.diffs)) {
+                const lines = diffLinesFor(output.diffs);
+                const visible = Math.max(1, panelHeight - 4);
+                const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
+                return (
+                  <>
+                    <PanelTitle>
+                      <Text bold wrap="truncate-end">
+                        {focusedNode.id} <Text dimColor>({focusedNode.type.displayName})</Text>{' '}
+                        {STATUS_GLYPHS[state.status]}{' '}
+                        {output?.decision === 'approved' ? 'approved' : 'rejected'}
+                      </Text>
+                    </PanelTitle>
+                    <Box flexDirection="column" flexGrow={1} overflow="hidden">
+                      <DiffLines lines={lines} start={start} visible={visible} />
+                    </Box>
+                    <PanelFooter hint="j/k: scroll diff · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                  </>
+                );
+              }
+            }
             const activity = runState.activity.filter((e) => e.nodeId === focusedNode.id);
             const live = store.liveOutputFor(focusedNode.id);
             // Agent output is prose, not a table: wrap it to the panel's inner

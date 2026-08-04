@@ -4,6 +4,7 @@ import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { App, type ModelContext } from '../src/ui/App.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
+import type { RunStateStore } from '../src/runstate/store.js';
 import { makeTempGitRepo, storeFor, workflowFromYaml } from './helpers.js';
 
 /**
@@ -59,6 +60,7 @@ nodes:
 
 function mountGateApp(): {
   ports: UiInteractionPorts;
+  store: RunStateStore;
   stdout: FakeStdout;
   stdin: NodeJS.ReadStream;
   unmount: () => void;
@@ -78,7 +80,7 @@ function mountGateApp(): {
     }),
     { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
   );
-  return { ports, stdout, stdin, unmount: () => instance.unmount() };
+  return { ports, store, stdout, stdin, unmount: () => instance.unmount() };
 }
 
 describe('Approval-gate panel rendering', () => {
@@ -118,6 +120,30 @@ describe('Approval-gate panel rendering', () => {
       const frame = lastFrameLines(stdout).join('\n');
       expect(frame).not.toContain('AI critique');
       expect(frame).toContain('added line');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('replays the diff on a decided gate when its node panel is opened', async () => {
+    const { store, stdout, stdin, unmount } = mountGateApp();
+    try {
+      // Simulate the executor's post-decision write instead of driving a real
+      // decision through the port, since the point here is what's persisted
+      // and re-shown, not the live approve/reject flow (covered above).
+      store.setOutput('gate', {
+        decision: 'approved',
+        decidedAt: new Date().toISOString(),
+        diffs: [{ diff: '+kept line\n-dropped line' }],
+      });
+      store.setStatus('gate', 'done', 'approved');
+      stdin.write('\r'); // enter: expand the focused (only) node's panel
+      await settle();
+
+      const frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('kept line');
+      expect(frame).toContain('dropped line');
+      expect(frame).toContain('approved');
     } finally {
       unmount();
     }
