@@ -1333,7 +1333,10 @@ export function App({
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
-      <Text>
+      {/* truncate, never wrap: HEADER_ROWS budgets exactly one row for this,
+          and a second one pushes the whole frame past `rows`, at which point
+          the terminal scrolls and the header is drawn over the canvas. */}
+      <Text wrap="truncate-end">
         <Text bold color="cyan">
           flow-code
         </Text>
@@ -1347,7 +1350,13 @@ export function App({
         {/* Lives in the header rather than the bottom hint line because the
             hint line disappears behind a docked panel — which is exactly when
             the canvas is smallest and the most nodes are off-screen. */}
-        {density === 'mini' ? <Text dimColor> · overview</Text> : null}
+        {/* Which node has focus is state, not a keybinding, and it is most
+            worth knowing while a panel covers the canvas — so it belongs here
+            rather than on the hint line, which that panel replaces. */}
+        {focusedNode ? <Text dimColor> · focused: {focusedNode.id}</Text> : null}
+        {density !== 'full' ? (
+          <Text dimColor> · {density === 'mini' ? 'overview' : 'compact'}</Text>
+        ) : null}
         {camera === 'nudge' ? <Text dimColor> · free camera</Text> : null}
         {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
@@ -1846,11 +1855,13 @@ export function App({
           })()}
         </Box>
       ) : (
-        <Text dimColor>
-          tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧ anywhere):
-          pan · ctrl+wheel/z: zoom ({density}) · o: {density === 'mini' ? 'back' : 'overview'} · c:
-          camera · q: quit
-          {focusedNode ? ` · focused: ${focusedNode.id}` : ''}
+        // FOOTER_ROWS budgets one row for this too — see the header's note.
+        // Kept short so truncation stays a narrow-terminal fallback rather
+        // than the norm, and it lists only keys: the current zoom is reported
+        // in the header, which stays visible behind a docked panel.
+        <Text dimColor wrap="truncate-end">
+          q: quit · tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧
+          anywhere): pan · z/⌃wheel: zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera
         </Text>
       )}
     </Box>
