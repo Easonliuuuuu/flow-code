@@ -1,9 +1,12 @@
 name: Release
 
-# Publishes to npm when a `v*` tag is pushed. The tag is the trigger *and* the
-# source of truth for the version: the job refuses to publish if the tag and
-# package.json disagree, so a mistyped tag fails loudly instead of shipping the
-# wrong version.
+# release-please watches every push to main, parses conventional commits, and
+# keeps a "release PR" up to date with the next version bump + generated
+# CHANGELOG. Merging that PR is the release decision: this workflow then
+# creates the GitHub Release + tag and the publish job runs off that.
+#
+# Config: release-please-config.json (release-type, bootstrap point) and
+# .release-please-manifest.json (current version per package path).
 #
 # Auth is npm trusted publishing (OIDC) — there is no NPM_TOKEN secret to leak
 # or rotate, and npm attaches a provenance attestation to the release
@@ -12,16 +15,33 @@ name: Release
 # it exactly, case-sensitively) or publishes start failing with an auth error.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+
   publish:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write # required for npm's OIDC trusted publishing
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
 
       # Node 22.14+ and npm 11.5.1+ are the floor for OIDC trusted publishing.
       # The package itself supports Node >=20 — that's what ci.yml tests on;
@@ -35,22 +55,12 @@ jobs:
 
       - run: npm ci
 
-      # Same gate as ci.yml. A tag can be pushed to any commit, including one
-      # that never went through the PR checks, so re-run them rather than
-      # assuming main was green.
+      # Same gate as ci.yml. release-please only commits a version bump, so
+      # re-run the checks against the actual release commit rather than
+      # assuming they still pass.
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test
-
-      - name: Verify tag matches package.json version
-        run: |
-          tag_version="${GITHUB_REF_NAME#v}"
-          pkg_version="$(node -p 'require("./package.json").version')"
-          if [ "$tag_version" != "$pkg_version" ]; then
-            echo "::error::tag $GITHUB_REF_NAME implies version $tag_version, but package.json says $pkg_version"
-            exit 1
-          fi
-          echo "publishing $(node -p 'require("./package.json").name')@$pkg_version"
 
       # `npm ci` already ran `prepare` (which builds), and `npm publish` runs it
       # again — building twice is cheap and keeps this correct if either side
