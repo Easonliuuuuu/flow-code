@@ -4,90 +4,93 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
 
-A terminal-native node-graph interface for running and observing agentic coding workflows. Instead of scrolling through chat logs, your coding task's lifecycle renders as a live, interactive graph in your terminal — spec discussion, implementation, validation, review, and git ops.
+A terminal-native node-graph interface for running and observing agentic coding workflows.
 
-```mermaid
-flowchart LR
-    Discuss["Discuss"] --> Implement["Implement"] --> Test["Test"] --> Validate["Validate"] --> Review["Review"] --> Gate["Gate"] --> GitOps["Git-ops"]
-    Validate -. "loop-back (on failure)" .-> Implement
-```
+Instead of scrolling a chat log, a coding task runs as a graph you can watch: each step is a live card showing its status, token spend, model, and streaming output. Steps that fail route back upstream and try again, and nothing reaches git without your explicit approval.
 
 ```
-┌─────────┐     ┌───────────┐     ┌──────┐     ┌──────────┐     ┌────────┐     ┌──────┐     ┌─────────┐
-│ Discuss │ ──> │ Implement │ ──> │ Test │ ──> │ Validate │ ──> │ Review │ ──> │ Gate │ ──> │ Git-ops │
-└─────────┘     └───────────┘     └──────┘     └──────────┘     └────────┘     └──────┘     └─────────┘
-                      ▲                             │
-                      └───────── loop-back ─────────┘
-                          (on a failing verdict)
+  Discuss ─→ Spec ─→ Implement ─→ Test ─→ Validate ─→ Review ─→ Gate ─→ Git-ops
+                         ↑          │         │          │
+                         └──────────┴─────────┴──────────┘
+                             loop back on a failing verdict
 ```
 
-Each node is a live card showing status spinners, token consumption, model badges, and real-time execution logs.
+| Node | What it does |
+| --- | --- |
+| **Discuss** | The only interactive step — settles what is being built before anything runs headless. |
+| **Spec** | Turns that discussion into acceptance criteria, written to `.flow-code/specs/<runId>.md`. |
+| **Implement** | Writes the code and the tests covering it. |
+| **Test** | Runs your test commands. The verdict is an exit code, never a model's opinion. |
+| **Validate** | Checks the result against the spec's acceptance criteria, one by one. |
+| **Review** | Reviews the pending diff. |
+| **Gate** | Pauses for an explicit yes or no before anything touches git. |
+| **Git-ops** | Commits, and pushes if you configured a remote. |
 
----
+Every node is optional and rewireable — the graph above is just what `flow-code init` scaffolds.
 
-## ⚡ Quickstart
+## Installation
 
-Install globally and run in any repository in seconds:
+Requires Node.js 20 or newer.
 
 ```bash
 npm install -g @easonliuuuuu/flow-code
-
-# 1. Initialize workflow & select AI provider/model
-flow-code init
-
-# 2. Run the agentic workflow graph
-flow-code run
 ```
 
-The package is scoped, but the command it installs is plain `flow-code`.
+The package is scoped; the command it installs is plain `flow-code`.
 
-*Or run locally from source:*
+## Quickstart
+
+Run these in any git repository:
+
+```bash
+flow-code init   # scaffold the workflow, pick a provider and model
+flow-code run    # execute the graph
+```
+
+`init` walks you through provider and credential setup. Test commands are settled later, during the run itself: the Test node asks what it should run the first time it executes — after Discuss has established what is being built — and saves the answer to `.flow-code/workflow.yaml`.
+
+To run from source instead:
+
 ```bash
 npm install && npm run build
 node dist/cli.js init
 node dist/cli.js run
 ```
 
----
+## Providers and credentials
 
-## ✨ Why flow-code?
+`flow-code init` configures a provider interactively. To skip the wizard (headless, CI), set any standard API key:
 
-| Feature | Description |
-|---|---|
-| 📺 **Live Graph UI** | Watch `discuss → implement → test → validate → review → git-ops` light up in real-time. |
-| 🤖 **Multi-Provider Support** | Use Claude, Codex, OpenAI, NVIDIA NIM, or OpenRouter with per-node model overrides. |
-| 🔄 **Self-Healing Loops** | Failing `test` or `validate` nodes automatically route back upstream to auto-fix issues. |
-| 🌳 **Safe Git Worktrees** | Parallel agent nodes run inside isolated git worktrees to prevent code conflicts. |
-| 🚀 **Headless & CI Ready** | Zero interactive prompts in CI — seamless credential fallback via environment variables. |
+| Provider | Environment variable | Fallback |
+| --- | --- | --- |
+| Claude | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | `claude` CLI login |
+| Codex | `OPENAI_API_KEY` or `CODEX_API_KEY` | `codex` CLI login |
+| OpenAI | `OPENAI_API_KEY` | — |
+| NVIDIA NIM | `NVIDIA_API_KEY` | — |
+| OpenRouter | `OPENROUTER_API_KEY` | — |
 
----
+Claude and Codex fall back to their own CLI login when no key is set, drawing on that subscription's usage rather than metered API billing. OpenAI, NVIDIA NIM, and OpenRouter always bill against the key provided.
 
-## 🤖 AI Provider Setup
+Each node can override the provider and model, so an expensive step and a cheap one need not share either.
 
-`flow-code init` includes an interactive setup wizard that configures your provider and API keys. Test commands are settled later, in the run itself: the Test node asks what it should run the first time it executes — after the Discuss node has established what is being built — and saves your answer to `workflow.yaml`.
+## Configuration
 
-### Environment Variables (Headless / CI)
-
-Skip the wizard by setting any standard API key:
-
-* **Claude**: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (falls back to a `claude` CLI login)
-* **Codex**: `OPENAI_API_KEY` or `CODEX_API_KEY` (falls back to a `codex` CLI login)
-* **OpenAI**: `OPENAI_API_KEY`
-* **NVIDIA NIM**: `NVIDIA_API_KEY`
-* **OpenRouter**: `OPENROUTER_API_KEY`
-
-Claude and Codex both authenticate through their own CLI/subscription login when no key is set — consuming a ChatGPT/Claude subscription's usage rather than metered API billing. OpenAI, NVIDIA NIM, and OpenRouter are always metered against the key provided.
-
----
-
-## ⚙️ Workflow Configuration (`.flow-code/workflow.yaml`)
-
-Workflows are defined per-project in `.flow-code/workflow.yaml`.
+Workflows live in `.flow-code/workflow.yaml`, checked into your repo. A minimal graph:
 
 ```yaml
+settings:
+  concurrency: 2
+  budget:
+    tokensPerRun: 2000000
+    minutesPerRun: 60
+
 nodes:
   - id: discuss
     type: discuss
+    config:
+      topic: What should this change accomplish?
+  - id: spec
+    type: spec
   - id: implement
     type: implement
   - id: test
@@ -98,111 +101,79 @@ nodes:
     type: validate
   - id: review
     type: review
+  - id: gate
+    type: approval-gate
   - id: git-ops
     type: git-ops
 
 edges:
-  - { from: discuss, to: implement }
+  - { from: discuss, to: spec }
+  - { from: spec, to: implement }
   - { from: implement, to: test }
   - { from: test, to: validate }
+  - { from: spec, to: validate }
   - { from: validate, to: review }
-  - { from: review, to: git-ops }
-  # Self-healing loop: if validation fails, retry implementation (up to 3 times)
+  - { from: review, to: gate }
+  - { from: gate, to: git-ops }
+
+  # On failure, return to implement and re-run everything in between.
+  - { from: test, to: implement, loopback: { maxAttempts: 3 } }
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
 ```
 
----
+The scaffolded file is heavily commented. See the [workflow reference](docs/workflow-reference.md) for everything it accepts — loop-backs, conditional routing, budgets, worktrees — and the [node type reference](docs/node-types.md) for each type's config fields and output. `flow-code node-types` prints the same reference in your terminal.
 
-## 🛠️ CLI Commands
+## CLI reference
 
 | Command | Description |
-|---|---|
-| `flow-code init` | Scaffold `.flow-code/workflow.yaml` & configure provider/models |
-| `flow-code init --preset openspec` | Scaffold using the OpenSpec workflow graph (`explore → propose → apply → archive`) |
+| --- | --- |
+| `flow-code init` | Scaffold `.flow-code/workflow.yaml` and configure provider/models |
+| `flow-code init --preset openspec` | Scaffold the OpenSpec graph (`explore → propose → apply → archive`) |
 | `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
 | `flow-code run` | Execute the workflow graph |
-| `flow-code watch` | Follow a run started elsewhere — same graph, read-only, in a second window |
-| `flow-code skills` | List available skills attached from `.claude/skills` or plugins |
+| `flow-code watch` | Follow a run started elsewhere — same graph, read-only |
+| `flow-code node-types` | List every node type and its configuration |
+| `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
 | `flow-code doctor` | Diagnose environment, tools, and provider credentials |
-| `flow-code help` | Show full CLI command reference |
+| `flow-code help` | Show the full command reference |
 
----
+## Watching a run from another window
 
-## 👀 Watching a run from another window
-
-The engine writes the complete run state to `.flow-code/runs/<runId>.json` after every change, so a run can be followed from anywhere else that can read the repo:
+The engine writes complete run state to `.flow-code/runs/<runId>.json` after every change, so a run can be followed from anywhere that can read the repo:
 
 ```bash
 flow-code run      # window 1 — drives the workflow
 flow-code watch    # window 2 — same graph, read-only
 ```
 
-`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened — so you can leave it running on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run instead. It never writes: the keys that edit `workflow.yaml` (`m`, `s`, `e`) are disabled, and the header says whether the process driving the run is still alive.
+`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened, so it can be left open on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run. It never writes: the keys that edit `workflow.yaml` are disabled, and the header reports whether the process driving the run is still alive.
 
----
-
-## 💡 Advanced Features
-
-<details>
-<summary><b>Attaching Skills</b></summary>
-
-Attach custom `SKILL.md` instructions (Claude Code format) to any node:
-
-```yaml
-  - id: review
-    type: review
-    config:
-      skills: [house-review]
-```
-Discovered from `.claude/skills/`, `~/.claude/skills/`, or installed plugins.
-</details>
-
-<details>
-<summary><b>Per-Node Model Overrides</b></summary>
-
-Focus any node during `flow-code run` and press **`m`** to switch its model on the fly, or configure it directly in `workflow.yaml`.
-</details>
-
-<details>
-<summary><b>Editing Node Settings Mid-Run</b></summary>
-
-Focus a node and press **`e`** to edit its settings without leaving the canvas — its own token budget, and the type's main text field (a Discuss topic, Implement instructions, a commit message). Changes are written to `.flow-code/workflow.yaml` and picked up by any node that hasn't started yet.
+## Keyboard controls
 
 | Key | Action |
 | --- | --- |
-| `tab` | focus the next node |
-| `enter` | open the focused node's details |
-| `e` / `m` / `s` | settings / model / skills |
-| `←→↑↓` | pan the canvas (add `shift` to pan while a panel has the keyboard) |
-| `z` | toggle compact cards — the canvas does this itself once the graph outgrows the terminal |
-</details>
+| `tab` | Focus the next node |
+| `enter` | Open the focused node's details |
+| `e` | Edit the focused node's settings |
+| `m` | Change the focused node's model |
+| `s` | Attach or detach skills |
+| `←→↑↓` | Pan the canvas (add `shift` while a panel has the keyboard) |
+| `z` | Toggle compact cards — the canvas does this itself once the graph outgrows the terminal |
 
-<details>
-<summary><b>Budget Limits</b></summary>
+Nodes can be edited mid-run: focus one and press `e` for its settings, `m` for its model, or `s` to attach skills. Changes are written back to `.flow-code/workflow.yaml` and picked up by any node that has not started yet.
 
-Set token or execution time ceilings in `.flow-code/workflow.yaml`:
+## Documentation
 
-```yaml
-settings:
-  budget:
-    tokensPerNode: 300000
-    tokensPerRun: 2000000
-    minutesPerRun: 60
-```
+| Guide | Covers |
+| --- | --- |
+| [Node type reference](docs/node-types.md) | Every node type: capabilities, config fields, recorded output |
+| [Workflow reference](docs/workflow-reference.md) | Nodes, edges, loop-backs, conditional routing, budgets, worktrees |
+| [Skills](docs/skills.md) | Attaching custom `SKILL.md` instructions to a node |
 
-A single node can overrule `tokensPerNode` with a ceiling of its own — useful when one step is far more (or far less) expensive than the rest:
+## Contributing
 
-```yaml
-nodes:
-  - id: implement
-    type: implement
-    budget:
-      tokens: 800000
-```
-</details>
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and the pull request workflow.
 
----
-
-## 📄 License
+## License
 
 [MIT](LICENSE)
