@@ -2,3 +2,4 @@ node_modules/
 dist/
 *.log
 .flow-code/
+docs/architecture-notes.md
