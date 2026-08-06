@@ -5,7 +5,7 @@ import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
-import type { ActivityEntry, RunState } from '../runstate/types.js';
+import type { RunState } from '../runstate/types.js';
 import { isAttached, isDriverAlive } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
@@ -19,6 +19,8 @@ import {
 } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
+import { rateLimitSegments, type RateLimitTone } from './rateLimit.js';
+import { agentLabelsFor, formatActivityRow, needsAttribution } from './activityRow.js';
 import {
   BOX_HEIGHT,
   centerOnBox,
@@ -108,16 +110,12 @@ export interface AppProps {
   watch?: boolean;
 }
 
-function formatActivityRow(entry: ActivityEntry): string {
-  const time = entry.ts.slice(11, 19);
-  const summary = entry.summary.length > 42 ? `${entry.summary.slice(0, 42)}…` : entry.summary;
-  const decision =
-    entry.decision === 'denied' ? `DENIED (${entry.missingCapability ?? '?'})` : 'allowed';
-  const exit =
-    entry.exitStatus !== undefined && entry.exitStatus !== null ? ` exit ${entry.exitStatus}` : '';
-  const duration = entry.durationMs !== undefined ? ` ${entry.durationMs}ms` : '';
-  return `${time}  ${entry.tool.padEnd(8)} ${summary.padEnd(44)} ${decision}${exit}${duration}`;
-}
+/** Matches the header's other signals: yellow warns, red is already failing. */
+const RATE_LIMIT_COLORS: Record<RateLimitTone, string> = {
+  normal: 'cyan',
+  warn: 'yellow',
+  critical: 'red',
+};
 
 /** Flattens an approval gate's diffs into a scrollable list of lines, one label header per diff. */
 function diffLinesFor(diffs: Array<{ label?: string; diff: string }>): string[] {
@@ -752,6 +750,12 @@ export function App({
   const nodePanelActivity = useMemo(
     () => (focusedNode ? runState.activity.filter((e) => e.nodeId === focusedNode.id) : []),
     [runState.activity, focusedNode],
+  );
+  // Empty unless this node's log came from more than one agent, which is what
+  // keeps the column off single-agent nodes rather than padding every row.
+  const nodePanelAgentLabels = useMemo(
+    () => (needsAttribution(nodePanelActivity) ? agentLabelsFor(nodePanelActivity) : new Map()),
+    [nodePanelActivity],
   );
   const nodePanelOutputWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
   // Deliberately not memoized: store.liveOutputFor reads a buffer that
@@ -1555,6 +1559,15 @@ export function App({
         {runTokens > 0 ? (
           <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
         ) : null}
+        {/* Sits beside the token count because both answer "what is this run
+            costing" — but this one is the provider's own accounting of the
+            plan window, so it stays true however many sessions a node runs. */}
+        {rateLimitSegments(runState.rateLimits).map((segment) => (
+          <Text key={segment.id} color={RATE_LIMIT_COLORS[segment.tone]}>
+            {' '}
+            · {segment.text}
+          </Text>
+        ))}
         {driverGone ? <Text color="yellow"> · driver gone</Text> : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {/* Lives in the header rather than the bottom hint line because the
@@ -2072,7 +2085,7 @@ export function App({
                       wrap="truncate-end"
                       {...(entry.decision === 'denied' ? { color: 'red' } : {})}
                     >
-                      {formatActivityRow(entry)}
+                      {formatActivityRow(entry, nodePanelAgentLabels)}
                     </Text>
                   ))}
                 </Box>

@@ -6,6 +6,7 @@ import type {
   DiscussTranscriptEntry,
   NodeRunState,
   NodeStatus,
+  RateLimitWindowState,
   RunBaseline,
   RunState,
   TokenUsage,
@@ -308,6 +309,31 @@ export class RunStateStore {
   setSkills(nodeId: string, skills: string[]): void {
     const node = this.node(nodeId);
     this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, skills } };
+    this.commit();
+  }
+
+  /**
+   * Merge one provider rate-limit report into the run's snapshot. Merged, not
+   * replaced: each report carries a single window, so the five-hour and
+   * seven-day meters arrive on separate events and must not evict each other.
+   */
+  recordRateLimit(window: string, state: RateLimitWindowState): void {
+    this.state.rateLimits = {
+      windows: { ...this.state.rateLimits?.windows, [window]: state },
+      updatedAt: new Date().toISOString(),
+    };
+    this.commit();
+  }
+
+  /**
+   * Move a node's in-flight subagent count. A delta rather than an absolute
+   * so concurrent instances of one node cannot clobber each other's counts;
+   * clamped at zero so a stray stop can never drive it negative.
+   */
+  addSubagents(nodeId: string, delta: number): void {
+    const node = this.node(nodeId);
+    const subagents = Math.max(0, (node.subagents ?? 0) + delta);
+    this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, subagents } };
     this.commit();
   }
 

@@ -11,6 +11,14 @@ export interface ActivityEntry {
   nodeId: string;
   /** Distinguishes worktree instances within one node. */
   instanceId?: string;
+  /**
+   * Which agent inside the node made the call. Absent means the node's own
+   * session — which is what every entry written before subagents existed
+   * means, so old run files stay correct with no migration.
+   */
+  agentId?: string;
+  /** The registry name of that agent (`explore`, …); absent alongside `agentId`. */
+  agentType?: string;
   tool: string;
   /** The command string or a short input summary. */
   summary: string;
@@ -103,6 +111,12 @@ export interface NodeRunState {
   priorAttempts?: AttemptRecord[];
   /** Count of denied tool calls, for the blocked-action indicator. */
   denials: number;
+  /**
+   * Subagents this node has running right now — not a total. Drops back to 0
+   * as they finish, so the card shows delegation while it is happening rather
+   * than a tally afterwards.
+   */
+  subagents?: number;
   workingDir?: string;
   /** Persisted Discuss transcript, so an interrupted conversation survives to `--resume`. */
   discussTranscript?: DiscussTranscriptEntry[];
@@ -115,6 +129,38 @@ export interface NodeRunState {
   skills?: string[];
 }
 
+/** What the provider last said about one of its rate-limit windows. */
+export interface RateLimitWindowState {
+  /** Percentage of the window consumed, 0–100, as the provider reports it. */
+  utilization: number;
+  /** The provider's verdict when it last reported this window. */
+  status: 'allowed' | 'allowed_warning' | 'rejected';
+}
+
+/**
+ * Plan rate-limit utilization for the run, as reported by the provider.
+ *
+ * Run-global rather than per-node, and deliberately *recorded* rather than
+ * computed: these windows are billed against the account across every session
+ * the plan has ever run, so nothing flow-code observes locally could
+ * reconstruct them. That also makes them the one cost signal a node fanning
+ * out into concurrent sessions cannot cause us to under-count.
+ *
+ * Absent means unknown, never zero. Providers with no such concept — API-key,
+ * Bedrock and Vertex sessions, and every non-Claude runner — never report, and
+ * a meter reading 0% for them would be worse than no meter at all.
+ */
+export interface RateLimits {
+  /**
+   * Window id (`five_hour`, `seven_day`, …) → what the provider last said.
+   * Open rather than a closed union: a window this build has never heard of
+   * should still surface as a meter instead of vanishing.
+   */
+  windows: Record<string, RateLimitWindowState>;
+  /** When the provider last reported — a stale meter is worth being able to spot. */
+  updatedAt: string;
+}
+
 export interface RunState {
   runId: string;
   createdAt: string;
@@ -124,6 +170,8 @@ export interface RunState {
   nodes: Record<string, NodeRunState>;
   worktrees: WorktreeRecord[];
   activity: ActivityEntry[];
+  /** Absent until a provider that has plan limits reports one. */
+  rateLimits?: RateLimits;
   finishedAt?: string;
   /** True when the run ended via ctrl+c/SIGTERM rather than completing on its own; `--resume` looks for this. */
   interrupted?: boolean;

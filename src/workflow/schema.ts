@@ -50,6 +50,13 @@ export const settingsSchema = z.strictObject({
   concurrency: z.number().int().min(1).max(16).default(2),
   model: z.string().min(1).optional(),
   budget: budgetSchema.optional(),
+  /**
+   * Whether a node's agent session may delegate to subagents. A subagent is
+   * bounded by its parent node's capability set either way, so this is a lever
+   * for cost and predictability rather than for safety — and the way to turn
+   * delegation off on a misbehaving workflow without downgrading.
+   */
+  subagents: z.boolean().default(true),
 });
 
 export type RunSettings = z.infer<typeof settingsSchema>;

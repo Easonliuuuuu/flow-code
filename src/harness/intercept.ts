@@ -7,6 +7,7 @@ import {
   EDIT_TOOLS,
   EXEC_TOOLS,
   READ_TOOLS,
+  SPAWN_TOOLS,
 } from './compile.js';
 import { classifyCommand } from './gitCommands.js';
 
@@ -25,6 +26,30 @@ export interface InterceptorOptions {
   capabilities: CapabilitySet;
   workingDir: string;
   store: RunStateStore;
+  /**
+   * Subagent types this node may spawn. Absent or empty refuses every spawn,
+   * which is what `settings.subagents: false` compiles to — no special case.
+   */
+  subagentTypes?: ReadonlySet<string>;
+  /**
+   * Claims a concurrency slot for a spawn, or returns false when the run's cap
+   * is spent. Never waits: see `SubagentScope`.
+   */
+  subagentSlots?: { tryAcquire(): boolean };
+}
+
+/** Per-call context the runner knows and the capability set does not. */
+export interface CallOptions {
+  blockedPath?: string;
+  toolUseID?: string;
+  /**
+   * Set when the call came from a subagent rather than the node's own
+   * session. Carried through to the activity log so concurrent agents under
+   * one node stay separable; it never affects the decision, which is made
+   * against the node's capability set either way.
+   */
+  agentId?: string;
+  agentType?: string;
 }
 
 export interface Interceptor {
@@ -39,7 +64,7 @@ export interface Interceptor {
   check(
     toolName: string,
     input: Record<string, unknown>,
-    opts?: { blockedPath?: string; toolUseID?: string },
+    opts?: CallOptions,
   ): PermissionDecision;
   /**
    * Backstop for the SDK permission flow (canUseTool): applies the same
@@ -50,7 +75,7 @@ export interface Interceptor {
   promptCheck(
     toolName: string,
     input: Record<string, unknown>,
-    opts?: { blockedPath?: string; toolUseID?: string },
+    opts?: CallOptions,
   ): PermissionDecision;
   /** Complete an allowed call's log entry once the tool finished. */
   complete(
@@ -116,11 +141,50 @@ const EDIT_SET = new Set<string>(EDIT_TOOLS);
 const EXEC_SET = new Set<string>(EXEC_TOOLS);
 const DENIED_SET = new Set<string>(ALWAYS_DENIED_TOOLS);
 const ALLOWED_SET = new Set<string>(ALWAYS_ALLOWED_TOOLS);
+const SPAWN_SET = new Set<string>(SPAWN_TOOLS);
 
 export function createInterceptor(opts: InterceptorOptions): Interceptor {
   const { nodeId, instanceId, capabilities: caps, workingDir, store } = opts;
   const startTimes = new Map<string, number>();
   const bashAvailable = caps.has('exec') || caps.has('git-read') || caps.has('git-write');
+  const subagentTypes = opts.subagentTypes ?? new Set<string>();
+
+  /**
+   * A spawn is judged on *which* agent type it names, never on what that agent
+   * will go on to do — every call the subagent makes comes back through this
+   * same check, against this same capability set.
+   */
+  function decideSpawn(input: Record<string, unknown>): InternalDecision {
+    if (subagentTypes.size === 0) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'subagents',
+        message: 'flow-code: subagents are disabled for this run.',
+      };
+    }
+    const requested = input['subagent_type'];
+    if (typeof requested !== 'string' || !subagentTypes.has(requested)) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'subagent-type',
+        message:
+          `flow-code: \`${String(requested)}\` is not an available subagent type. ` +
+          `This node may spawn: ${[...subagentTypes].join(', ')}.`,
+      };
+    }
+    // Refused, never queued — a spawn made to wait would be waiting on a slot
+    // its own parent is holding.
+    if (opts.subagentSlots && !opts.subagentSlots.tryAcquire()) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'concurrency',
+        message:
+          'flow-code: the run is at its agent-session concurrency cap, so no subagent ' +
+          'can start right now. Do this part of the work in your own session.',
+      };
+    }
+    return { behavior: 'allow' };
+  }
 
   function decide(
     toolName: string,
@@ -133,9 +197,11 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
       return {
         behavior: 'deny',
         missingCapability: 'network',
-        message: `flow-code: ${toolName} is unavailable — no node type has network or subagent access.`,
+        message: `flow-code: ${toolName} is unavailable — no node type has network access.`,
       };
     }
+
+    if (SPAWN_SET.has(toolName)) return decideSpawn(input);
 
     if (READ_SET.has(toolName) || EDIT_SET.has(toolName)) {
       const needed = EDIT_SET.has(toolName) ? 'edit' : 'read';
@@ -235,12 +301,15 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
     toolName: string,
     input: Record<string, unknown>,
     decision: InternalDecision,
-    toolUseId: string | undefined,
+    callOpts: CallOptions | undefined,
   ): void {
+    const toolUseId = callOpts?.toolUseID;
     store.appendActivity({
       ts: new Date().toISOString(),
       nodeId,
       ...(instanceId !== undefined ? { instanceId } : {}),
+      ...(callOpts?.agentId !== undefined ? { agentId: callOpts.agentId } : {}),
+      ...(callOpts?.agentType !== undefined ? { agentType: callOpts.agentType } : {}),
       tool: toolName,
       summary: summarize(toolName, input),
       decision: decision.behavior === 'allow' ? 'allowed' : 'denied',
@@ -257,14 +326,14 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
   return {
     check(toolName, input, callOpts) {
       const decision = decide(toolName, input, callOpts);
-      record(toolName, input, decision, callOpts?.toolUseID);
+      record(toolName, input, decision, callOpts);
       return { behavior: decision.behavior, ...(decision.message ? { message: decision.message } : {}) };
     },
 
     promptCheck(toolName, input, callOpts) {
       const decision = decide(toolName, input, callOpts);
       if (decision.behavior === 'deny') {
-        record(toolName, input, decision, callOpts?.toolUseID);
+        record(toolName, input, decision, callOpts);
       }
       return { behavior: decision.behavior, ...(decision.message ? { message: decision.message } : {}) };
     },

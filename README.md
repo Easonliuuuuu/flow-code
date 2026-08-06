@@ -80,6 +80,10 @@ Workflows live in `.flow-code/workflow.yaml`, checked into your repo. A minimal 
 ```yaml
 settings:
   concurrency: 2
+  # Whether a node's agent may delegate to subagents (default: true). A
+  # subagent runs under its parent node's capability set and working
+  # directory, and counts against `concurrency` like any other session.
+  subagents: true
   budget:
     tokensPerRun: 2000000
     minutesPerRun: 60

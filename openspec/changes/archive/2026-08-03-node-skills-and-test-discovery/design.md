@@ -47,6 +47,8 @@ Inlining the markdown into the existing `rolePrompt` field works identically on 
 
 **Alternative considered:** a skill-to-subagent mapping via the SDK's `agents` option. Rejected — subagent tool calls would run outside `intercept.ts`, which is exactly why `Task`/`Agent` are denied today.
 
+> **Superseded — see the `node-subagents` change.** The premise above stopped being true: the SDK's `PreToolUse` hook now fires for subagent tool calls, carrying `agent_id`/`agent_type`, which was verified against a live session before subagents were allowed. Left as written because it was correct when decided; this note exists so the rationale is not read as current.
+
 ### Three discovery roots, resolved once at load time
 
 Project `.claude/skills/` → user `~/.claude/skills/` → plugin marketplaces under `~/.claude/plugins/`, with project shadowing user and plugin skills namespaced `plugin:skill`. This mirrors Claude Code's own precedence, so there is no second mental model to learn.

@@ -2,7 +2,7 @@ import type { ActivityEntry, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { BOX_HEIGHT, MINI_BOX_HEIGHT, type Layout, type Viewport } from './layout.js';
-import { nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
+import { delegationBadge, nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
 import { fitText as fit } from './textwrap.js';
 
 export interface Cell {
@@ -213,7 +213,7 @@ export function renderGraph(
     // from a working one without reading anything else on the card.
     const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
     const blocked = state.denials > 0 ? ' !' : '';
-    const title = fit(` ${glyph} ${node.id}${blocked}`, inner).padEnd(inner);
+    const title = fit(` ${glyph} ${node.id}${blocked}${delegationBadge(state)}`, inner).padEnd(inner);
     put(grid, box.x, box.y + 1, '│', style);
     put(grid, box.x + 1, box.y + 1, title, style);
     if (state.denials > 0) {

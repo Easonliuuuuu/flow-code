@@ -35,7 +35,22 @@ describe('workflow loading', () => {
     expect(wf.nodes.map((n) => n.id)).toEqual(['impl', 'check']);
     expect(wf.settings).toEqual(DEFAULT_SETTINGS);
     expect(wf.settings.concurrency).toBe(2);
+    expect(wf.settings.subagents).toBe(true);
     expect(wf.order).toEqual(['impl', 'check']);
+  });
+
+  it('lets a workflow turn delegation off without downgrading', () => {
+    // The rollback lever for subagents: a subagent is bounded by its parent's
+    // capability set either way, so this is about cost and predictability.
+    const wf = loadWorkflowFromString(`
+settings:
+  subagents: false
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+`);
+    expect(wf.settings.subagents).toBe(false);
   });
 
   it('rejects an unknown node type, naming the node id and the type', () => {
