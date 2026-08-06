@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { capabilitySet } from '../src/capabilities.js';
-import { compileToolPolicy } from '../src/harness/compile.js';
+import { compileSubagents, compileToolPolicy } from '../src/harness/compile.js';
 import { classifyCommand } from '../src/harness/gitCommands.js';
 import { createInterceptor } from '../src/harness/intercept.js';
 import { nodeTypeRegistry, type NodeTypeId } from '../src/registry/index.js';
@@ -239,10 +239,19 @@ describe('denials are events, not silence', () => {
 describe('tool policy compilation', () => {
   it('review sessions get no edit, exec, or network tools at all', () => {
     const policy = compileToolPolicy(capabilitySet('read'), '/repo');
-    for (const tool of ['Write', 'Edit', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch', 'Task']) {
+    for (const tool of ['Write', 'Edit', 'NotebookEdit', 'Bash', 'WebFetch', 'WebSearch']) {
       expect(policy.disallowedTools).toContain(tool);
     }
     expect(policy.disallowedTools).not.toContain('Read');
+  });
+
+  it('leaves the spawn tools to the registry check rather than the deny list', () => {
+    // Spawning is no longer refused wholesale at layer 2. It is gated at layer
+    // 3 on *which* agent type is named, because a subagent's own calls come
+    // back through the same interception check against the same capabilities.
+    const policy = compileToolPolicy(capabilitySet('read'), '/repo');
+    expect(policy.disallowedTools).not.toContain('Task');
+    expect(policy.disallowedTools).not.toContain('Agent');
   });
 
   it('non-git-write sessions get the env-scoped pushurl block', () => {
@@ -263,5 +272,197 @@ describe('tool policy compilation', () => {
     const policy = compileToolPolicy(capabilitySet('read'), '/repo');
     expect(policy.boundaryPrompt).toContain('/repo');
     expect(policy.boundaryPrompt).toContain('cannot run shell commands');
+  });
+});
+
+function harnessWithSubagents(typeId: NodeTypeId, workingDir = '/repo') {
+  const type = nodeTypeRegistry.get(typeId)!;
+  const caps = capabilitySet(...type.capabilities);
+  const store = new RunStateStore({ repoRoot: workingDir, nodeIds: ['n1'] });
+  const interceptor = createInterceptor({
+    nodeId: 'n1',
+    capabilities: caps,
+    workingDir,
+    store,
+    subagentTypes: new Set(Object.keys(compileSubagents(caps, { enabled: true }))),
+  });
+  return { interceptor, store };
+}
+
+describe('subagent registry', () => {
+  it('allows a spawn naming a type the node was given, under either tool name', () => {
+    for (const tool of ['Agent', 'Task']) {
+      const { interceptor } = harnessWithSubagents('implement');
+      expect(interceptor.check(tool, { subagent_type: 'worker' }).behavior).toBe('allow');
+    }
+  });
+
+  it('denies a type flow-code never offered, so built-ins stay unreachable', () => {
+    const { interceptor, store } = harnessWithSubagents('implement');
+    const decision = interceptor.check('Agent', { subagent_type: 'general-purpose' });
+
+    expect(decision.behavior).toBe('deny');
+    expect(decision.message).toContain('worker');
+    const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denied[0]!.missingCapability).toBe('subagent-type');
+  });
+
+  it('denies a spawn with no type at all', () => {
+    const { interceptor } = harnessWithSubagents('implement');
+    expect(interceptor.check('Agent', {}).behavior).toBe('deny');
+  });
+
+  it('denies every spawn when the node has no registry', () => {
+    // What `settings.subagents: false` compiles to — an empty registry, refused
+    // by the same check rather than by a separate branch.
+    const { interceptor, store } = harnessFor('implement');
+    const decision = interceptor.check('Agent', { subagent_type: 'worker' });
+
+    expect(decision.behavior).toBe('deny');
+    const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denied[0]!.missingCapability).toBe('subagents');
+  });
+
+  it('never offers a subagent a tool its parent node lacks', () => {
+    const review = compileSubagents(capabilitySet('read'), { enabled: true });
+    expect(review['worker']!.tools).toContain('Read');
+    expect(review['worker']!.tools).not.toContain('Write');
+    expect(review['worker']!.tools).not.toContain('Bash');
+
+    const implement = compileSubagents(capabilitySet('read', 'edit', 'exec'), { enabled: true });
+    expect(implement['worker']!.tools).toEqual(
+      expect.arrayContaining(['Read', 'Write', 'Edit', 'Bash']),
+    );
+  });
+
+  it('sets permissionMode on every definition, which is not inherited', () => {
+    // Omitting it does not fail open — the subagent's calls are refused before
+    // its hooks run — but it does make every subagent useless.
+    const agents = compileSubagents(capabilitySet('read'), { enabled: true });
+    for (const def of Object.values(agents)) expect(def.permissionMode).toBe('default');
+  });
+
+  it('compiles to nothing when disabled', () => {
+    expect(compileSubagents(capabilitySet('read', 'edit', 'exec'), { enabled: false })).toEqual({});
+  });
+
+  it('still denies an unrecognized tool by default', () => {
+    // Lifting the subagent ban must not have widened the tool surface: the
+    // fallthrough is what catches a tool nothing has classified.
+    const { interceptor } = harnessWithSubagents('implement');
+    expect(interceptor.check('SomeNewTool', {}).behavior).toBe('deny');
+    expect(interceptor.check('WebFetch', { url: 'https://x' }).behavior).toBe('deny');
+  });
+});
+
+describe('subagent capability inheritance', () => {
+  it('checks a subagent call against the parent node, not the subagent', () => {
+    const { interceptor, store } = harnessWithSubagents('review'); // read-only
+    const sub = { agentId: 'a1', agentType: 'worker' };
+
+    expect(interceptor.check('Read', { file_path: '/repo/a.ts' }, sub).behavior).toBe('allow');
+    expect(interceptor.check('Write', { file_path: '/repo/a.ts' }, sub).behavior).toBe('deny');
+    expect(interceptor.check('Bash', { command: 'npm test' }, sub).behavior).toBe('deny');
+
+    const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denied.map((e) => e.missingCapability)).toEqual(['edit', 'exec']);
+    expect(denied.every((e) => e.agentId === 'a1')).toBe(true);
+  });
+
+  it('scopes a subagent to the parent working directory', () => {
+    const { interceptor } = harnessWithSubagents('implement');
+    const sub = { agentId: 'a1', agentType: 'worker' };
+
+    expect(interceptor.check('Read', { file_path: '/elsewhere/a.ts' }, sub).behavior).toBe('deny');
+    expect(interceptor.check('Read', { file_path: '/repo/a.ts' }, sub).behavior).toBe('allow');
+  });
+
+  it('scopes a subagent under a worktree instance to that worktree', () => {
+    const type = nodeTypeRegistry.get('worktree-agent')!;
+    const dir = '/repo/.flow-code/worktrees/run-n1-alt-1';
+    const store = new RunStateStore({ repoRoot: '/repo', nodeIds: ['n1'] });
+    const caps = capabilitySet(...type.capabilities);
+    const interceptor = createInterceptor({
+      nodeId: 'n1',
+      instanceId: 'alt-1',
+      capabilities: caps,
+      workingDir: dir,
+      store,
+      subagentTypes: new Set(['worker']),
+    });
+    const sub = { agentId: 'a1', agentType: 'worker' };
+
+    expect(interceptor.check('Edit', { file_path: `${dir}/src/a.ts` }, sub).behavior).toBe('allow');
+    // The sibling instance's tree is outside this one, so it is off limits.
+    expect(
+      interceptor.check('Edit', { file_path: '/repo/.flow-code/worktrees/run-n1-alt-2/a.ts' }, sub)
+        .behavior,
+    ).toBe('deny');
+  });
+
+  it('counts a subagent denial against the parent node', () => {
+    const { interceptor, store } = harnessWithSubagents('review');
+    interceptor.check('Bash', { command: 'rm -rf /' }, { agentId: 'a1', agentType: 'worker' });
+
+    expect(store.node('n1').denials).toBe(1);
+    // The node's own status is untouched — a denial is a boundary working,
+    // not a failure.
+    expect(store.node('n1').status).toBe('idle');
+  });
+});
+
+describe('activity attribution', () => {
+  it('records which agent inside the node made the call', () => {
+    const { interceptor, store } = harnessFor('implement');
+    interceptor.check('Read', { file_path: '/repo/a.ts' }, { agentId: 'a1', agentType: 'explore' });
+
+    const entry = store.activityFor('n1')[0]!;
+    expect(entry.agentId).toBe('a1');
+    expect(entry.agentType).toBe('explore');
+  });
+
+  it('leaves attribution absent for the node\'s own session', () => {
+    // Absence is the marker, not a sentinel value — which is what makes every
+    // entry written before subagents existed correct as-is.
+    const { interceptor, store } = harnessFor('implement');
+    interceptor.check('Read', { file_path: '/repo/a.ts' });
+
+    const entry = store.activityFor('n1')[0]!;
+    expect(entry.agentId).toBeUndefined();
+    expect(entry.agentType).toBeUndefined();
+  });
+
+  it('keeps two agents under one node separable', () => {
+    const { interceptor, store } = harnessFor('implement');
+    interceptor.check('Read', { file_path: '/repo/a.ts' }, { agentId: 'a1', agentType: 'explore' });
+    interceptor.check('Read', { file_path: '/repo/b.ts' }, { agentId: 'a2', agentType: 'explore' });
+    interceptor.check('Read', { file_path: '/repo/c.ts' });
+
+    expect(store.activityFor('n1').map((e) => e.agentId)).toEqual(['a1', 'a2', undefined]);
+  });
+
+  it('attributes a denial as readily as an allowed call', () => {
+    const { interceptor, store } = harnessFor('review'); // read-only
+    interceptor.check('Bash', { command: 'rm -rf /' }, { agentId: 'a1', agentType: 'explore' });
+
+    const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denied).toHaveLength(1);
+    expect(denied[0]!.agentId).toBe('a1');
+    // The decision is made against the node's capability set, not the agent's
+    // identity — a subagent is bounded by whatever its parent node can do.
+    expect(denied[0]!.missingCapability).toBe('exec');
+  });
+
+  it('attributes denials recorded through the permission-prompt path too', () => {
+    const { interceptor, store } = harnessFor('implement');
+    interceptor.promptCheck(
+      'Bash',
+      { command: 'ls' },
+      { blockedPath: '/elsewhere/x', agentId: 'a1', agentType: 'explore' },
+    );
+
+    const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
+    expect(denied).toHaveLength(1);
+    expect(denied[0]!.agentId).toBe('a1');
   });
 });

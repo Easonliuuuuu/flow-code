@@ -30,6 +30,20 @@ class Semaphore {
     } else {
       await new Promise<void>((resolve) => this.queue.push(resolve));
     }
+    return this.releaser();
+  }
+
+  /**
+   * Non-blocking acquire, for callers that must not wait — see `SlotPool`.
+   * Returns null rather than queueing when nothing is free.
+   */
+  tryAcquire(): (() => void) | null {
+    if (this.available <= 0) return null;
+    this.available--;
+    return this.releaser();
+  }
+
+  private releaser(): () => void {
     let released = false;
     return () => {
       if (released) return;
@@ -405,6 +419,9 @@ export class Engine {
       ports: this.opts.ports,
       sessions: this.opts.sessions,
       acquireSessionSlot: () => this.sessionSlots.acquire(),
+      // Same semaphore, non-blocking: one cap covering node sessions and the
+      // subagents they spawn, rather than two budgets each spendable in full.
+      subagentPool: { tryAcquire: () => this.sessionSlots.tryAcquire() },
       signal: controller.signal,
     };
 

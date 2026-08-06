@@ -319,6 +319,54 @@ describe('canvas rendering', () => {
     expect(render(1).split('impl')[0]).not.toBe(frame0.split('impl')[0]);
   });
 
+  it('marks a delegating node without adding it a box, at any subagent count', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'running');
+    const layout = computeLayout(WF);
+    const text = (): string =>
+      gridToLines(renderGraph(WF, layout, store.snapshot(), null), {
+        ox: 0,
+        oy: 0,
+        width: layout.width + 2,
+        height: layout.height + 1,
+      })
+        .join('\n')
+        .replace(/\x1b\[[0-9;]*m/g, '');
+
+    const boxTops = (s: string): number => (s.match(/╭/g) ?? []).length;
+    const before = text();
+    expect(before).not.toContain('⑂');
+
+    store.addSubagents('impl', 3);
+    const after = text();
+    expect(after).toContain('⑂3');
+    // The graph is what the user authored. Subagents are model-chosen and
+    // ephemeral, so promoting them to boxes would make the shape differ
+    // between runs of the same workflow.
+    expect(boxTops(after)).toBe(boxTops(before));
+    expect(boxTops(after)).toBe(WF.nodes.length);
+  });
+
+  it('drops the delegation mark on a mini card rather than crowding out identity', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'running');
+    store.addSubagents('impl', 3);
+    const layout = computeLayout(WF, undefined, { density: 'mini' });
+    const text = gridToLines(renderGraph(WF, layout, store.snapshot(), null), {
+      ox: 0,
+      oy: 0,
+      width: layout.width + 2,
+      height: layout.height + 1,
+    })
+      .join('\n')
+      .replace(/\x1b\[[0-9;]*m/g, '');
+
+    // A mini card is one row of glyph-plus-id; the node still has to be
+    // identifiable, so the badge is what goes.
+    expect(text).not.toContain('⑂');
+    expect(text).toContain('impl');
+  });
+
   it('fills the subtitle with what a node will do, and later with what it produced', () => {
     const store = storeFor(WF, '/tmp');
     const layout = computeLayout(WF);

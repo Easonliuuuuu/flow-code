@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { NodeRunState } from '../src/runstate/types.js';
 import {
+  delegationBadge,
   ellipsis,
   formatDuration,
   formatTokens,
@@ -187,6 +188,14 @@ describe('nodeMetrics', () => {
 
   it('is empty for a node that has not started — there is nothing to measure', () => {
     expect(nodeMetrics(state({}), now)).toBe('');
+  });
+
+  it('marks a node that is delegating right now, and only while it is', () => {
+    expect(delegationBadge(state({ subagents: 2 }))).toBe(' ⑂2');
+    // In flight, not a tally: a node that finished its subagents is back to
+    // showing nothing.
+    expect(delegationBadge(state({ subagents: 0 }))).toBe('');
+    expect(delegationBadge(state({}))).toBe('');
   });
 
   it('totals the run for the header', () => {

@@ -24,6 +24,19 @@ export function ellipsis(frame: number): string {
   return '.'.repeat(dots).padEnd(3);
 }
 
+/**
+ * `⑂2` when a node has subagents running, empty otherwise.
+ *
+ * In-flight, not a total: it answers "is this node delegating right now",
+ * which is what makes a card doing a lot of work legible. It goes last on the
+ * title row so that when the row is truncated this is what falls off, never
+ * the node's status or identity.
+ */
+export function delegationBadge(state: NodeRunState): string {
+  const count = state.subagents ?? 0;
+  return count > 0 ? ` ⑂${count}` : '';
+}
+
 /** `842`, `12.4k`, `1.2M` — short enough to sit inside a node box. */
 export function formatTokens(n: number): string {
   if (n < 1000) return String(Math.round(n));

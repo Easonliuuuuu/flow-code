@@ -425,4 +425,87 @@ describe('App frame height', () => {
       unmount();
     }
   });
+
+  it('attributes a fan-out node\'s activity rows without overflowing a narrow panel', async () => {
+    const store = storeFor(DETAIL_WF, makeTempGitRepo());
+    // 80 columns: the classic minimum, and the width where an extra column is
+    // most likely to push a row past the panel's edge.
+    const stdout = fakeStdout();
+    Object.assign(stdout, { columns: 80 });
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: DETAIL_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      for (const [instanceId, summary] of [
+        ['alt-1', 'npm run build'],
+        ['alt-2', 'npm test'],
+      ] as const) {
+        store.appendActivity({
+          ts: new Date().toISOString(),
+          nodeId: 'impl',
+          instanceId,
+          tool: 'Bash',
+          summary,
+          decision: 'allowed',
+        });
+      }
+      stdin.write('\r');
+      await settle();
+
+      const lines = lastFrameLines(stdout);
+      const body = lines.join('\n');
+      expect(body).toContain('alt-1');
+      expect(body).toContain('alt-2');
+      for (const line of lines) expect(line.length).toBeLessThanOrEqual(80);
+      expect(lines.length).toBeLessThanOrEqual(ROWS);
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('shows plan rate-limit utilization once the provider reports it', async () => {
+    const store = storeFor(WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      await settle();
+      // Nothing before a provider reports: a run against an API key never
+      // will, and the header must not imply a fresh window.
+      expect(lastFrameLines(stdout)[0]).not.toContain('5h');
+
+      store.recordRateLimit('five_hour', { utilization: 34, status: 'allowed' });
+      store.recordRateLimit('seven_day', { utilization: 61, status: 'allowed' });
+      await settle();
+
+      const frame = lastFrameLines(stdout);
+      expect(frame[0]).toContain('5h 34%');
+      expect(frame[0]).toContain('7d 61%');
+      // HEADER_ROWS budgets exactly one row; a second wraps the frame past
+      // `rows` and the terminal scrolls the canvas away.
+      expect(frame[0]!.length).toBeLessThanOrEqual(COLUMNS);
+      expect(frame.length).toBeLessThanOrEqual(ROWS);
+    } finally {
+      instance.unmount();
+    }
+  });
 });

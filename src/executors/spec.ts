@@ -103,6 +103,8 @@ export const executeSpec: NodeExecutor = async function* (ctx: ExecuteContext) {
             : {}),
           onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
           signal: ctx.signal,
+          subagents: ctx.settings.subagents,
+          subagentPool: ctx.subagentPool,
         },
         ctx.store,
       );

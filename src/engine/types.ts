@@ -1,4 +1,5 @@
 import type { CapabilitySet } from '../capabilities.js';
+import type { SlotPool } from './slots.js';
 import type { RunStateStore } from '../runstate/store.js';
 import type { DiscussTranscriptEntry, NodeStatus, RunBaseline } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
@@ -38,6 +39,14 @@ export interface AgentSessionRequest {
   onSessionId?: (sessionId: string) => void;
   /** Continue a previously interrupted session with full history, instead of starting fresh. */
   resumeSessionId?: string;
+  /**
+   * Whether this session may delegate to subagents. False compiles to an empty
+   * registry, which the interception check refuses like any unknown type —
+   * so disabling delegation needs no separate branch.
+   */
+  subagents?: boolean;
+  /** Run-wide slot pool subagents draw from; absent refuses every spawn. */
+  subagentPool?: SlotPool;
 }
 
 /** Thrown (or used to reject a pending port) when a run is interrupted mid-flight. */
@@ -136,6 +145,11 @@ export interface ExecuteContext {
   sessions: SessionRunner;
   /** Acquire a slot under the run-wide agent-session concurrency cap. */
   acquireSessionSlot(): Promise<() => void>;
+  /**
+   * The same cap, for subagents — which take slots without waiting for one.
+   * See `SlotPool`.
+   */
+  subagentPool: SlotPool;
   /** Aborted when the run is interrupted (e.g. ctrl+c). */
   signal: AbortSignal;
 }

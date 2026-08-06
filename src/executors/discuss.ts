@@ -32,6 +32,8 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
           : {}),
         onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
         signal: ctx.signal,
+        subagents: ctx.settings.subagents,
+        subagentPool: ctx.subagentPool,
         onSessionId: (id) => ctx.store.setSessionId(ctx.node.id, id),
         ...(resuming ? { resumeSessionId: prior.sessionId! } : {}),
       },

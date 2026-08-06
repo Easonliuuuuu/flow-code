@@ -35,6 +35,59 @@ describe('run-state persistence', () => {
     expect(onDisk.pid).toBe(process.pid);
   });
 
+  it('round-trips agent attribution through the run file', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.attachPersister(new FileRunStatePersister(repo));
+
+    store.appendActivity({
+      ts: new Date().toISOString(),
+      nodeId: 'n1',
+      agentId: 'a1',
+      agentType: 'explore',
+      tool: 'Read',
+      summary: 'Read a.ts',
+      decision: 'allowed',
+    });
+    store.appendActivity({
+      ts: new Date().toISOString(),
+      nodeId: 'n1',
+      tool: 'Read',
+      summary: 'Read b.ts',
+      decision: 'allowed',
+    });
+
+    const onDisk = readRunState(runFilePath(repo, store.runId));
+    expect(onDisk.activity[0]!.agentId).toBe('a1');
+    expect(onDisk.activity[0]!.agentType).toBe('explore');
+    // An entry from the node's own session carries no attribution at all,
+    // rather than a placeholder that would have to be special-cased on read.
+    expect(onDisk.activity[1]!.agentId).toBeUndefined();
+    expect('agentId' in onDisk.activity[1]!).toBe(false);
+  });
+
+  it('reads a run file written before attribution existed', () => {
+    // Entries from an older version have no agent fields; they mean "the
+    // node's own session", which is exactly how an absent field already reads.
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.attachPersister(new FileRunStatePersister(repo));
+    store.appendActivity({
+      ts: '2026-01-01T00:00:00.000Z',
+      nodeId: 'n1',
+      tool: 'Bash',
+      summary: 'npm test',
+      decision: 'allowed',
+      durationMs: 12,
+      exitStatus: 0,
+    });
+
+    const onDisk = readRunState(runFilePath(repo, store.runId));
+    expect(onDisk.activity).toHaveLength(1);
+    expect(onDisk.activity[0]!.summary).toBe('npm test');
+    expect(onDisk.activity[0]!.agentId).toBeUndefined();
+  });
+
   it('notifies subscribers on every mutation', () => {
     const repo = makeTempGitRepo();
     const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });

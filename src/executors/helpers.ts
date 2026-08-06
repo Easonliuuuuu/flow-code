@@ -290,6 +290,8 @@ export async function runNodeSession(
         ...(model !== undefined ? { model } : {}),
         onText: (t) => ctx.store.appendLiveOutput(ctx.node.id, t + '\n'),
         signal: ctx.signal,
+        subagents: ctx.settings.subagents,
+        subagentPool: ctx.subagentPool,
       },
       ctx.store,
     );
