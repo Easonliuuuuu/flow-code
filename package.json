@@ -45,6 +45,7 @@
     "lint": "eslint src test",
     "test": "vitest run",
     "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "docs:node-types": "node scripts/gen-node-types-doc.mjs",
     "docs:check": "node scripts/gen-node-types-doc.mjs --check"
@@ -60,6 +61,7 @@
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",
+    "@vitest/coverage-v8": "^3.2.7",
     "eslint": "^9.30.0",
     "typescript": "^5.9.0",
     "typescript-eslint": "^8.44.0",

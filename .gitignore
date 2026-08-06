@@ -3,3 +3,4 @@ dist/
 *.log
 .flow-code/
 docs/architecture-notes.md
+coverage/
