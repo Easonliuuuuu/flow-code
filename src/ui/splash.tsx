@@ -1,4 +1,4 @@
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdin, useStdout } from 'ink';
 import React, { useEffect, useRef, useState } from 'react';
 import { spinnerFrame } from './nodeCard.js';
 
@@ -29,6 +29,18 @@ const AUTO_DONE_FRAME = CONVERGENCE_DONE_FRAME + HOLD_FRAMES;
 
 /** Below this width the diagram would wrap rather than fit, so the splash is skipped outright. */
 const MIN_COLUMNS = 40;
+
+/**
+ * Whether the splash should skip itself rather than play: no TTY (a pipe, a
+ * log file, a CI runner — same check `App.tsx` uses before enabling the
+ * mouse) means there's no one to show an animation to and no raw-mode
+ * keypress to skip it with, so waiting out the timer would just be a fixed
+ * delay on every scripted invocation for nothing.
+ */
+function shouldSkip(stdin: NodeJS.ReadStream | undefined, stdout: NodeJS.WriteStream | undefined): boolean {
+  if (!stdin || !stdout?.isTTY) return true;
+  return (stdout.columns ?? 80) < MIN_COLUMNS;
+}
 
 type NodeState = 'idle' | 'running' | 'done';
 
@@ -67,9 +79,10 @@ function Glyph({ glyph, color, dim }: { glyph: string; color?: string; dim?: boo
 }
 
 export function Splash({ onDone }: { onDone: () => void }): React.ReactElement | null {
+  const { stdin } = useStdin();
   const { stdout } = useStdout();
   const [frame, setFrame] = useState(0);
-  const columns = stdout?.columns ?? 80;
+  const skip = shouldSkip(stdin, stdout);
   // Guards against the interval and a stray keypress both firing onDone —
   // the caller unmounts this component and mounts the real UI on the first
   // call, and a second call would do that twice.
@@ -83,7 +96,7 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
   useInput(() => finish());
 
   useEffect(() => {
-    if (columns < MIN_COLUMNS) {
+    if (skip) {
       finish();
       return;
     }
@@ -101,9 +114,9 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
     // `finish` is intentionally not a dependency: it closes over `onDone`
     // and the guard ref, neither of which changes across this component's
     // short lifetime, and including it would just churn the interval.
-  }, [columns]);
+  }, [skip]);
 
-  if (columns < MIN_COLUMNS) return null;
+  if (skip) return null;
 
   const top = inputStateAt(frame, 0);
   const mid = inputStateAt(frame, 1);
