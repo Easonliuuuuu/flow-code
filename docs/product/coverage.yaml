@@ -41,6 +41,7 @@ scopes:
   cli: [workflow-graph]
   cli.ts: [workflow-graph, agent-execution]   # historical; prefer `cli`
   init: [workflow-graph]
+  presets: [workflow-graph]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
@@ -60,6 +61,7 @@ modules:
   ui: [terminal-canvas-ui]
   git: [approval-gate]
   init: [workflow-graph, test-command-discovery]
+  presets: [workflow-graph]
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
@@ -107,20 +109,6 @@ registered_gaps:
       incidental rather than specified.
     tracked_by: BR-04
 
-  - id: GAP-03
-    kind: module
-    subject: presets
-    reason: >-
-      Three shipped feat(presets) commits against one passing mention in the
-      specs. Preset scaffolding behaviour is effectively undescribed.
-    tracked_by: inbox
-
-  - id: GAP-04
-    kind: scope
-    subject: presets
-    reason: Same as GAP-03, from the commit side.
-    tracked_by: inbox
-
   - id: GAP-05
     kind: scope
     subject: runstate
@@ -137,8 +125,10 @@ registered_gaps:
       Not a product feature — a CI workflow change typed as `feat` with a
       filename as its scope. Registered rather than mapped, because inventing a
       capability to own a CI file would be the ledger lying to keep itself
-      green. Nothing to fix in the code; the commit is already written.
-    tracked_by: inbox
+      green. Nothing to fix in the code; the commit is already written. This is
+      a permanent registration, not a pending decision — there is no future
+      state where this becomes a spec.
+    tracked_by: closed — non-issue
 
 # How old an active change may get, in days, before the check calls it stale.
 # Parked changes are exempt.

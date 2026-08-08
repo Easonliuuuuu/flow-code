@@ -19,15 +19,18 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
 - `src/runstate/` has no capability spec, and it is the file watch and guest
   mode both depend on.
 - `src/executors/` has no capability spec.
-- `presets` has three shipped `feat(presets)` commits and one passing mention in
-  the specs.
 - Should the splash screen be part of `terminal-canvas-ui`, or is it its own
   thing? Shipped without deciding.
-- Two commits use a filename as their conventional-commit scope (`feat(cli.ts)`,
-  `feat(App.tsx)`) and one types a CI change as a feature
-  (`feat(nvidia-integration.yml)`). Nothing to fix in the code — but worth a
-  commit-scope convention somewhere, since the drift check reads these.
+- A real commit-scope convention (beyond the historical aliases already in
+  `coverage.yaml`) would stop scopes like a bare filename from happening again.
+  Not urgent — `status:check` catches the cases it causes as they occur.
 
 ## Triaged
 
-*(Move lines here with what happened to them, or just delete them.)*
+- `presets` — folded into `workflow-graph`'s existing "Workflow presets"
+  requirement (it was already there, just incomplete): added scenarios for the
+  spec-kit preset, the CLI-install offer, and the skill-scaffold offer. Small
+  feature, no OpenSpec change needed — a direct spec.md edit was enough. GAP-03
+  and GAP-04 closed.
+- `feat(nvidia-integration.yml)` — not a real feature, a CI file typed as
+  `feat`. Registered permanently as GAP-06, nothing to fix.
