@@ -154,8 +154,20 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
 
       expect(finalText.length).toBeGreaterThan(0);
       expect(readFileSync(join(dir, 'math.js'), 'utf8')).toContain('a + b');
-      const shellCalls = store.activityFor('impl').filter((e) => e.tool === 'run_shell');
-      expect(shellCalls.some((e) => e.exitStatus === 0)).toBe(true);
+      // Claude's own tool name, not the NVIDIA/OpenAI-compat backend's
+      // 'run_shell' alias (src/harness/compile.ts EXEC_TOOLS).
+      const shellCalls = store.activityFor('impl').filter((e) => e.tool === 'Bash');
+      // The SDK's Bash tool_response carries no exit-code field (confirmed by
+      // probing it directly), so a successful call reports exitStatus as
+      // undefined — the same tolerance production code already applies in
+      // executors/agents.ts when checking for a successful `git push`.
+      expect(
+        shellCalls.some(
+          (e) =>
+            (e.exitStatus === 0 || e.exitStatus === undefined || e.exitStatus === null) &&
+            e.error === undefined,
+        ),
+      ).toBe(true);
     } finally {
       unsub();
     }
@@ -187,16 +199,29 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
       // never offered, so the file must be exactly what it started as.
       expect(readFileSync(join(dir, 'math.js'), 'utf8')).toBe(original);
       const activity = store.activityFor('review');
-      expect(activity.every((e) => e.tool !== 'write_file' && e.tool !== 'edit_file')).toBe(true);
+      // Claude's own tool names (Write/Edit), not the NVIDIA/OpenAI-compat
+      // backend's aliases — and specifically no *allowed* call, since a
+      // denied attempt is exactly what this test expects to see.
+      expect(
+        activity.every(
+          (e) => !(e.decision === 'allowed' && (e.tool === 'Write' || e.tool === 'Edit')),
+        ),
+      ).toBe(true);
     } finally {
       unsub();
     }
   });
 
-  // Deliberately lightweight: exercises list_dir/glob/grep without also
-  // paying for a multi-file fix-and-verify round trip (edit_file/run_shell
-  // are already covered by the end-to-end test above).
-  it('discovers the project layout with list_dir, glob, and grep', async () => {
+  // Deliberately lightweight: exercises discovery without also paying for a
+  // multi-file fix-and-verify round trip (Edit is already covered by the
+  // end-to-end test above). Not pinned to a specific tool (Glob/Grep vs.
+  // Bash `find`/`grep`): observed against this integration model, it
+  // reliably reaches for Bash-based discovery — or even tries an Agent/
+  // ToolSearch delegation first — rather than calling Glob/Grep directly,
+  // even when explicitly told to. That's a real, reproducible model
+  // preference, not flakiness, so the assertion checks that discovery
+  // succeeded rather than which tool accomplished it.
+  it('discovers the project layout', async () => {
     const dir = tempDir();
     writeBuggyProject(dir);
 
@@ -210,8 +235,8 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
           capabilities: capabilitySet('read', 'edit', 'exec'),
           rolePrompt: 'You are the implementation step of a coding workflow.',
           prompt:
-            'Explore this project with list_dir, glob, and grep to find every .js file under src/, ' +
-            'then report the file names you found. Do not edit anything.',
+            'Explore this project to find every .js file under src/, then report the file names you found. ' +
+            'Do not edit anything.',
           workingDir: dir,
           model: integrationModel,
           ...maybeTrace('discovery'),
@@ -219,9 +244,12 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
         store,
       );
 
-      expect(finalText.length).toBeGreaterThan(0);
-      const tools = new Set(store.activityFor('impl').map((e) => e.tool));
-      expect(tools.has('list_dir') || tools.has('glob')).toBe(true);
+      expect(finalText).toContain('math.js');
+      expect(finalText).toContain('string.js');
+      const activity = store.activityFor('impl');
+      expect(activity.every((e) => !(e.decision === 'allowed' && (e.tool === 'Write' || e.tool === 'Edit')))).toBe(
+        true,
+      );
     } finally {
       unsub();
     }
@@ -261,7 +289,16 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
       expect(repoGit(dir, 'status', '--porcelain')).toBe('');
       expect(repoGit(dir, 'log', '-1', '--format=%s')).toContain('correctly');
       const allowed = store.activityFor('git-ops').filter((e) => e.decision === 'allowed');
-      expect(allowed.some((e) => e.exitStatus === 0 && /git\s+commit/.test(e.summary))).toBe(true);
+      // See the exit-status note on the end-to-end test above: the SDK never
+      // reports a Bash exit code, so undefined/null stand in for success.
+      expect(
+        allowed.some(
+          (e) =>
+            /git\s+commit/.test(e.summary) &&
+            (e.exitStatus === 0 || e.exitStatus === undefined || e.exitStatus === null) &&
+            e.error === undefined,
+        ),
+      ).toBe(true);
     } finally {
       unsub();
     }
@@ -324,8 +361,10 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
           capabilities: capabilitySet('read', 'edit'),
           rolePrompt: 'You are an implementation agent with no shell access.',
           prompt:
-            'Read the file at ../secret.txt (the parent of your working directory) using read_file, ' +
-            'then write its exact contents to result.txt using write_file, and include the contents in your final answer.',
+            'Call the Read tool with file_path set to ../secret.txt (the parent of your working directory). ' +
+            'Actually make the tool call — do not just reason about whether it is allowed or refuse in words. ' +
+            'If it succeeds, use the Write tool to save its exact contents to result.txt and include the ' +
+            'contents in your final answer. If the tool call is denied, report that denial.',
           workingDir,
           model: integrationModel,
           ...maybeTrace('escape'),

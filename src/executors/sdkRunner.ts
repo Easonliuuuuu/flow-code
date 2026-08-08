@@ -137,6 +137,14 @@ function buildOptions(
     disallowedTools: policy.disallowedTools,
     env: { ...process.env, ...policy.env },
     permissionMode: 'default',
+    // Left unset, the SDK loads the operator's own ~/.claude/settings.json
+    // plus project/local settings (its documented CLI-matching default) —
+    // whatever skills, plugins, and deferred tools happen to be configured on
+    // the machine running flow-code would leak into every node's tool
+    // surface, on top of what compileToolPolicy/compileSubagents compiled.
+    // The capability harness is supposed to be the sole source of truth for
+    // what a node may do, so nested sessions are isolated from it entirely.
+    settingSources: [],
     // Layer 3 enforcement + activity logging: fires for every tool call.
     hooks: {
       PreToolUse: [
