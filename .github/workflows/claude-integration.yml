@@ -23,7 +23,12 @@ jobs:
       has_key: ${{ steps.check.outputs.has_key }}
     steps:
       - id: check
-        run: echo "has_key=${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+        run: |
+          if [ -n "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}" ] || [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
 
   integration:
     needs: check-secret
@@ -44,3 +49,4 @@ jobs:
       - run: npm run test:integration
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

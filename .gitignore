@@ -4,3 +4,5 @@ dist/
 .flow-code/
 docs/architecture-notes.md
 coverage/
+.env
+.env.local
