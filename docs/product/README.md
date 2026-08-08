@@ -46,6 +46,19 @@ into two capabilities, not that the map should hold an array. `status:check`
 fails on a capability with no BR and on a BR id that doesn't exist in
 `roadmap.md`, the same way it fails on an unmapped scope or module.
 
+It also walks that edge **backwards**, which catches the quieter failure. A
+capability nobody asked for announces itself — the code is there, the check
+trips. A requirement nobody is serving announces nothing: it shows up as a
+milestone bar that never moves, and only if someone happens to look at the bar.
+So a BR with nothing attached to it is a finding too.
+
+"Attached" is wider than the capability map on purpose. A BR counts as served
+if a capability maps to it, *or* an open or archived change targets it, *or* a
+registered gap names it in `tracked_by`. That last one matters: re-reporting a
+BR whose gap you already wrote down would punish the person who did the honest
+thing. What the check is looking for is a BR reached by none of the three —
+intent with no thread of any kind leading back to it.
+
 This is what makes a standalone small feature traceable without extra
 bookkeeping. `presets` (see below) has no OpenSpec change of its own — it maps
 straight to `workflow-graph`'s `spec.md`. Because `workflow-graph` maps to
@@ -93,9 +106,21 @@ Only two can be automated. Pretending otherwise is how this rots.
 any that no capability spec owns.
 
 **B. Specced but never shipped** — partly automated. The check catches changes
-archived with unchecked tasks, and warns about open changes that have gone
-quiet. It does *not* verify that a written requirement has code satisfying it —
-that needs requirements to name their tests, which is deliberately deferred.
+archived with unchecked tasks, warns about open changes that have gone quiet,
+and fails on a BR nothing is attached to. It does *not* verify that a written
+requirement has code satisfying it — that needs requirements to name their
+tests, which is deliberately deferred.
+
+There is a fourth thing that looks like a new kind and isn't: a change that
+**shipped and was never archived**. `wire-up-cicd-and-readme` sat at 0/13 in
+`STATUS.md` for six days while CI, the README, `CONTRIBUTING.md`, and
+release-please had all shipped, because task checkboxes are a hand-maintained
+status column and the unchecked-task rule only applies to *archived* changes.
+That is kind B seen from the other side, not a fifth column in this table. The
+detector that covers it is the staleness warning — which is time-based and
+advisory by design, so it tells you a change has gone quiet, never why. Nothing
+short of comparing a change's spec deltas against the repo would catch it
+properly, and that is not worth building. Archiving promptly is the fix.
 
 **C. Never written down at all** — impossible to automate. No script finds the
 feature that only ever existed in your head during a prompt. `inbox.md` is the
@@ -114,6 +139,11 @@ lets it go into CI today rather than after a cleanup sprint. Anything
 
 Every gap needs a `tracked_by` (a BR or `inbox`). A gap tracked by nothing is
 just a silenced alarm, and the check says so.
+
+One shape to watch: a `kind: br` gap cannot be tracked by the BR it is about.
+`tracked_by: BR-01` on a gap whose whole subject is that nothing serves BR-01
+points at itself and tracks nothing, while still reading as green. Those go to
+`inbox`, where a human has to triage them.
 
 ## Not every feature earns a full OpenSpec change
 
@@ -179,3 +209,9 @@ order of preference:
 What you should not do is widen a mapping until the warning disappears. The
 ledger is a statement of ownership, and a mapping that claims a capability
 covers something it does not is the same lie the check exists to prevent.
+
+When it fails on a **BR** instead, the options invert — the code is not the
+problem, the requirement is unattached. Write the capability spec that would
+satisfy it, open a change for it, or register it as a `kind: br` gap saying why
+not yet. Pointing an existing capability at it to clear the error is the same
+mistake as widening a mapping, one level up.
