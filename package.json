@@ -47,6 +47,7 @@
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:local": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
     "docs:node-types": "node scripts/gen-node-types-doc.mjs",
     "docs:check": "node scripts/gen-node-types-doc.mjs --check",
     "status": "node scripts/status.mjs",
