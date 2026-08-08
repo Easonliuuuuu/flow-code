@@ -40,7 +40,7 @@ _No OpenSpec change serves this yet._
 
 ## M1 — Ship-ready
 
-`░░░░░░░░░░ 0/13` tasks across 1 change(s)
+`██████████ 13/13` tasks across 1 change(s)
 
 ### BR-01 — A stranger succeeds on their first run
 
@@ -48,9 +48,11 @@ _No OpenSpec change serves this yet._
 
 ### BR-02 — The project's quality bar enforces itself
 
+**Capabilities:** `ci-pipeline`, `project-documentation`
+
 | Change | State | Tasks |
 | --- | --- | --- |
-| `wire-up-cicd-and-readme` | active | ░░░░░░░░░░ 0/13 |
+| `2026-08-08-wire-up-cicd-and-readme` | archived | ██████████ 13/13 |
 
 ## M2 — Driver mode is trustworthy
 
@@ -102,4 +104,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-6 archived change(s), 241 tasks. 15 modules under `src/`, 9 capability specs.
+7 archived change(s), 254 tasks. 15 modules under `src/`, 11 capability specs.
