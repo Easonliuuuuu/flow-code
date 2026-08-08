@@ -41,12 +41,6 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
 - A real commit-scope convention (beyond the historical aliases already in
   `coverage.yaml`) would stop scopes like a bare filename from happening again.
   Not urgent — `status:check` catches the cases it causes as they occur.
-- `wire-up-cicd-and-readme` is 0/13 in `STATUS.md` while CI, the README,
-  `CONTRIBUTING.md`, and release-please have all shipped. Task checkboxes are a
-  hand-maintained status column — the exact thing this layer exists to distrust
-  — and the check only catches unchecked boxes on *archived* changes, so a
-  change that shipped and was never archived falls in the blind spot. Archive
-  it; then decide whether that blind spot deserves a fourth drift kind.
 - `staleness_days: 30` in a repo whose whole history is six days old and holds
   six archived changes. Relative to this project's cadence the warning cannot
   fire before the habits it exists to correct have already set.
@@ -67,3 +61,11 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
   and GAP-04 closed.
 - `feat(nvidia-integration.yml)` — not a real feature, a CI file typed as
   `feat`. Registered permanently as GAP-06, nothing to fix.
+- `wire-up-cicd-and-readme` at 0/13 while everything in it had shipped —
+  archived as `2026-08-08-wire-up-cicd-and-readme`, and the two capabilities it
+  created (`ci-pipeline`, `project-documentation`) written from the shipped
+  result rather than from the proposal, since three of its tasks landed
+  somewhere other than where they said they would. It does **not** deserve a
+  fourth drift kind: it is kind B seen from the other side, and the only
+  detector that would catch it properly is comparing a change's spec deltas
+  against the repo, which is not worth building. See the README.

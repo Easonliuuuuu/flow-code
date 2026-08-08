@@ -100,14 +100,13 @@ capabilities:
   node-skills: BR-07
   node-subagents: BR-07
   worktree-agent-node: BR-07
+  ci-pipeline: BR-02
+  project-documentation: BR-02
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
 # staleness warning, which is the whole reason to record it.
 changes:
-  wire-up-cicd-and-readme:
-    br: BR-02
-    status: active
   add-guest-mode-reporter:
     br: BR-06
     status: parked
@@ -125,6 +124,11 @@ changes:
 # precise claim. The two that span:
 #   - add-core-workflow-engine also built the canvas (BR-09).
 #   - node-skills-and-test-discovery also built test discovery (BR-08).
+#
+# The date prefix is when a change was archived, not when it shipped.
+# wire-up-cicd-and-readme landed on 2026-08-02 and sat open until 2026-08-08 —
+# the six-day gap is the blind spot that prompted this archive, kept visible
+# rather than backdated away.
 archived:
   2026-08-02-add-core-workflow-engine: BR-08
   2026-08-02-add-iterative-control-flow: BR-08
@@ -132,6 +136,7 @@ archived:
   2026-08-02-add-per-node-model-picker: BR-08
   2026-08-03-node-skills-and-test-discovery: BR-07
   2026-08-06-node-subagents: BR-07
+  2026-08-08-wire-up-cicd-and-readme: BR-02
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
