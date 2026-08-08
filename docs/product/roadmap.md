@@ -30,11 +30,16 @@ largely there; this milestone is about the surface around it.
 
 ### BR-01 — A stranger succeeds on their first run
 
-A developer who has never seen flow-code installs it, runs `init` then `run` on
+Someone who has never seen flow-code installs it, runs `init` then `run` on
 their own repository, and gets a working graph without reading source.
 
 **Success signal:** a first run on an unfamiliar repo completes without the user
 opening `src/`, and every prompt during `init` is answerable without guessing.
+
+**Second-audience signal:** every prompt and every node label is answerable by
+someone who does not read code. If understanding a question requires reading the
+diff it is about, it fails this — for both audiences, but only one of them can
+work around it.
 
 ### BR-02 — The project's quality bar enforces itself
 
