@@ -182,7 +182,7 @@ The workflow file SHALL allow an edge to be declared as a loop-back, naming the 
 - **THEN** loop-back edges SHALL be excluded from that determination, so a loop-back into a node does not prevent that node from running on the first pass
 
 ### Requirement: Workflow presets
-The `init` command SHALL accept a named preset that scaffolds a workflow other than the default graph, so a project can start from a workflow shaped around an existing methodology rather than editing the default graph into one. Presets SHALL produce a workflow file that passes the same validation as any hand-written one, and the absence of a preset SHALL scaffold the default graph unchanged.
+The `init` command SHALL accept a named preset that scaffolds a workflow other than the default graph, so a project can start from a workflow shaped around an existing methodology rather than editing the default graph into one. Presets SHALL produce a workflow file that passes the same validation as any hand-written one, and the absence of a preset SHALL scaffold the default graph unchanged. A preset is a scaffolded file and nothing more — it composes existing node types with skills and adds no registry surface, which is why a new methodology is a new preset rather than a new set of node types.
 
 #### Scenario: Init with no preset
 - **WHEN** the user runs `flow-code init` without naming a preset
@@ -192,9 +192,21 @@ The `init` command SHALL accept a named preset that scaffolds a workflow other t
 - **WHEN** the user runs `flow-code init` naming the openspec preset
 - **THEN** the system SHALL scaffold an explore → propose → apply → gate → archive graph built from the Discuss, Spec, Implement, Approval-Gate, and Git-ops node types, with the corresponding openspec skills attached to each agent-driven node
 
+#### Scenario: Init with the spec-kit preset
+- **WHEN** the user runs `flow-code init` naming the spec-kit preset
+- **THEN** the system SHALL scaffold a workflow built from the same node types, with the corresponding spec-kit skills attached, alongside the openspec preset as an equally supported starting point
+
 #### Scenario: A preset's skills are not installed
 - **WHEN** a preset attaches skills that do not resolve in any discovery root
 - **THEN** `init` SHALL scaffold the file and SHALL warn which skills are missing and where they are expected, rather than writing a workflow that silently fails to load
+
+#### Scenario: A preset's CLI dependency is missing
+- **WHEN** a preset declares an external CLI it depends on and that CLI is not found on `PATH`
+- **THEN** `init` SHALL offer, interactively, to install it before scaffolding, and SHALL proceed to scaffold either way — declining or a failed install SHALL NOT block the preset from being written
+
+#### Scenario: A preset can scaffold its own missing skills
+- **WHEN** a preset declares a command that scaffolds its required skills (e.g. `openspec init`) and those skills are not yet installed
+- **THEN** `init` SHALL offer to run that command against the repo root, as an alternative to only warning that the skills are missing
 
 #### Scenario: An unknown preset name
 - **WHEN** the user names a preset that does not exist

@@ -61,6 +61,39 @@ lets it go into CI today rather than after a cleanup sprint. Anything
 Every gap needs a `tracked_by` (a BR or `inbox`). A gap tracked by nothing is
 just a silenced alarm, and the check says so.
 
+## Not every feature earns a full OpenSpec change
+
+A `spec.md` under `openspec/specs/` is markdown: `### Requirement:` and
+`#### Scenario:` blocks. You can edit it directly. A full OpenSpec change
+(`openspec/changes/<name>/proposal.md` + `design.md` + `tasks.md`) is a
+heavier process on top of that, meant for work that needs planning before it's
+built — a new capability, something cross-cutting, a design worth debating.
+
+Most drift the check finds is not that. Forcing a small feature through the
+full change process just to satisfy `status:check` would make the check itself
+the thing driving unnecessary ceremony — exactly what it exists to prevent
+elsewhere.
+
+The rule: **if the feature already shipped and is small, add the requirement
+directly to the owning capability's `spec.md` — no change proposal.** If it's
+large enough that you'd genuinely want to plan it before touching code, it
+earns the full process, whether or not the code already exists.
+
+`presets` is the worked example. Three `feat(presets)` commits, 232 lines,
+composes existing node types and "adds no registry surface" by its own doc
+comment — small. `workflow-graph/spec.md` already had a `Workflow presets`
+requirement; it was just missing scenarios for what had actually shipped
+(the spec-kit preset, the CLI-install offer, the skill-scaffold offer). Adding
+those took one edit, no `openspec/changes/` directory. `flow-code watch`, by
+contrast, is staying a `registered_gaps` entry until M2 — a new command with
+its own UI, run-attachment, and liveness model is exactly the kind of thing
+worth planning before writing the spec, not after.
+
+`registered_gaps` is for genuinely undecided or deliberately deferred work —
+not a place to leave something just because writing it up felt like too much
+process. If the honest fix is a five-line spec edit, do that instead of
+registering a gap.
+
 ## Working with it
 
 ```bash
@@ -81,7 +114,8 @@ suppressed stderr stream the whole time.
 When the check fails on a scope or module, you have three honest options, in
 order of preference:
 
-1. **Write the spec.** The feature deserves one.
+1. **Write the spec.** The feature deserves one — as a direct `spec.md` edit if
+   it's small, as a full change proposal if it needs planning. See below.
 2. **Map it** in `coverage.yaml` — an existing capability already covers it.
 3. **Register it** as a gap, with a reason and a `tracked_by`. You have looked
    at it and decided later.
