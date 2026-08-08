@@ -22,13 +22,55 @@ Two failures that OpenSpec alone cannot catch:
 | `brief.md` | you | What flow-code is, who for, what it is not. Stable. |
 | `roadmap.md` | you | Milestones and business requirements (`BR-XX`) — outcomes, no status. |
 | `inbox.md` | you | Anything you don't want to lose. One line, no ceremony. |
-| `coverage.yaml` | you | The ledger: scope/module → capability, change → BR, and accepted gaps. |
+| `coverage.yaml` | you | The ledger: scope/module → capability → BR, change → BR, and accepted gaps. |
 | `../../STATUS.md` | **generated** | Where things actually are. Never hand-edit. |
 
 The rule that keeps this alive: **you write intent, the script derives reality.**
 No file here asks you to hand-maintain a fact that git already knows. A status
 column you update by hand is a status column that lies, and lying is worse than
 absent.
+
+## The chain: BR → ER → spec
+
+A business requirement (`roadmap.md`) is an outcome. A capability
+(`openspec/specs/<name>/spec.md`) is the engineering requirement that outcome
+is built from — it already has the right vocabulary, `### Requirement:` and
+`#### Scenario:` blocks. There is no separate ER document; the capability spec
+*is* the ER. What was missing until this was added was the edge connecting the
+two.
+
+`coverage.yaml`'s `capabilities:` map is that edge: exactly one BR per
+capability. Not a list — a strict tree. Many capabilities can serve the same
+BR, but a single capability claiming two BRs is usually a sign it should split
+into two capabilities, not that the map should hold an array. `status:check`
+fails on a capability with no BR and on a BR id that doesn't exist in
+`roadmap.md`, the same way it fails on an unmapped scope or module.
+
+This is what makes a standalone small feature traceable without extra
+bookkeeping. `presets` (see below) has no OpenSpec change of its own — it maps
+straight to `workflow-graph`'s `spec.md`. Because `workflow-graph` maps to
+BR-01 in `capabilities:`, `presets` inherits that link automatically. It does
+not need its own BR, and nobody has to remember to give it one.
+
+The full chain, in order, with the change process as an optional detour:
+
+```
+BR (roadmap.md)
+  → capability / ER (openspec/specs/<name>/spec.md)
+      → Requirement + Scenario (the spec itself, always present)
+      → OpenSpec change (openspec/changes/, only for work that needed
+        planning — proposal.md + design.md + tasks.md, archived once done)
+```
+
+Doing this mapping once surfaced something worth knowing rather than hiding:
+three shipped, spec'd capabilities — `node-skills`, `node-subagents`,
+`worktree-agent-node` — don't fit any BR currently in `roadmap.md`. Forcing
+them under BR-01 to make the check quiet would have made 8 of the 9
+capabilities point at one BR, which would stop meaning much. They're
+registered as gaps (GAP-07/08/09) instead, because that's what's actually
+true: real engineering work with no business requirement written down for it
+yet. That is roadmap incompleteness, not code drift, and this system can now
+tell the two apart.
 
 ## The three kinds of drift
 
@@ -84,7 +126,9 @@ composes existing node types and "adds no registry surface" by its own doc
 comment — small. `workflow-graph/spec.md` already had a `Workflow presets`
 requirement; it was just missing scenarios for what had actually shipped
 (the spec-kit preset, the CLI-install offer, the skill-scaffold offer). Adding
-those took one edit, no `openspec/changes/` directory. `flow-code watch`, by
+those took one edit, no `openspec/changes/` directory, and no BR of its own —
+it inherits BR-01 through `workflow-graph` in `capabilities:` (see above).
+`flow-code watch`, by
 contrast, is staying a `registered_gaps` entry until M2 — a new command with
 its own UI, run-attachment, and liveness model is exactly the kind of thing
 worth planning before writing the spec, not after.

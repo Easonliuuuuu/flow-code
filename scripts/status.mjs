@@ -48,6 +48,7 @@ for (const [label, path] of [['coverage.yaml', ledgerPath], ['roadmap.md', roadm
 const ledger = parseYaml(readFileSync(ledgerPath, 'utf8')) ?? {};
 const scopeMap = ledger.scopes ?? {};
 const moduleMap = ledger.modules ?? {};
+const capabilityMap = ledger.capabilities ?? {};
 const changeMeta = ledger.changes ?? {};
 const archivedMeta = ledger.archived ?? {};
 const registeredGaps = ledger.registered_gaps ?? [];
@@ -202,9 +203,30 @@ function checkMappingTargets(map, kind) {
   }
 }
 
-function detectDrift(modules, scopes, changes, archived) {
+function detectDrift(modules, scopes, changes, archived, milestones) {
   checkMappingTargets(scopeMap, 'scope');
   checkMappingTargets(moduleMap, 'module');
+
+  const validBrIds = new Set(milestones.flatMap((m) => m.brs.map((br) => br.id)));
+
+  for (const [capability, brId] of Object.entries(capabilityMap)) {
+    if (!validBrIds.has(brId)) {
+      findings.push({
+        kind: 'ledger',
+        subject: capability,
+        detail: `capabilities maps "${capability}" to "${brId}", which is not a BR in docs/product/roadmap.md.`,
+      });
+    }
+  }
+
+  for (const capability of knownCapabilities) {
+    if (capabilityMap[capability] || acknowledged.has(`capability:${capability}`)) continue;
+    findings.push({
+      kind: 'capability',
+      subject: capability,
+      detail: `No business requirement claims this capability in coverage.yaml \`capabilities:\`. Map it to the BR it serves, or register it as a gap if the roadmap doesn't name one yet.`,
+    });
+  }
 
   for (const module of modules) {
     if (moduleMap[module] || acknowledged.has(`module:${module}`)) continue;
@@ -309,7 +331,14 @@ function render({ milestones, changes, archived, modules }) {
 
     for (const br of milestone.brs) {
       const serving = byBr.get(br.id) ?? [];
+      const capabilitiesForBr = Object.entries(capabilityMap)
+        .filter(([, brId]) => brId === br.id)
+        .map(([capability]) => capability)
+        .sort();
       lines.push(`### ${br.id} — ${br.title}`, '');
+      if (capabilitiesForBr.length > 0) {
+        lines.push(`**Capabilities:** ${capabilitiesForBr.map((c) => `\`${c}\``).join(', ')}`, '');
+      }
       if (serving.length === 0) {
         lines.push('_No OpenSpec change serves this yet._', '');
         continue;
@@ -376,7 +405,7 @@ const archived = readArchived();
 const modules = readModules();
 const scopes = readFeatScopes();
 
-detectDrift(modules, scopes, changes, archived);
+detectDrift(modules, scopes, changes, archived, milestones);
 warnOnQuietChanges(changes);
 
 const rendered = render({ milestones, changes, archived, modules });
