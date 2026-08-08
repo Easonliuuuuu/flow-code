@@ -14,6 +14,8 @@ flatter you.
 
 ### BR-01 — A stranger succeeds on their first run
 
+**Capabilities:** `agent-execution`, `approval-gate`, `node-model-selection`, `test-command-discovery`, `workflow-graph`
+
 | Change | State | Tasks |
 | --- | --- | --- |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
@@ -43,6 +45,8 @@ _No OpenSpec change serves this yet._
 
 ### BR-05 — The canvas stays legible on real graphs
 
+**Capabilities:** `terminal-canvas-ui`
+
 _No OpenSpec change serves this yet._
 
 ## M3 — Meet users in the CLI they already use
@@ -64,7 +68,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 4 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -76,6 +80,9 @@ Known debt, already decided about. Green on purpose — but still debt.
 | GAP-02 | module `runstate` | BR-04 |
 | GAP-05 | scope `runstate` | BR-04 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
+| GAP-07 | capability `node-skills` | inbox |
+| GAP-08 | capability `node-subagents` | inbox |
+| GAP-09 | capability `worktree-agent-node` | inbox |
 
 ## Shipped
 

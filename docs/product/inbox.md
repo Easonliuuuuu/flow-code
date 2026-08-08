@@ -24,6 +24,12 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
 - A real commit-scope convention (beyond the historical aliases already in
   `coverage.yaml`) would stop scopes like a bare filename from happening again.
   Not urgent — `status:check` catches the cases it causes as they occur.
+- `node-skills`, `node-subagents`, `worktree-agent-node` are shipped, spec'd
+  capabilities that no BR in `roadmap.md` claims (GAP-07/08/09). Either they're
+  genuinely part of BR-01's scope and roadmap.md should say so, or they're
+  outcomes nobody named yet — e.g. "a workflow can extend an agent-driven node
+  with a skill" or "a subagent can be delegated to without leaving the node's
+  budget." Worth a real BR each, or a deliberate call that they don't need one.
 
 ## Triaged
 
