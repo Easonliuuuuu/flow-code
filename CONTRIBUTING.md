@@ -18,7 +18,16 @@ npm run build       # compile to dist/
 npm run typecheck   # tsc --noEmit
 npm run lint        # eslint src test
 npm test            # vitest run
+npm run status      # regenerate STATUS.md
 ```
+
+## Knowing what you're building
+
+[`STATUS.md`](STATUS.md) is the rollup of where the product is — generated, never hand-edited. What it is measured against lives in [`docs/product/`](docs/product/README.md): the brief, the roadmap of business requirements, and `coverage.yaml`, the ledger mapping commit scopes and `src/` modules to the capability specs that own them.
+
+CI runs `npm run status:check`, which fails if `STATUS.md` is stale, or if a feature shipped without a capability spec owning it and without being registered as a known gap. If it fails on your change: write the spec, map it to an existing capability, or register it as a gap with a reason. Don't widen a mapping until the warning disappears — see [`docs/product/README.md`](docs/product/README.md).
+
+Got an idea mid-flow? One line in [`docs/product/inbox.md`](docs/product/inbox.md). No format, no ID.
 
 ## Claude integration tests
 

@@ -1,0 +1,122 @@
+# The ledger. This is the only file the drift check reads for intent — every
+# other input it uses (git history, openspec/, src/) is a fact it derives.
+#
+# It answers three questions:
+#   1. Which capability spec owns a given commit scope, and a given src module?
+#   2. Which OpenSpec change serves which business requirement?
+#   3. Which known gaps have you already looked at and accepted?
+#
+# The point of (3) is the ratchet: registered gaps are debt you have seen and
+# decided about, so they stay green. Anything unregistered fails the check. That
+# way `npm run status:check` can go into CI today without a cleanup sprint, and
+# still catches the next feature that ships without a spec.
+#
+# Run `npm run status` after editing.
+
+# Commit scopes, as used in conventional-commit subjects: feat(<scope>): ...
+# A feat commit whose scope is not listed here — and not registered as a gap —
+# is a feature that shipped without anyone deciding where it belongs.
+scopes:
+  engine: [workflow-graph, agent-execution]
+  workflow: [workflow-graph]
+  graph: [workflow-graph]
+  registry: [workflow-graph, node-skills, test-command-discovery]
+  harness: [agent-execution, node-subagents]
+  executors: [agent-execution]
+  providers: [agent-execution, node-model-selection]
+  model: [node-model-selection]
+  skills: [node-skills]
+  test: [test-command-discovery]
+  gate: [approval-gate]
+  approval: [approval-gate]
+  worktrees: [worktree-agent-node]
+  worktree: [worktree-agent-node]
+  ui: [terminal-canvas-ui]
+  canvas: [terminal-canvas-ui]
+  splash: [terminal-canvas-ui]
+  App.tsx: [terminal-canvas-ui]   # historical; prefer `ui` for new commits
+  cli: [workflow-graph]
+  init: [workflow-graph]
+
+# Top-level modules under src/ — directories and single-file modules alike, so
+# a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
+# as a barrel. A module with no owning capability is code whose behaviour is not
+# described anywhere.
+modules:
+  engine: [workflow-graph, agent-execution]
+  capabilities: [agent-execution]
+  defaultWorkflow: [workflow-graph]
+  cli: [workflow-graph]
+  executors: [agent-execution]
+  harness: [agent-execution, node-subagents]
+  registry: [workflow-graph, node-skills, test-command-discovery]
+  workflow: [workflow-graph]
+  worktrees: [worktree-agent-node]
+  skills: [node-skills]
+  ui: [terminal-canvas-ui]
+  git: [approval-gate]
+  init: [workflow-graph, test-command-discovery]
+
+# OpenSpec changes in openspec/changes/, mapped to the business requirement they
+# serve. `status: parked` means deliberately not scheduled — it silences the
+# staleness warning, which is the whole reason to record it.
+changes:
+  wire-up-cicd-and-readme:
+    br: BR-02
+    status: active
+  add-guest-mode-reporter:
+    br: BR-06
+    status: parked
+    note: >-
+      Blocked on M2 by the proposal's own argument — guest mode adds a second
+      producer of run-state and should not land while driver mode is still
+      settling.
+
+# Archived changes, mapped to the BR they closed. Used for the milestone rollup.
+# Unmapped archives are reported, not failed — the ledger postdates them.
+archived:
+  2026-08-02-add-core-workflow-engine: BR-01
+  2026-08-02-add-iterative-control-flow: BR-01
+  2026-08-02-add-nvidia-session-runner: BR-01
+  2026-08-02-add-per-node-model-picker: BR-01
+  2026-08-03-node-skills-and-test-discovery: BR-01
+  2026-08-06-node-subagents: BR-01
+
+# Known, accepted drift. Each entry needs a reason and something tracking it —
+# a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
+registered_gaps:
+  - id: GAP-01
+    kind: scope
+    subject: watch
+    reason: >-
+      `flow-code watch` shipped as a full user-facing command with no capability
+      spec. Flagged in the guest-mode proposal's Impact section but never
+      tracked anywhere that looks.
+    tracked_by: BR-03
+
+  - id: GAP-02
+    kind: module
+    subject: runstate
+    reason: >-
+      src/runstate/ has no owning capability spec, and both watch and guest mode
+      depend on it. Ownership and concurrent-write rules are currently
+      incidental rather than specified.
+    tracked_by: BR-04
+
+  - id: GAP-03
+    kind: module
+    subject: presets
+    reason: >-
+      Three shipped feat(presets) commits against one passing mention in the
+      specs. Preset scaffolding behaviour is effectively undescribed.
+    tracked_by: inbox
+
+  - id: GAP-04
+    kind: scope
+    subject: presets
+    reason: Same as GAP-03, from the commit side.
+    tracked_by: inbox
+
+# How old an active change may get, in days, before the check calls it stale.
+# Parked changes are exempt.
+staleness_days: 30

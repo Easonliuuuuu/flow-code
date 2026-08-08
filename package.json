@@ -48,7 +48,9 @@
     "coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "docs:node-types": "node scripts/gen-node-types-doc.mjs",
-    "docs:check": "node scripts/gen-node-types-doc.mjs --check"
+    "docs:check": "node scripts/gen-node-types-doc.mjs --check",
+    "status": "node scripts/status.mjs",
+    "status:check": "node scripts/status.mjs --check"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.220",
