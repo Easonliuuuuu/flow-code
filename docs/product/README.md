@@ -68,6 +68,16 @@ npm run status         # regenerate STATUS.md
 npm run status:check   # fail if STATUS.md is stale or drift is unregistered (CI runs this)
 ```
 
+**`status:check` needs full git history.** The commit-scope pass reads every
+`feat()` commit, so a shallow clone would see part of history and pass green
+having verified almost nothing. It refuses to run rather than report a success
+it cannot back up — `git fetch --unshallow` if you hit that. CI checks out with
+`fetch-depth: 0` for the same reason.
+
+This is not hypothetical: the check's own first CI run caught six scopes that a
+shallow local clone had hidden, after the guard had been warning about it into a
+suppressed stderr stream the whole time.
+
 When the check fails on a scope or module, you have three honest options, in
 order of preference:
 

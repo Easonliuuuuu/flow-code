@@ -59,6 +59,14 @@ const acknowledged = new Set(registeredGaps.map((g) => `${g.kind}:${g.subject}`)
 const findings = [];
 const warnings = [];
 
+/**
+ * Conditions that make the check unable to answer, as opposed to able to answer
+ * "there is drift". These fail `--check` without entering STATUS.md, so the
+ * generated file stays identical whether or not the clone it ran against was
+ * complete.
+ */
+const blockers = [];
+
 // ---------------------------------------------------------------- roadmap ---
 
 /**
@@ -148,17 +156,20 @@ function readModules() {
 function readFeatScopes() {
   let log;
   try {
-    // A shallow clone would leave this pass seeing almost no commits and
-    // reporting success, which is exactly the false assurance the check exists
-    // to prevent. Say so rather than passing quietly.
+    // A shallow clone leaves this pass seeing part of history and reporting
+    // success — the exact false assurance the check exists to prevent, and a
+    // failure mode this check has already been caught by once. It blocks
+    // rather than warns: a green result nobody can back up is worse than a red
+    // one, and the same reasoning the product applies to a run that lies about
+    // its guarantees applies to the check that guards it.
     const shallow = execFileSync('git', ['rev-parse', '--is-shallow-repository'], {
       cwd: repoRoot,
       encoding: 'utf8',
     }).trim();
     if (shallow === 'true') {
-      warnings.push(
-        'shallow git clone — the commit-scope pass only saw part of history and cannot be trusted. ' +
-          'Check out with full history (actions/checkout `fetch-depth: 0`).',
+      blockers.push(
+        'shallow git clone — the commit-scope pass saw only part of history, so a pass here would mean nothing. ' +
+          'Run `git fetch --unshallow`, or check out with full history (actions/checkout `fetch-depth: 0`).',
       );
     }
     log = execFileSync('git', ['log', '--format=%s'], { cwd: repoRoot, encoding: 'utf8' });
@@ -374,6 +385,11 @@ if (checkMode) {
   const existing = existsSync(outputPath) ? readFileSync(outputPath, 'utf8') : null;
   let failed = false;
 
+  if (blockers.length > 0) {
+    console.error('status: cannot verify — the check could not see enough to answer:');
+    for (const blocker of blockers) console.error(`  - ${blocker}`);
+    failed = true;
+  }
   if (existing !== rendered) {
     console.error('status: STATUS.md is out of date. Run `npm run status` and commit the result.');
     failed = true;
@@ -390,6 +406,7 @@ if (checkMode) {
 
 writeFileSync(outputPath, rendered);
 console.log(`status: wrote ${outputPath.replace(`${repoRoot}/`, '')}`);
+for (const blocker of blockers) console.warn(`status: incomplete: ${blocker}`);
 if (findings.length > 0) {
   console.log(`status: ${findings.length} unregistered drift finding(s) — see the Drift section.`);
 }
