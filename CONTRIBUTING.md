@@ -35,4 +35,4 @@ Got an idea mid-flow? One line in [`docs/product/inbox.md`](docs/product/inbox.m
 
 `.github/workflows/live-integration.yml` runs this suite nightly (and on demand via `workflow_dispatch`), gated on a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `CLAUDE_CODE_OAUTH_TOKEN` (generate one with `claude setup-token`, or use a Claude CLI/subscription login).
 
-This suite previously ran an NVIDIA NIM-backed version (`nvidia-integration.yml`) on every push to `main`; it was moved off NVIDIA's throttled free tier and off the per-push trigger after it failed the large majority of runs against shared GitHub Actions IP rate limiting.
+This suite previously ran against a different provider on every push to `main`; it was moved to a nightly cadence after failing the large majority of runs against that provider's shared rate limiting.

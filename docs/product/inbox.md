@@ -63,8 +63,6 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
   spec-kit preset, the CLI-install offer, and the skill-scaffold offer. Small
   feature, no OpenSpec change needed — a direct spec.md edit was enough. GAP-03
   and GAP-04 closed.
-- `feat(nvidia-integration.yml)` — not a real feature, a CI file typed as
-  `feat`. Registered permanently as GAP-06, nothing to fix.
 - `wire-up-cicd-and-readme` at 0/13 while everything in it had shipped —
   archived as `2026-08-08-wire-up-cicd-and-readme`, and the two capabilities it
   created (`ci-pipeline`, `project-documentation`) written from the shipped

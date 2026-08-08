@@ -4,10 +4,10 @@ name: Live Integration
 # Agent SDK (cost + latency + external-service variance), so it must never
 # block the fast, always-required lint/typecheck/test gate. Runs nightly
 # rather than on every push to main — a real-API suite doesn't need to gate
-# every commit, and this used to run an NVIDIA-backed suite on every push
-# that failed the large majority of the time against NVIDIA's throttled free
-# tier (see git history: nvidia-integration.yml). Use workflow_dispatch to
-# run it on demand against a branch.
+# every commit, and a previous version of this suite ran on every push
+# against a different provider and failed the large majority of the time
+# against that provider's rate limiting. Use workflow_dispatch to run it on
+# demand against a branch.
 #
 # Named for what it is (a live-API suite) rather than which provider it
 # currently exercises — Claude today, the same slot a second provider's live
