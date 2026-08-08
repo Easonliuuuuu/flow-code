@@ -31,18 +31,48 @@ an explicit gate makes the third a decision rather than a default.
 
 ## Who it is for
 
-*(Inferred — correct this.)* Developers who already run an agentic coding CLI
-(`claude`, `codex`, `opencode`) on real repositories, who have hit the point
-where a long autonomous run is more anxiety than leverage, and who want
-observability and a stopping point without giving up autonomy.
+Two audiences, who look different and want the same thing.
 
-The distinguishing trait is not team size or seniority — it is running agents on
-code you are accountable for.
+**Developers** who already run an agentic coding CLI (`claude`, `codex`,
+`opencode`) on real repositories, who have hit the point where a long autonomous
+run is more anxiety than leverage, and who want observability and a stopping
+point without giving up autonomy.
+
+**People who build with AI without reading the code** — who can describe what
+they want and get working software, but cannot review a diff to know whether
+they got it. They are not a lesser version of the first audience. They are the
+audience with the *most* to gain, because everything the chat log hides, it
+hides from them completely and permanently.
+
+The distinguishing trait is not seniority, team size, or whether you can read
+the diff. It is running agents against something you are accountable for.
+
+### Why the same product serves both
+
+The three things a graph makes legible — where you are, what it cost, what it is
+about to do — are exactly the three a developer could recover by reading the
+code and a non-coder could not recover at all.
+
+An approval gate asking "is this okay?" is a convenience for someone who can
+read the diff and the only real control for someone who cannot. A Test node
+whose verdict is an exit code rather than a model's opinion is a preference for
+the first audience and a lifeline for the second: it is a fact they can trust
+without evaluating the reasoning behind it.
+
+This is the load-bearing design consequence: **structure has to carry meaning
+that code currently carries.** A node that says `done` must mean done to someone
+who will never open the file. That raises the bar on state honesty, on what the
+UI claims, and on plain language over jargon — it does not lower the bar
+anywhere, which is why it does not pull the product away from developers.
 
 ## What it is not
 
 *(Inferred — correct this.)*
 
+- **Not a no-code tool.** It does not hide that software is being written. It
+  makes the process observable and interruptible. Someone who does not read code
+  should be able to follow *what is happening*, not be shielded from the fact
+  that code exists.
 - **Not another agent CLI.** The graph is a layer over execution, not a
   competing model connection. The `watch` command and the parked guest-mode
   proposal both point the same direction: keep the tool you use, get the graph.
