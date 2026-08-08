@@ -75,25 +75,31 @@ modules:
 #
 # This is what lets a standalone small feature — like `presets` above, which
 # has no OpenSpec change of its own — still trace to product intent: it maps to
-# workflow-graph, and workflow-graph maps to BR-01, so the BR link is inherited
+# workflow-graph, and workflow-graph maps to BR-08, so the BR link is inherited
 # rather than re-declared per feature.
 #
-# Inferred, like brief.md and roadmap.md — correct freely. terminal-canvas-ui
-# is the one genuine judgment call: its spec content (pan/zoom/collapse) is
-# BR-05's concern specifically, even though the canvas is also what a BR-01
-# first-run user sees. Picked BR-05 as the more precise home rather than the
-# more general one.
+# Two judgment calls worth knowing about, both recorded rather than smoothed:
+#
+# 1. BR-08 owns five capabilities, which is the top of the healthy range — one
+#    more and the label is probably a bucket. It holds here because "the graph
+#    is the authority on what executes" genuinely covers all five. The seam to
+#    watch, if it ever needs splitting, is between "the graph is the truth" and
+#    "nothing escapes the gate" (approval-gate).
+# 2. terminal-canvas-ui maps to BR-09 (a run is legible), not BR-05 (a big
+#    graph stays navigable), because the spec is mostly cards, panels, and the
+#    detail view rather than navigation. BR-05 therefore has no capability yet:
+#    it needs the navigation half of this spec split out, which is deferred ER
+#    work, not a missing mapping.
 capabilities:
-  workflow-graph: BR-01
-  agent-execution: BR-01
-  approval-gate: BR-01
-  node-model-selection: BR-01
-  test-command-discovery: BR-01
-  terminal-canvas-ui: BR-05
-  # node-skills, node-subagents, worktree-agent-node are deliberately absent —
-  # see GAP-07/08/09 below. Forcing them under BR-01 would have made 8 of 9
-  # capabilities point at one BR, which is a sign the roadmap doesn't yet name
-  # an outcome for them, not that BR-01 is where they belong.
+  workflow-graph: BR-08
+  agent-execution: BR-08
+  approval-gate: BR-08
+  node-model-selection: BR-08
+  test-command-discovery: BR-08
+  terminal-canvas-ui: BR-09
+  node-skills: BR-07
+  node-subagents: BR-07
+  worktree-agent-node: BR-07
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
@@ -112,13 +118,20 @@ changes:
 
 # Archived changes, mapped to the BR they closed. Used for the milestone rollup.
 # Unmapped archives are reported, not failed — the ledger postdates them.
+#
+# One BR per change, same as capabilities. Several of these archives predate the
+# roadmap and delivered across more than one requirement; each is attributed to
+# the one it mostly served, so the rollup is a fair approximation rather than a
+# precise claim. The two that span:
+#   - add-core-workflow-engine also built the canvas (BR-09).
+#   - node-skills-and-test-discovery also built test discovery (BR-08).
 archived:
-  2026-08-02-add-core-workflow-engine: BR-01
-  2026-08-02-add-iterative-control-flow: BR-01
-  2026-08-02-add-nvidia-session-runner: BR-01
-  2026-08-02-add-per-node-model-picker: BR-01
-  2026-08-03-node-skills-and-test-discovery: BR-01
-  2026-08-06-node-subagents: BR-01
+  2026-08-02-add-core-workflow-engine: BR-08
+  2026-08-02-add-iterative-control-flow: BR-08
+  2026-08-02-add-nvidia-session-runner: BR-08
+  2026-08-02-add-per-node-model-picker: BR-08
+  2026-08-03-node-skills-and-test-discovery: BR-07
+  2026-08-06-node-subagents: BR-07
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
@@ -162,28 +175,11 @@ registered_gaps:
       state where this becomes a spec.
     tracked_by: closed — non-issue
 
-  - id: GAP-07
-    kind: capability
-    subject: node-skills
-    reason: >-
-      Shipped, spec'd (openspec/specs/node-skills/), scope- and module-mapped —
-      but no BR in roadmap.md names an outcome for skill attachment. It is real
-      engineering work with no declared business purpose, surfaced by adding
-      the BR -> capability edge rather than papered over by forcing it under
-      BR-01 alongside everything else.
-    tracked_by: inbox
-
-  - id: GAP-08
-    kind: capability
-    subject: node-subagents
-    reason: Same shape as GAP-07 — shipped and spec'd, no BR claims it.
-    tracked_by: inbox
-
-  - id: GAP-09
-    kind: capability
-    subject: worktree-agent-node
-    reason: Same shape as GAP-07 — shipped and spec'd, no BR claims it.
-    tracked_by: inbox
+  # GAP-07/08/09 (capabilities node-skills, node-subagents, worktree-agent-node)
+  # are closed. They were shipped, spec'd work that no BR claimed; BR-07 now
+  # names the outcome all three serve, so they are mapped above rather than
+  # registered. That is the intended lifecycle of a gap: it gets resolved, not
+  # renewed.
 
 # How old an active change may get, in days, before the check calls it stale.
 # Parked changes are exempt.
