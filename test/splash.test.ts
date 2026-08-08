@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { Splash } from '../src/ui/splash.js';
 
 /**
- * The startup splash's frame math (`inputStateAt`/`convergenceStateAt`/
- * `AUTO_DONE_FRAME`) and its skip conditions had no automated coverage —
- * only the by-hand column arithmetic in the component itself. These tests
- * exercise both: that it actually plays through to the wordmark and calls
+ * The startup splash's frame math (`stateAt`/`RUNS`/`AUTO_DONE_FRAME`) and
+ * its skip conditions had no automated coverage — only the by-hand column
+ * arithmetic in the component itself. These tests exercise both: that it
+ * actually plays through the fail/retry chain to the wordmark and calls
  * `onDone` once, and that every skip path (keypress, narrow terminal, no
  * TTY) bails out immediately instead of waiting out the timer.
  */
@@ -75,22 +75,26 @@ function mountSplash(
 }
 
 describe('Splash', () => {
-  it('plays through the merge animation and calls onDone exactly once', async () => {
+  it('plays through the fail/retry chain and calls onDone exactly once', async () => {
     let doneCount = 0;
     const { stdout, unmount } = mountSplash(() => {
       doneCount += 1;
     });
 
-    // Mid-animation: the tributaries are still landing, the wordmark hasn't
-    // shown yet, and nothing has finished.
-    await settle(200);
+    // Mid-animation: the chain is still running, the wordmark hasn't shown
+    // yet, and nothing has finished.
+    await settle(400);
     expect(lastFrame(stdout)).not.toContain('flow-code');
     expect(doneCount).toBe(0);
 
-    // Past AUTO_DONE_FRAME (14 frames * 80ms = 1120ms): settled and done.
-    await settle(1200);
+    // The fourth node's failure and the retry caption both appear along the
+    // way (D_END is frame 8 / 1600ms, D2_END is frame 17 / 3400ms).
+    await settle(1600);
+    expect(lastFrame(stdout)).toMatch(/failed|retrying/);
+
+    // Past AUTO_DONE_FRAME (29 frames * 200ms = 5800ms): settled and done.
+    await settle(4000);
     const frame = lastFrame(stdout);
-    expect(frame).toContain('flow-code');
     expect(frame).toContain('agentic workflows, on your repo');
     expect(doneCount).toBe(1);
 
@@ -128,7 +132,7 @@ describe('Splash', () => {
 
     await settle();
     expect(doneCount).toBe(1);
-    expect(lastFrame(stdout)).not.toContain('╭');
+    expect(lastFrame(stdout)).not.toContain('▶');
 
     unmount();
   });
@@ -144,7 +148,7 @@ describe('Splash', () => {
 
     await settle();
     expect(doneCount).toBe(1);
-    expect(lastFrame(stdout)).not.toContain('╭');
+    expect(lastFrame(stdout)).not.toContain('▶');
 
     unmount();
   });
