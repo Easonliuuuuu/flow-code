@@ -6,7 +6,9 @@
 #   2. Which business requirement does a given capability serve? (the BR -> ER
 #      edge — the chain is BR -> capability -> Requirement/Scenario in that
 #      capability's spec.md, and OpenSpec changes/tasks are the execution
-#      record for BR -> capability work that needed planning first.)
+#      record for BR -> capability work that needed planning first.) The check
+#      walks this edge both ways: a capability no BR claims is drift, and a BR
+#      nothing at all is attached to is a requirement nobody is serving.
 #   3. Which OpenSpec change serves which business requirement?
 #   4. Which known gaps have you already looked at and accepted?
 #
@@ -179,6 +181,33 @@ registered_gaps:
       a permanent registration, not a pending decision — there is no future
       state where this becomes a spec.
     tracked_by: closed — non-issue
+
+  # GAP-10 and GAP-11 come from the reverse edge: a BR that nothing is attached
+  # to. Both are the same shape — a real surface exists, but it is described in
+  # pieces inside capabilities that are *about* something else, so no spec is
+  # about the outcome itself. Neither is code drift; both are ER work that has
+  # not been done. `tracked_by: inbox` rather than a BR on purpose: a gap about
+  # BR-01 cannot be tracked by BR-01 without tracking nothing.
+  - id: GAP-10
+    kind: br
+    subject: BR-01
+    reason: >-
+      No capability spec is about a stranger's first run. `src/init/`,
+      `src/presets.ts`, the scaffold, and the discovery prompts are all real and
+      all specified — but inside workflow-graph and test-command-discovery,
+      which serve BR-08. Nothing owns the outcome, which is the likeliest reason
+      "ship-ready" keeps feeling unfinished.
+    tracked_by: inbox
+
+  - id: GAP-11
+    kind: br
+    subject: BR-05
+    reason: >-
+      Needs the navigation half of terminal-canvas-ui — viewport, pan, collapse,
+      off-screen indication — split into its own capability. terminal-canvas-ui
+      maps to BR-09 because it is mostly cards, panels, and the detail view;
+      splitting it is deferred ER work rather than a missing mapping.
+    tracked_by: inbox
 
   # GAP-07/08/09 (capabilities node-skills, node-subagents, worktree-agent-node)
   # are closed. They were shipped, spec'd work that no BR claimed; BR-07 now

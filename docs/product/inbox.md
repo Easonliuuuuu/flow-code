@@ -33,9 +33,13 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
   `src/presets.ts`, the scaffold, the discovery confirmation prompts — is real
   code described in pieces inside `workflow-graph` and `test-command-discovery`,
   but nothing is *about* first-run. Probably why "ship-ready" feels unfinished.
+  **Now GAP-10** — registered, so the check stays green, but it lands here
+  rather than on a BR because a BR gap can't track itself. Still needs a
+  decision, and it is the one blocking M1 from meaning anything.
 - BR-05 has no capability either, and it's the same shape from the other end:
   it needs the navigation half of `terminal-canvas-ui` (viewport, pan/zoom,
   collapse, off-screen indication) split into its own spec. Deferred ER work.
+  **Now GAP-11**, same terms as GAP-10.
 - Should the splash screen be part of `terminal-canvas-ui`, or is it its own
   thing? Shipped without deciding.
 - A real commit-scope convention (beyond the historical aliases already in
@@ -69,3 +73,7 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
   fourth drift kind: it is kind B seen from the other side, and the only
   detector that would catch it properly is comparing a change's spec deltas
   against the repo, which is not worth building. See the README.
+- The reverse edge — a BR nothing is attached to — is now checked, not just the
+  forward one. It found BR-01 and BR-05 immediately; both are registered as
+  GAP-10/GAP-11 and still sit in Unsorted above, which is the point: the check
+  can tell you a requirement is unserved, it cannot decide what to do about it.

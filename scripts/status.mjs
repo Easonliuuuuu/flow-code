@@ -228,6 +228,32 @@ function detectDrift(modules, scopes, changes, archived, milestones) {
     });
   }
 
+  // The same edge walked backwards. The forward pass catches a capability
+  // nobody asked for, which announces itself; this catches a requirement nobody
+  // is serving, which does not — it shows up as a milestone bar that never
+  // moves, and only if someone is looking at the bar.
+  //
+  // "Served" is deliberately wider than the capability map. A BR is being
+  // worked toward if a capability serves it, if an open or archived change
+  // targets it, or if a registered gap names it in `tracked_by` — that last one
+  // is the ratchet doing its job, and re-reporting it here would punish the
+  // person who wrote the gap down. A BR reached by none of the three has
+  // nothing attached to it at all, which is the thing worth saying out loud.
+  const served = new Set([
+    ...Object.values(capabilityMap),
+    ...[...changes, ...archived].map((c) => c.br),
+    ...registeredGaps.map((g) => g.tracked_by),
+  ].filter(Boolean));
+
+  for (const { id } of milestones.flatMap((m) => m.brs)) {
+    if (served.has(id) || acknowledged.has(`br:${id}`)) continue;
+    findings.push({
+      kind: 'br',
+      subject: id,
+      detail: `Nothing serves this requirement — no capability maps to it, no change targets it, no registered gap tracks it. Write the capability spec that would satisfy it, open a change, or register it as a gap saying why not yet.`,
+    });
+  }
+
   for (const module of modules) {
     if (moduleMap[module] || acknowledged.has(`module:${module}`)) continue;
     findings.push({
