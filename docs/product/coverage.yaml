@@ -31,11 +31,15 @@ scopes:
   approval: [approval-gate]
   worktrees: [worktree-agent-node]
   worktree: [worktree-agent-node]
+  discuss: [agent-execution, node-model-selection]
+  preflight: [agent-execution]
+  schema: [workflow-graph]
   ui: [terminal-canvas-ui]
   canvas: [terminal-canvas-ui]
   splash: [terminal-canvas-ui]
   App.tsx: [terminal-canvas-ui]   # historical; prefer `ui` for new commits
   cli: [workflow-graph]
+  cli.ts: [workflow-graph, agent-execution]   # historical; prefer `cli`
   init: [workflow-graph]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
@@ -115,6 +119,25 @@ registered_gaps:
     kind: scope
     subject: presets
     reason: Same as GAP-03, from the commit side.
+    tracked_by: inbox
+
+  - id: GAP-05
+    kind: scope
+    subject: runstate
+    reason: >-
+      Same as GAP-02, from the commit side. feat(runstate) shipped resuming an
+      interrupted run, including a Discuss conversation — behaviour with no
+      capability spec describing it.
+    tracked_by: BR-04
+
+  - id: GAP-06
+    kind: scope
+    subject: nvidia-integration.yml
+    reason: >-
+      Not a product feature — a CI workflow change typed as `feat` with a
+      filename as its scope. Registered rather than mapped, because inventing a
+      capability to own a CI file would be the ledger lying to keep itself
+      green. Nothing to fix in the code; the commit is already written.
     tracked_by: inbox
 
 # How old an active change may get, in days, before the check calls it stale.

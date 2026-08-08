@@ -23,6 +23,10 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
   the specs.
 - Should the splash screen be part of `terminal-canvas-ui`, or is it its own
   thing? Shipped without deciding.
+- Two commits use a filename as their conventional-commit scope (`feat(cli.ts)`,
+  `feat(App.tsx)`) and one types a CI change as a feature
+  (`feat(nvidia-integration.yml)`). Nothing to fix in the code — but worth a
+  commit-scope convention somewhere, since the drift check reads these.
 
 ## Triaged
 
