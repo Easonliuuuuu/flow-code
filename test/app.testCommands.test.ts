@@ -57,10 +57,11 @@ function lastFrame(stdout: FakeStdout): string {
  * fixed `settle` is a race that stays hidden until the full suite's load
  * slows the render down.
  */
-async function settleUntil(stdout: FakeStdout, text: string, timeoutMs = 2000): Promise<void> {
+async function settleUntil(stdout: FakeStdout, text: string, timeoutMs = 2000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (lastFrame(stdout).includes(text)) return;
+    const frame = lastFrame(stdout);
+    if (frame.includes(text)) return frame;
     await new Promise((r) => setTimeout(r, 10));
   }
   throw new Error(`timed out waiting for ${JSON.stringify(text)} to reach the screen`);
@@ -178,9 +179,9 @@ describe('test-command panel', () => {
       expect(discoverCalls).toBe(0);
 
       stdin.write('d');
-      await settleUntil(stdout, 'go test ./...');
+      const frame = await settleUntil(stdout, 'go test ./...');
       expect(discoverCalls).toBe(1);
-      expect(lastFrame(stdout)).toContain('go.mod at the repo root');
+      expect(frame).toContain('go.mod at the repo root');
 
       stdin.write('j');
       await settle();
@@ -201,8 +202,8 @@ describe('test-command panel', () => {
     try {
       await settle();
       stdin.write('d');
-      await settleUntil(stdout, 'no provider configured');
-      expect(lastFrame(stdout)).toContain('no provider configured');
+      const frame = await settleUntil(stdout, 'no provider configured');
+      expect(frame).toContain('no provider configured');
       // Still usable: the heuristic hit is right there.
       stdin.write(' ');
       await settle();
