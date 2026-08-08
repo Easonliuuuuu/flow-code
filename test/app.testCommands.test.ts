@@ -201,7 +201,7 @@ describe('test-command panel', () => {
     try {
       await settle();
       stdin.write('d');
-      await settle();
+      await settleUntil(stdout, 'no provider configured');
       expect(lastFrame(stdout)).toContain('no provider configured');
       // Still usable: the heuristic hit is right there.
       stdin.write(' ');
