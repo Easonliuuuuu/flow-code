@@ -29,10 +29,10 @@ CI runs `npm run status:check`, which fails if `STATUS.md` is stale, or if a fea
 
 Got an idea mid-flow? One line in [`docs/product/inbox.md`](docs/product/inbox.md). No format, no ID.
 
-## Claude integration tests
+## Live integration tests
 
-`test/*.integration.test.ts` make real calls to the Claude Agent SDK rather than mocking it — they run separately via `npm run test:integration`, never as part of `npm test`, and skip themselves (not fail) when neither `CLAUDE_CODE_OAUTH_TOKEN` nor `ANTHROPIC_API_KEY` is set.
+`test/*.integration.test.ts` make real calls to a provider's API rather than mocking it — they run separately via `npm run test:integration`, never as part of `npm test`, and skip themselves (not fail) when the credentials they need aren't set. Today that's one suite, `live.integration.test.ts`, against the Claude Agent SDK (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`); a second provider would get its own `*.integration.test.ts` file rather than a branch inside this one.
 
-`.github/workflows/claude-integration.yml` runs this suite nightly (and on demand via `workflow_dispatch`), gated on a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `CLAUDE_CODE_OAUTH_TOKEN` (generate one with `claude setup-token`, or use a Claude CLI/subscription login).
+`.github/workflows/live-integration.yml` runs this suite nightly (and on demand via `workflow_dispatch`), gated on a repo secret named `CLAUDE_CODE_OAUTH_TOKEN` — the job itself is skipped entirely when that secret isn't configured, so it never blocks a contributor without one. To enable it: **Settings → Secrets and variables → Actions → New repository secret**, name `CLAUDE_CODE_OAUTH_TOKEN` (generate one with `claude setup-token`, or use a Claude CLI/subscription login).
 
 This suite previously ran an NVIDIA NIM-backed version (`nvidia-integration.yml`) on every push to `main`; it was moved off NVIDIA's throttled free tier and off the per-push trigger after it failed the large majority of runs against shared GitHub Actions IP rate limiting.
