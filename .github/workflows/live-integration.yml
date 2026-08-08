@@ -1,4 +1,4 @@
-name: Claude Integration
+name: Live Integration
 
 # Separate from ci.yml on purpose: this job makes real calls to the Claude
 # Agent SDK (cost + latency + external-service variance), so it must never
@@ -8,6 +8,10 @@ name: Claude Integration
 # that failed the large majority of the time against NVIDIA's throttled free
 # tier (see git history: nvidia-integration.yml). Use workflow_dispatch to
 # run it on demand against a branch.
+#
+# Named for what it is (a live-API suite) rather than which provider it
+# currently exercises — Claude today, the same slot a second provider's live
+# suite would occupy later, run separately rather than folded into this file.
 on:
   schedule:
     - cron: '0 9 * * *' # nightly, 09:00 UTC
