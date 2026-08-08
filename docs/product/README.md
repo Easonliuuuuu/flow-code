@@ -49,7 +49,7 @@ fails on a capability with no BR and on a BR id that doesn't exist in
 This is what makes a standalone small feature traceable without extra
 bookkeeping. `presets` (see below) has no OpenSpec change of its own — it maps
 straight to `workflow-graph`'s `spec.md`. Because `workflow-graph` maps to
-BR-01 in `capabilities:`, `presets` inherits that link automatically. It does
+BR-08 in `capabilities:`, `presets` inherits that link automatically. It does
 not need its own BR, and nobody has to remember to give it one.
 
 The full chain, in order, with the change process as an optional detour:
@@ -64,13 +64,25 @@ BR (roadmap.md)
 
 Doing this mapping once surfaced something worth knowing rather than hiding:
 three shipped, spec'd capabilities — `node-skills`, `node-subagents`,
-`worktree-agent-node` — don't fit any BR currently in `roadmap.md`. Forcing
-them under BR-01 to make the check quiet would have made 8 of the 9
-capabilities point at one BR, which would stop meaning much. They're
-registered as gaps (GAP-07/08/09) instead, because that's what's actually
-true: real engineering work with no business requirement written down for it
-yet. That is roadmap incompleteness, not code drift, and this system can now
-tell the two apart.
+`worktree-agent-node` — fit no BR then in `roadmap.md`. Forcing them under
+BR-01 to make the check quiet would have made 8 of the 9 capabilities point at
+one BR, which would have stopped meaning much, so they were registered as gaps
+(GAP-07/08/09) instead. That was roadmap incompleteness, not code drift, and
+the system could tell the two apart.
+
+They are now closed. The roadmap review that followed found all three serve one
+outcome nobody had written down — BR-07, *a node can gain capability without the
+run losing its boundaries* — and mapped them to it. Worth keeping as the worked
+example of the intended lifecycle: a gap is raised because the roadmap is
+incomplete, and it closes when the roadmap stops being incomplete. A gap that
+gets renewed instead of resolved is the failure mode.
+
+The same review is why the capability map is also a **BR quality check**, not
+only a traceability edge. Counting capabilities per BR tells you something the
+BR's own wording hides: one to three is healthy; five is the top of the range;
+more than that, or a count that doesn't match what the BR's label claims, means
+the BR has quietly become a bucket. BR-01 owning five capabilities is what
+showed it had drifted from "a stranger's first run" into "the product exists."
 
 ## The three kinds of drift
 
@@ -127,7 +139,7 @@ comment — small. `workflow-graph/spec.md` already had a `Workflow presets`
 requirement; it was just missing scenarios for what had actually shipped
 (the spec-kit preset, the CLI-install offer, the skill-scaffold offer). Adding
 those took one edit, no `openspec/changes/` directory, and no BR of its own —
-it inherits BR-01 through `workflow-graph` in `capabilities:` (see above).
+it inherits BR-08 through `workflow-graph` in `capabilities:` (see above).
 `flow-code watch`, by
 contrast, is staying a `registered_gaps` entry until M2 — a new command with
 its own UI, run-attachment, and liveness model is exactly the kind of thing

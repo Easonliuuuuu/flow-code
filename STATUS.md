@@ -8,11 +8,11 @@ Intent lives in [`docs/product/roadmap.md`](docs/product/roadmap.md); this file 
 the reality check against it. Nothing here is hand-written, so nothing here can
 flatter you.
 
-## M1 — Ship-ready
+## M0 — The core run works
 
-`█████████░ 241/254` tasks across 7 change(s)
+`██████████ 241/241` tasks across 6 change(s)
 
-### BR-01 — A stranger succeeds on their first run
+### BR-08 — A run does what the graph says it does
 
 **Capabilities:** `agent-execution`, `approval-gate`, `node-model-selection`, `test-command-discovery`, `workflow-graph`
 
@@ -22,8 +22,29 @@ flatter you.
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
 | `2026-08-02-add-per-node-model-picker` | archived | ██████████ 25/25 |
+
+### BR-09 — A run is legible without reading a transcript
+
+**Capabilities:** `terminal-canvas-ui`
+
+_No OpenSpec change serves this yet._
+
+### BR-07 — A node can gain capability without the run losing its boundaries
+
+**Capabilities:** `node-skills`, `node-subagents`, `worktree-agent-node`
+
+| Change | State | Tasks |
+| --- | --- | --- |
 | `2026-08-03-node-skills-and-test-discovery` | archived | ██████████ 39/39 |
 | `2026-08-06-node-subagents` | archived | ██████████ 43/43 |
+
+## M1 — Ship-ready
+
+`░░░░░░░░░░ 0/13` tasks across 1 change(s)
+
+### BR-01 — A stranger succeeds on their first run
+
+_No OpenSpec change serves this yet._
 
 ### BR-02 — The project's quality bar enforces itself
 
@@ -35,7 +56,7 @@ flatter you.
 
 `—` tasks across 0 change(s)
 
-### BR-03 — Watch mode is specified and reliable
+### BR-03 — A second window can watch a live run without disturbing it
 
 _No OpenSpec change serves this yet._
 
@@ -43,9 +64,7 @@ _No OpenSpec change serves this yet._
 
 _No OpenSpec change serves this yet._
 
-### BR-05 — The canvas stays legible on real graphs
-
-**Capabilities:** `terminal-canvas-ui`
+### BR-05 — A graph bigger than the default stays navigable
 
 _No OpenSpec change serves this yet._
 
@@ -68,7 +87,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 4 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -80,9 +99,6 @@ Known debt, already decided about. Green on purpose — but still debt.
 | GAP-02 | module `runstate` | BR-04 |
 | GAP-05 | scope `runstate` | BR-04 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
-| GAP-07 | capability `node-skills` | inbox |
-| GAP-08 | capability `node-subagents` | inbox |
-| GAP-09 | capability `worktree-agent-node` | inbox |
 
 ## Shipped
 
