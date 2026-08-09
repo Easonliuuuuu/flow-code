@@ -182,6 +182,18 @@ registered_gaps:
       state where this becomes a spec.
     tracked_by: closed — non-issue
 
+  - id: GAP-12
+    kind: scope
+    subject: testbed
+    reason: >-
+      Not a product feature — the `testbed` skill under `.claude/skills/`
+      generates a disposable local repo for driving the TUI by hand during
+      development. Registered rather than mapped, because inventing a
+      capability to own a dev-only test scaffold would be the ledger lying to
+      keep itself green. This is a permanent registration, not a pending
+      decision — there is no future state where this becomes a spec.
+    tracked_by: closed — non-issue
+
   # GAP-10 and GAP-11 come from the reverse edge: a BR that nothing is attached
   # to. Both are the same shape — a real surface exists, but it is described in
   # pieces inside capabilities that are *about* something else, so no spec is
