@@ -5,6 +5,7 @@ import { cmdDoctor } from './cli/doctor.js';
 import { cmdInit } from './cli/init.js';
 import { cmdNodeTypes } from './cli/nodeTypes.js';
 import { cmdRun } from './cli/run.js';
+import { cmdRuns } from './cli/runs.js';
 import { cmdSkills } from './cli/skills.js';
 import { cmdWatch } from './cli/watch.js';
 import { fail } from './cli/context.js';
@@ -19,11 +20,13 @@ Usage:
   flow-code run [--allow-dirty] [--no-splash]
                               Run the workflow (refuses a dirty tree unless overridden)
                               —no-splash skips the startup animation (or set FLOW_CODE_NO_SPLASH)
-  flow-code run --resume [runId]
+  flow-code run --resume, -r [runId]
                               Resume a run interrupted by ctrl+c/SIGTERM (defaults to the
                               most recent one); completed nodes are kept, the rest re-run,
                               and an interrupted Discuss conversation picks back up with
                               full history
+  flow-code runs              List past runs in this repo (id, when, status, node tally) —
+                              use a listed id with \`flow-code run --resume\` or \`flow-code watch\`
   flow-code watch [runId] [--no-splash]
                               Follow a run started elsewhere — same graph, read-only, fed by the
                               run's state file. Defaults to whichever run is currently being
@@ -40,6 +43,8 @@ async function main(): Promise<void> {
       return cmdInit(args);
     case 'run':
       return cmdRun(args);
+    case 'runs':
+      return cmdRuns();
     case 'watch':
       return cmdWatch(args);
     case 'node-types':

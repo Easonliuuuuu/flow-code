@@ -26,13 +26,13 @@ export interface ResumeArg {
 }
 
 /**
- * `--resume` takes an optional run id. The value after it is only a run id
- * when it exists and isn't another flag, so `run --resume --allow-dirty`
+ * `--resume`/`-r` takes an optional run id. The value after it is only a run
+ * id when it exists and isn't another flag, so `run --resume --allow-dirty`
  * resumes the most recent run rather than looking for one called
  * `--allow-dirty`.
  */
 export function parseResumeArg(args: string[]): ResumeArg {
-  const idx = args.indexOf('--resume');
+  const idx = args.findIndex((a) => a === '--resume' || a === '-r');
   if (idx < 0) return { resuming: false };
   const next = args[idx + 1];
   return next !== undefined && !next.startsWith('-') ? { resuming: true, runId: next } : { resuming: true };
@@ -98,17 +98,22 @@ export async function resetInterruptedWorktrees(repoRoot: string, resumeState: R
   }
 }
 
-/** The closing one-liner: how the run ended, and a tally of nodes by final status. */
-export function formatRunSummary(runId: string, nodes: RunState['nodes'], interrupted: boolean): string {
+/** Node count by final status, e.g. `2 done, 1 error` — shared by the closing summary and `flow-code runs`. */
+export function tallyNodeStatuses(nodes: RunState['nodes']): string {
   const counts = Object.values(nodes).reduce<Record<string, number>>(
     (acc, n) => ({ ...acc, [n.status]: (acc[n.status] ?? 0) + 1 }),
     {},
   );
+  return Object.entries(counts)
+    .map(([s, c]) => `${c} ${s}`)
+    .join(', ');
+}
+
+/** The closing one-liner: how the run ended, and a tally of nodes by final status. */
+export function formatRunSummary(runId: string, nodes: RunState['nodes'], interrupted: boolean): string {
   return (
     `flow-code: run ${runId.slice(0, 8)} ${interrupted ? 'interrupted' : 'finished'} — ` +
-    Object.entries(counts)
-      .map(([s, c]) => `${c} ${s}`)
-      .join(', ')
+    tallyNodeStatuses(nodes)
   );
 }
 

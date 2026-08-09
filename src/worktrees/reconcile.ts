@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { git, removeWorktree } from '../git/ops.js';
-import { listRunStates } from '../runstate/persist.js';
+import { listRunStates, pidAlive } from '../runstate/persist.js';
 
 export interface OrphanedWorktree {
   runId: string;
@@ -8,15 +8,6 @@ export interface OrphanedWorktree {
   instanceId: string;
   branch: string;
   dir: string;
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 /**
