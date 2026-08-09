@@ -117,6 +117,19 @@ const RATE_LIMIT_COLORS: Record<RateLimitTone, string> = {
   critical: 'red',
 };
 
+/** Renders a config value as a human-readable string; falls back to compact JSON for nested shapes. */
+function formatConfigValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) {
+    return value.every((v) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean')
+      ? value.join(', ')
+      : JSON.stringify(value);
+  }
+  if (value === null || value === undefined) return '(none)';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
 /** Flattens an approval gate's diffs into a scrollable list of lines, one label header per diff. */
 function diffLinesFor(diffs: Array<{ label?: string; diff: string }>): string[] {
   return diffs.flatMap((d) => [
@@ -2018,9 +2031,13 @@ export function App({
                   </Text>
                 </PanelTitle>
                 <Box flexDirection="column" flexGrow={1} overflow="hidden">
-                  <Text dimColor wrap="truncate-end">
-                    config: {JSON.stringify(focusedNode.config)}
-                  </Text>
+                  {Object.entries((focusedNode.config as Record<string, unknown> | null) ?? {})
+                    .filter(([key]) => key !== 'model' && key !== 'skills')
+                    .map(([key, value]) => (
+                      <Text key={key} dimColor wrap="truncate-end">
+                        {key}: {formatConfigValue(value)}
+                      </Text>
+                    ))}
                   {focusedNode.type.hasModelField ? (
                     <Text dimColor wrap="truncate-end">
                       model: {focusedNodeResolvedModel?.model ?? '(none — provider default)'}
