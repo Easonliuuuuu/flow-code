@@ -58,6 +58,19 @@ function fail(message: string): never {
 }
 
 /**
+ * Whether the startup splash plays for this invocation: skipped by `--no-splash`
+ * or `FLOW_CODE_NO_SPLASH` (any truthy value), otherwise on. A bare `run`/`watch`
+ * with a TTY is the only path that would have shown it, but the decision is
+ * computed here so it stays a tiny, testable unit.
+ */
+export function splashEnabled(args: string[], env: NodeJS.ProcessEnv): boolean {
+  if (args.includes('--no-splash')) return false;
+  const raw = env.FLOW_CODE_NO_SPLASH;
+  if (raw === undefined || raw === '') return true;
+  return !/^(1|true|yes|on)$/i.test(raw);
+}
+
+/**
  * Determines which provider backs every agent-driven node in this run, and
  * makes sure its API key ends up in the environment. Order of preference: a
  * previously saved per-repo choice (from `flow-code init`), then an
@@ -491,6 +504,7 @@ function loadWorkflowOrFail(repoRoot: string): Workflow {
  */
 async function cmdWatch(args: string[]): Promise<void> {
   const runId = args.find((a) => !a.startsWith('-'));
+  const splash = splashEnabled(args, process.env);
   const repoRoot = await repoRootFromCwd();
   const workflow = loadWorkflowOrFail(repoRoot);
   const nodeIds = workflow.nodes.map((n) => n.id);
@@ -525,6 +539,7 @@ async function cmdWatch(args: string[]): Promise<void> {
     // Nothing to interrupt — ctrl+c just closes the viewer, and the run it
     // was watching carries on in its own window.
     onInterrupt: () => {},
+    splash,
     modelContext: {
       providerId: saved?.provider,
       providerDefaultModel: saved?.model,
@@ -537,6 +552,7 @@ async function cmdWatch(args: string[]): Promise<void> {
 
 async function cmdRun(args: string[]): Promise<void> {
   const allowDirty = args.includes('--allow-dirty');
+  const splash = splashEnabled(args, process.env);
   const resumeIdx = args.indexOf('--resume');
   const resuming = resumeIdx >= 0;
   const resumeRunId =
@@ -711,6 +727,7 @@ async function cmdRun(args: string[]): Promise<void> {
     store,
     ports,
     onInterrupt: triggerInterrupt,
+    splash,
     modelContext: {
       providerId: resolved?.provider,
       providerDefaultModel: resolved?.model,
@@ -745,14 +762,16 @@ Usage:
                               Scaffold .flow-code/workflow.yaml with the default graph, set up
                               its test command(s), and pick the provider/model for the project
                               (re-run any time — already-configured steps ask before redoing)
-  flow-code run [--allow-dirty]
+  flow-code run [--allow-dirty] [--no-splash]
                               Run the workflow (refuses a dirty tree unless overridden)
+                              —no-splash skips the startup animation (or set FLOW_CODE_NO_SPLASH)
   flow-code run --resume [runId]
                               Resume a run interrupted by ctrl+c/SIGTERM (defaults to the
                               most recent one); completed nodes are kept, the rest re-run,
                               and an interrupted Discuss conversation picks back up with
                               full history
-  flow-code watch [runId]     Follow a run started elsewhere — same graph, read-only, fed by the
+  flow-code watch [runId] [--no-splash]
+                              Follow a run started elsewhere — same graph, read-only, fed by the
                               run's state file. Defaults to whichever run is currently being
                               written, and picks up a run started after the viewer was opened
   flow-code node-types        List built-in node types, capabilities, config and output shapes

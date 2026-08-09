@@ -2,14 +2,22 @@ import { render } from 'ink';
 import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { describe, expect, it } from 'vitest';
-import { Splash } from '../src/ui/splash.js';
+import {
+  AUTO_DONE_FRAME,
+  WORDMARK_LINE_COUNT,
+  WORDMARK_START,
+  Splash,
+  captionAt,
+  wordmarkLinesAt,
+} from '../src/ui/splash.js';
 
 /**
  * The startup splash's frame math (`stateAt`/`RUNS`/`AUTO_DONE_FRAME`) and
  * its skip conditions had no automated coverage — only the by-hand column
  * arithmetic in the component itself. These tests exercise both: that it
  * actually plays through the fail/retry chain to the wordmark and calls
- * `onDone` once, and that every skip path (keypress, narrow terminal, no
+ * `onDone` once, that the wordmark reveals line-by-line and settles on a
+ * green "ready", and that every skip path (keypress, narrow terminal, no
  * TTY) bails out immediately instead of waiting out the timer.
  */
 
@@ -88,14 +96,15 @@ describe('Splash', () => {
     expect(doneCount).toBe(0);
 
     // The fourth node's failure and the retry caption both appear along the
-    // way (D_END is frame 8 / 1600ms, D2_END is frame 17 / 3400ms).
+    // way (D_END is frame 8 / 1280ms, D2_END is frame 16 / 2560ms).
     await settle(1600);
     expect(lastFrame(stdout)).toMatch(/failed|retrying/);
 
-    // Past AUTO_DONE_FRAME (29 frames * 200ms = 5800ms): settled and done.
+    // Past AUTO_DONE_FRAME (28 frames * 160ms = 4480ms): settled and done.
     await settle(4000);
     const frame = lastFrame(stdout);
     expect(frame).toContain('agentic workflows, on your repo');
+    expect(frame).toContain('ready');
     expect(doneCount).toBe(1);
 
     unmount();
@@ -151,5 +160,30 @@ describe('Splash', () => {
     expect(lastFrame(stdout)).not.toContain('▶');
 
     unmount();
+  });
+});
+
+describe('Splash frame helpers', () => {
+  it('reveals the wordmark one line per frame, capped at the line count', () => {
+    expect(wordmarkLinesAt(0)).toBe(0);
+    expect(wordmarkLinesAt(WORDMARK_START - 1)).toBe(0);
+    expect(wordmarkLinesAt(WORDMARK_START)).toBe(1);
+    expect(wordmarkLinesAt(WORDMARK_START + 1)).toBe(2);
+    expect(wordmarkLinesAt(WORDMARK_START + WORDMARK_LINE_COUNT - 1)).toBe(WORDMARK_LINE_COUNT);
+    expect(wordmarkLinesAt(AUTO_DONE_FRAME)).toBe(WORDMARK_LINE_COUNT);
+  });
+
+  it('tells the fail/retry/ready story with the right colors', () => {
+    expect(captionAt(0)).toBeNull();
+    // D fails at frame 8 (D_END) and holds its red glyph until the retry kicks off.
+    expect(captionAt(9)).toEqual({ text: 'failed', color: 'red' });
+    // Retry window runs through D2_END (frame 16).
+    expect(captionAt(12)).toEqual({ text: 'retrying…', color: 'yellow' });
+    // Once the whole wordmark is up, the splash settles on a green "ready".
+    expect(captionAt(AUTO_DONE_FRAME)).toEqual({ text: 'ready', color: 'green' });
+  });
+
+  it('leaves AUTO_DONE_FRAME two hold frames past the full reveal', () => {
+    expect(AUTO_DONE_FRAME).toBe(WORDMARK_START + WORDMARK_LINE_COUNT + 2);
   });
 });
