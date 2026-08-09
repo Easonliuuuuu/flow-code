@@ -4,7 +4,7 @@ import {
   OpenAiCompatApiError,
   type ChatMessage,
 } from '../src/executors/openaiCompatClient.js';
-import type { NvidiaToolDef } from '../src/harness/nvidiaTools.js';
+import type { CompatToolDef } from '../src/harness/compatTools.js';
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -17,7 +17,7 @@ const OK_BODY = {
   choices: [{ message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
 };
 
-const NO_TOOLS: NvidiaToolDef[] = [];
+const NO_TOOLS: CompatToolDef[] = [];
 
 function chatOpts() {
   return {

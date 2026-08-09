@@ -117,9 +117,9 @@ edges: []
     // Both runners build their system prompt as `${rolePrompt}\n\n${boundary}`,
     // differing only in which boundary text their tool surface warrants. The
     // skill half is therefore identical by construction — assert that it is.
-    const { nvidiaBoundaryPrompt } = await import('../../src/harness/nvidiaTools.js');
+    const { compatBoundaryPrompt } = await import('../../src/harness/compatTools.js');
     const sdkPrompt = `${rolePrompt}\n\n${compileToolPolicy(caps, '/repo').boundaryPrompt}`;
-    const compatPrompt = `${rolePrompt}\n\n${nvidiaBoundaryPrompt(caps, '/repo')}`;
+    const compatPrompt = `${rolePrompt}\n\n${compatBoundaryPrompt(caps, '/repo')}`;
 
     expect(sdkPrompt).toContain('HOUSE RULES');
     expect(compatPrompt).toContain('HOUSE RULES');

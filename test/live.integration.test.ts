@@ -154,7 +154,7 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
 
       expect(finalText.length).toBeGreaterThan(0);
       expect(readFileSync(join(dir, 'math.js'), 'utf8')).toContain('a + b');
-      // Claude's own tool name, not the NVIDIA/OpenAI-compat backend's
+      // Claude's own tool name, not the OpenAI-compat backend's
       // 'run_shell' alias (src/harness/compile.ts EXEC_TOOLS).
       const shellCalls = store.activityFor('impl').filter((e) => e.tool === 'Bash');
       // The SDK's Bash tool_response carries no exit-code field (confirmed by
@@ -199,7 +199,7 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
       // never offered, so the file must be exactly what it started as.
       expect(readFileSync(join(dir, 'math.js'), 'utf8')).toBe(original);
       const activity = store.activityFor('review');
-      // Claude's own tool names (Write/Edit), not the NVIDIA/OpenAI-compat
+      // Claude's own tool names (Write/Edit), not the OpenAI-compat
       // backend's aliases — and specifically no *allowed* call, since a
       // denied attempt is exactly what this test expects to see.
       expect(

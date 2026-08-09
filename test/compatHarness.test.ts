@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { capabilitySet } from '../src/capabilities.js';
-import { createNvidiaInterceptor } from '../src/harness/nvidiaIntercept.js';
-import { nvidiaBoundaryPrompt, toolsForCapabilities } from '../src/harness/nvidiaTools.js';
+import { createCompatInterceptor } from '../src/harness/compatIntercept.js';
+import { compatBoundaryPrompt, toolsForCapabilities } from '../src/harness/compatTools.js';
 import {
   editFileTool,
   globTool,
@@ -13,11 +13,11 @@ import {
   readFileTool,
   runShellTool,
   writeFileTool,
-} from '../src/executors/nvidiaToolExec.js';
+} from '../src/executors/compatToolExec.js';
 import { RunStateStore } from '../src/runstate/store.js';
 
 function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'flow-code-nvidia-test-'));
+  return mkdtempSync(join(tmpdir(), 'flow-code-compat-test-'));
 }
 
 describe('toolsForCapabilities', () => {
@@ -44,27 +44,27 @@ describe('toolsForCapabilities', () => {
   });
 });
 
-describe('nvidiaBoundaryPrompt', () => {
+describe('compatBoundaryPrompt', () => {
   it('states the working directory and no-edit boundary', () => {
-    const prompt = nvidiaBoundaryPrompt(capabilitySet('read'), '/repo');
+    const prompt = compatBoundaryPrompt(capabilitySet('read'), '/repo');
     expect(prompt).toContain('/repo');
     expect(prompt).toContain('cannot create, edit, or delete files');
     expect(prompt).toContain('cannot run shell commands');
   });
 
   it('states the git-write boundary for exec-capable nodes', () => {
-    const prompt = nvidiaBoundaryPrompt(capabilitySet('read', 'edit', 'exec'), '/repo');
+    const prompt = compatBoundaryPrompt(capabilitySet('read', 'edit', 'exec'), '/repo');
     expect(prompt).toContain('git commands that mutate history, refs, or remotes are denied');
   });
 });
 
 function interceptorFor(caps: ReturnType<typeof capabilitySet>, workingDir = '/repo') {
   const store = new RunStateStore({ repoRoot: workingDir, nodeIds: ['n1'] });
-  const interceptor = createNvidiaInterceptor({ nodeId: 'n1', capabilities: caps, workingDir, store });
+  const interceptor = createCompatInterceptor({ nodeId: 'n1', capabilities: caps, workingDir, store });
   return { interceptor, store };
 }
 
-describe('nvidia capability enforcement (parity with the Claude-path harness)', () => {
+describe('OpenAI-compat capability enforcement (parity with the Claude-path harness)', () => {
   it('denies write_file/edit_file without edit, allows with it', () => {
     const { interceptor } = interceptorFor(capabilitySet('read'));
     expect(interceptor.check('write_file', { path: 'a.ts' }, 't1').behavior).toBe('deny');
@@ -143,7 +143,7 @@ describe('nvidia capability enforcement (parity with the Claude-path harness)', 
   });
 });
 
-describe('nvidia tool executors', () => {
+describe('OpenAI-compat tool executors', () => {
   it('read_file / write_file / edit_file round-trip', () => {
     const dir = tempDir();
     writeFileTool(dir, { path: 'a.txt', content: 'hello' });

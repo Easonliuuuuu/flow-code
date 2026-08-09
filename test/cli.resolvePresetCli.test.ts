@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { resolvePresetCli, type CliInstallAction } from '../src/cli.js';
+import { resolvePresetCli, type CliInstallAction } from '../src/cli/presetSetup.js';
 import { getPreset, DEFAULT_PRESET } from '../src/presets.js';
 
 const OPENSPEC = getPreset('openspec')!;

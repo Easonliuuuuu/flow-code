@@ -44,12 +44,12 @@ describe('fetchModelIds', () => {
     expect(models).toEqual(['gpt-4o', 'gpt-4o-mini']);
   });
 
-  it('passes NVIDIA and OpenRouter lists through unfiltered, sorted', async () => {
+  it('passes OpenRouter lists through unfiltered, sorted', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'z-model' }, { id: 'a-model' }] })),
     );
-    const { models } = await fetchModelIds('nvidia', 'nvapi-test');
+    const { models } = await fetchModelIds('openrouter', 'sk-or-test');
     expect(models).toEqual(['a-model', 'z-model']);
   });
 
@@ -72,7 +72,7 @@ describe('fetchModelIds', () => {
       'fetch',
       vi.fn().mockResolvedValue(jsonResponse({ data: [{ id: 'ok-model' }, { id: 42 }, {}] })),
     );
-    const { models, error } = await fetchModelIds('nvidia', 'nvapi-test');
+    const { models, error } = await fetchModelIds('openrouter', 'sk-or-test');
     expect(error).toBeUndefined();
     expect(models).toEqual(['ok-model']);
   });

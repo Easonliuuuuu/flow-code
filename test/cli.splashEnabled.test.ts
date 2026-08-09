@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { splashEnabled } from '../src/cli.js';
+import { splashEnabled } from '../src/cli/args.js';
 
 describe('splashEnabled', () => {
   it('is on by default', () => {

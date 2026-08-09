@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { resolveProvider } from '../src/cli.js';
+import { resolveProvider } from '../src/cli/provider.js';
 import { saveCredentials } from '../src/engine/credentials.js';
 import { workflowFromYaml } from './helpers.js';
 
@@ -29,8 +29,6 @@ beforeEach(() => {
   // every test below opts specific env vars (or none) back in explicitly.
   vi.stubEnv('ANTHROPIC_API_KEY', undefined);
   vi.stubEnv('CLAUDE_CODE_OAUTH_TOKEN', undefined);
-  vi.stubEnv('NVIDIA_API_KEY', undefined);
-  vi.stubEnv('NVIDIA_API_KEY_2', undefined);
   vi.stubEnv('OPENAI_API_KEY', undefined);
   vi.stubEnv('OPENAI_API_KEY_2', undefined);
   vi.stubEnv('OPENROUTER_API_KEY', undefined);
@@ -65,9 +63,9 @@ describe('resolveProvider', () => {
 
   it('falls back to an env-var-configured provider when nothing is saved', async () => {
     const repo = tempRepo();
-    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-test');
+    vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-test');
     const result = await resolveProvider(repo, workflowFromYaml(AGENT_DRIVEN_WORKFLOW));
-    expect(result).toEqual({ provider: 'nvidia' });
+    expect(result).toEqual({ provider: 'openrouter' });
   });
 
   it('falls back to claude when Claude Agent SDK credentials are present', async () => {

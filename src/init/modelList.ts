@@ -1,4 +1,3 @@
-import { NVIDIA_BASE_URL } from '../executors/nvidiaClient.js';
 import { OPENAI_BASE_URL } from '../executors/openaiRunner.js';
 import { OPENROUTER_BASE_URL } from '../executors/openrouterRunner.js';
 import type { ProviderId } from '../engine/providers.js';
@@ -28,8 +27,6 @@ export interface ModelListResult {
 
 function baseUrlFor(provider: ProviderId): string {
   switch (provider) {
-    case 'nvidia':
-      return NVIDIA_BASE_URL;
     case 'openai':
       return OPENAI_BASE_URL;
     case 'openrouter':

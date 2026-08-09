@@ -25,7 +25,7 @@
   ],
   "type": "module",
   "bin": {
-    "flow-code": "./dist/cli.js"
+    "flow-code": "dist/cli.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

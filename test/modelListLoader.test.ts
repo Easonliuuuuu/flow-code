@@ -5,7 +5,7 @@ describe('createModelListLoader', () => {
   it('starts loading and reports the loaded models once the fetch resolves', async () => {
     const fetchFn = vi.fn().mockResolvedValue({ models: ['a', 'b'] });
     const onChange = vi.fn();
-    const loader = createModelListLoader('nvidia', 'key', onChange, fetchFn);
+    const loader = createModelListLoader('openrouter', 'key', onChange, fetchFn);
 
     expect(loader.getState()).toEqual({ status: 'loading' });
     loader.ensureLoaded();
@@ -14,7 +14,7 @@ describe('createModelListLoader', () => {
 
     expect(loader.getState()).toEqual({ status: 'loaded', models: ['a', 'b'] });
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(fetchFn).toHaveBeenCalledWith('nvidia', 'key');
+    expect(fetchFn).toHaveBeenCalledWith('openrouter', 'key');
   });
 
   it('surfaces a failed fetch as state, never throwing', async () => {

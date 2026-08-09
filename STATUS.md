@@ -107,4 +107,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-7 archived change(s), 254 tasks. 15 modules under `src/`, 11 capability specs.
+7 archived change(s), 254 tasks. 16 modules under `src/`, 11 capability specs.

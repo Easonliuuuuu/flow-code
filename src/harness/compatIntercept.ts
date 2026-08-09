@@ -1,5 +1,5 @@
 /**
- * Layer 3 for the NVIDIA-backed runner: per-call capability check, mirroring
+ * Layer 3 for the OpenAI-compatible runners: per-call capability check, mirroring
  * intercept.ts's contract (same PermissionDecision/ActivityEntry shapes) but
  * keyed to this runner's own tool names — there is no SDK hook to wire into.
  */
@@ -12,14 +12,14 @@ import {
   type PermissionDecision,
 } from './intercept.js';
 import { classifyCommand } from './gitCommands.js';
-import { EDIT_TOOL_NAMES, EXEC_TOOL_NAMES, READ_TOOL_NAMES } from './nvidiaTools.js';
+import { EDIT_TOOL_NAMES, EXEC_TOOL_NAMES, READ_TOOL_NAMES } from './compatTools.js';
 import type { RunStateStore } from '../runstate/store.js';
 
 interface InternalDecision extends PermissionDecision {
   missingCapability?: string;
 }
 
-export interface NvidiaInterceptorOptions {
+export interface CompatInterceptorOptions {
   nodeId: string;
   instanceId?: string;
   capabilities: CapabilitySet;
@@ -27,7 +27,7 @@ export interface NvidiaInterceptorOptions {
   store: RunStateStore;
 }
 
-export interface NvidiaInterceptor {
+export interface CompatInterceptor {
   /** Inspect a tool call before it executes; every call is logged from here. */
   check(toolName: string, input: Record<string, unknown>, toolUseId: string): PermissionDecision;
   /** Complete an allowed call's log entry once the tool finished. */
@@ -53,7 +53,7 @@ function pathArg(input: Record<string, unknown>): string | undefined {
   return typeof input['path'] === 'string' ? input['path'] : undefined;
 }
 
-export function createNvidiaInterceptor(opts: NvidiaInterceptorOptions): NvidiaInterceptor {
+export function createCompatInterceptor(opts: CompatInterceptorOptions): CompatInterceptor {
   const { nodeId, instanceId, capabilities: caps, workingDir, store } = opts;
   const startTimes = new Map<string, number>();
   const bashAvailable = caps.has('exec') || caps.has('git-read') || caps.has('git-write');

@@ -22,13 +22,13 @@ describe('credentials persistence', () => {
   it('round-trips an optional second (rotation) key', () => {
     const repo = tempRepo();
     saveCredentials(repo, {
-      provider: 'nvidia',
+      provider: 'openrouter',
       apiKey: 'nvapi-primary',
       apiKey2: 'nvapi-secondary',
       model: 'meta/llama-3.1-70b-instruct',
     });
     expect(loadCredentials(repo)).toEqual({
-      provider: 'nvidia',
+      provider: 'openrouter',
       apiKey: 'nvapi-primary',
       apiKey2: 'nvapi-secondary',
       model: 'meta/llama-3.1-70b-instruct',
@@ -64,7 +64,7 @@ describe('credentials persistence', () => {
     mkdirSync(join(repo, '.flow-code'), { recursive: true });
     writeFileSync(
       path,
-      JSON.stringify({ provider: 'claude', nvidiaApiKey: 'nvapi-old', nvidiaApiKey2: 'nvapi-old-2' }),
+      JSON.stringify({ provider: 'claude', legacyApiKey: 'key-old', legacyApiKey2: 'key-old-2' }),
       'utf8',
     );
     expect(loadCredentials(repo)).toBeUndefined();
