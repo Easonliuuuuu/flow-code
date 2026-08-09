@@ -1,4 +1,4 @@
-import type { NvidiaToolDef } from '../harness/nvidiaTools.js';
+import type { CompatToolDef } from '../harness/compatTools.js';
 
 export interface ChatToolCall {
   id: string;
@@ -60,8 +60,8 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRIES = 3;
 
 /**
- * Per-attempt request timeout. Observed against NVIDIA's NIM endpoint under
- * load: a connection is accepted and then simply never answered — no error,
+ * Per-attempt request timeout. Observed against a hosted inference endpoint
+ * under load: a connection is accepted and then simply never answered — no error,
  * no 429/503, nothing — so a plain `fetch` with no client-side timeout can
  * hang for the lifetime of the run instead of hitting the retry path.
  */
@@ -101,8 +101,8 @@ function retryDelayMs(attempt: number, retryAfterSeconds: number | undefined): n
 }
 
 /**
- * One chat-completions call against any OpenAI-compatible endpoint (NVIDIA
- * NIM, OpenAI, OpenRouter, …) — the request/response shape is standard
+ * One chat-completions call against any OpenAI-compatible endpoint (OpenAI,
+ * OpenRouter, …) — the request/response shape is standard
  * across all of them, only the base URL, key, and model differ.
  *
  * `apiKeys` supports rotation: when every retry on the current key is still
@@ -115,7 +115,7 @@ export async function callOpenAiCompatChat(opts: {
   baseUrl: string;
   model: string;
   messages: ChatMessage[];
-  tools: NvidiaToolDef[];
+  tools: CompatToolDef[];
   apiKeys: string[];
   signal?: AbortSignal;
   /** Called once per successful response, so token counts climb live mid-turn. */

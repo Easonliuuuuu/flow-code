@@ -1,12 +1,12 @@
 /**
- * Tool vocabulary offered to the NVIDIA-backed runner via OpenAI-style
+ * Tool vocabulary offered to the OpenAI-compatible runners via OpenAI-style
  * function calling. Independent of compile.ts on purpose (see design.md):
- * NVIDIA's chat-completions API has no built-in tools, so flow-code owns the
+ * a chat-completions API has no built-in tools, so flow-code owns the
  * full tool surface, not just a Claude tool allow/deny list.
  */
 import type { CapabilitySet } from '../capabilities.js';
 
-export interface NvidiaToolDef {
+export interface CompatToolDef {
   type: 'function';
   function: {
     name: string;
@@ -23,7 +23,7 @@ export const READ_TOOL_NAMES = ['read_file', 'list_dir', 'glob', 'grep'] as cons
 export const EDIT_TOOL_NAMES = ['write_file', 'edit_file'] as const;
 export const EXEC_TOOL_NAMES = ['run_shell'] as const;
 
-const READ_TOOLS: NvidiaToolDef[] = [
+const READ_TOOLS: CompatToolDef[] = [
   {
     type: 'function',
     function: {
@@ -77,7 +77,7 @@ const READ_TOOLS: NvidiaToolDef[] = [
   },
 ];
 
-const EDIT_TOOLS: NvidiaToolDef[] = [
+const EDIT_TOOLS: CompatToolDef[] = [
   {
     type: 'function',
     function: {
@@ -112,7 +112,7 @@ const EDIT_TOOLS: NvidiaToolDef[] = [
   },
 ];
 
-const EXEC_TOOLS: NvidiaToolDef[] = [
+const EXEC_TOOLS: CompatToolDef[] = [
   {
     type: 'function',
     function: {
@@ -132,16 +132,16 @@ function bashAvailable(caps: CapabilitySet): boolean {
 }
 
 /** Layer 2 equivalent to compile.ts's disallowedTools: only offer tools the capability set allows. */
-export function toolsForCapabilities(caps: CapabilitySet): NvidiaToolDef[] {
-  const tools: NvidiaToolDef[] = [];
+export function toolsForCapabilities(caps: CapabilitySet): CompatToolDef[] {
+  const tools: CompatToolDef[] = [];
   if (caps.has('read')) tools.push(...READ_TOOLS);
   if (caps.has('edit')) tools.push(...EDIT_TOOLS);
   if (bashAvailable(caps)) tools.push(...EXEC_TOOLS);
   return tools;
 }
 
-/** Layer 1: states the boundary in the system prompt. Guarantees nothing — see nvidiaIntercept.ts for layer 3. */
-export function nvidiaBoundaryPrompt(caps: CapabilitySet, workingDir: string): string {
+/** Layer 1: states the boundary in the system prompt. Guarantees nothing — see compatIntercept.ts for layer 3. */
+export function compatBoundaryPrompt(caps: CapabilitySet, workingDir: string): string {
   const lines: string[] = [
     'Capability boundary (enforced structurally, outside this prompt):',
     `- You may only operate inside ${workingDir}. File access outside it is denied.`,

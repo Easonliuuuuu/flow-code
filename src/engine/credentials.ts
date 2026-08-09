@@ -22,8 +22,9 @@ export function credentialsPath(repoRoot: string): string {
  * Returns undefined on anything unreadable/malformed/missing `model` — the
  * caller re-prompts (via `flow-code init`) rather than crashing. A missing
  * `model` also doubles as the migration path for credentials files written by
- * the pre-project-wide-provider shape (`nvidiaApiKey`/`nvidiaApiKey2`, no
- * `model`): they simply fail this check like any other malformed file.
+ * the long-since-replaced pre-project-wide-provider shape (a bare per-provider
+ * key pair, no `model`): they simply fail this check like any other malformed
+ * file, and `init` writes the current shape over them.
  */
 export function loadCredentials(repoRoot: string): StoredCredentials | undefined {
   const path = credentialsPath(repoRoot);

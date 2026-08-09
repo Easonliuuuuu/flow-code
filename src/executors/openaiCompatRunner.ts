@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { compileToolPolicy } from '../harness/compile.js';
-import { createNvidiaInterceptor, type NvidiaInterceptor } from '../harness/nvidiaIntercept.js';
-import { nvidiaBoundaryPrompt, toolsForCapabilities } from '../harness/nvidiaTools.js';
+import { createCompatInterceptor, type CompatInterceptor } from '../harness/compatIntercept.js';
+import { compatBoundaryPrompt, toolsForCapabilities } from '../harness/compatTools.js';
 import type { RunStateStore } from '../runstate/store.js';
 import {
   RunInterruptedError,
@@ -18,7 +18,7 @@ import {
   readFileTool,
   runShellTool,
   writeFileTool,
-} from './nvidiaToolExec.js';
+} from './compatToolExec.js';
 
 /** Fails a run rather than looping forever against a model that never stops calling tools. */
 const MAX_TOOL_LOOP_ITERATIONS = 40;
@@ -62,11 +62,11 @@ async function executeTool(
 }
 
 function systemPrompt(req: AgentSessionRequest): string {
-  return `${req.rolePrompt}\n\n${nvidiaBoundaryPrompt(req.capabilities, req.workingDir)}`;
+  return `${req.rolePrompt}\n\n${compatBoundaryPrompt(req.capabilities, req.workingDir)}`;
 }
 
-function buildInterceptor(req: AgentSessionRequest, store: RunStateStore): NvidiaInterceptor {
-  return createNvidiaInterceptor({
+function buildInterceptor(req: AgentSessionRequest, store: RunStateStore): CompatInterceptor {
+  return createCompatInterceptor({
     nodeId: req.nodeId,
     ...(req.instanceId !== undefined ? { instanceId: req.instanceId } : {}),
     capabilities: req.capabilities,
@@ -86,7 +86,7 @@ async function runTurn(
   messages: ChatMessage[],
   req: AgentSessionRequest,
   apiKeys: string[],
-  interceptor: NvidiaInterceptor,
+  interceptor: CompatInterceptor,
   store: RunStateStore,
 ): Promise<string> {
   const tools = toolsForCapabilities(req.capabilities);
@@ -157,9 +157,9 @@ async function runTurn(
 }
 
 /**
- * SessionRunner backed by any OpenAI-compatible chat-completions API (NVIDIA
- * NIM, OpenAI, OpenRouter, …). Brings its own tool-calling loop and
- * capability enforcement (see harness/nvidiaTools.ts, harness/nvidiaIntercept.ts)
+ * SessionRunner backed by any OpenAI-compatible chat-completions API (OpenAI,
+ * OpenRouter, …). Brings its own tool-calling loop and
+ * capability enforcement (see harness/compatTools.ts, harness/compatIntercept.ts)
  * since these APIs have no built-in tools or permission-hook system the way
  * the Claude Agent SDK does.
  *

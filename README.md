@@ -69,10 +69,9 @@ node dist/cli.js run
 | Claude | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` | `claude` CLI login |
 | Codex | `OPENAI_API_KEY` or `CODEX_API_KEY` | `codex` CLI login |
 | OpenAI | `OPENAI_API_KEY` | — |
-| NVIDIA NIM | `NVIDIA_API_KEY` | — |
 | OpenRouter | `OPENROUTER_API_KEY` | — |
 
-Claude and Codex fall back to their own CLI login when no key is set, drawing on that subscription's usage rather than metered API billing. OpenAI, NVIDIA NIM, and OpenRouter always bill against the key provided.
+Claude and Codex fall back to their own CLI login when no key is set, drawing on that subscription's usage rather than metered API billing. OpenAI and OpenRouter always bill against the key provided.
 
 Each node can override the provider and model, so an expensive step and a cheap one need not share either.
 

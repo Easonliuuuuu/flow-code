@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { scaffoldWorkflow } from '../src/cli.js';
+import { scaffoldWorkflow } from '../src/cli/presetSetup.js';
 import { DEFAULT_PRESET, getPreset } from '../src/presets.js';
 
 function tempRepo(): string {
