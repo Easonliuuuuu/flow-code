@@ -1,4 +1,7 @@
-# flow-code
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo/flow-code-dark.svg">
+  <img alt="flow-code" src="docs/logo/flow-code-light.svg" height="70">
+</picture>
 
 [![CI](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)

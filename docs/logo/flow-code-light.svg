@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 140" role="img" aria-label="flow-code">
+  <title>flow-code</title>
+  <g>
+    <line x1="26" y1="112" x2="72" y2="78" stroke="#1b1f23" stroke-opacity="0.35" stroke-width="4"/>
+    <line x1="72" y1="78" x2="118" y2="34" stroke="#3fb950" stroke-width="4"/>
+    <circle cx="26" cy="112" r="11" fill="none" stroke="#1b1f23" stroke-opacity="0.6" stroke-width="4"/>
+    <circle cx="72" cy="78" r="15" fill="#39c5e8"/>
+    <circle cx="118" cy="34" r="19" fill="#3fb950"/>
+  </g>
+  <text x="170" y="92" font-family="ui-monospace, SFMono-Regular, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace" font-weight="700" font-size="56" letter-spacing="-1">
+    <tspan fill="#1b1f23">flow</tspan><tspan fill="#3fb950">&#8594;</tspan><tspan fill="#1b1f23">code</tspan>
+  </text>
+</svg>
