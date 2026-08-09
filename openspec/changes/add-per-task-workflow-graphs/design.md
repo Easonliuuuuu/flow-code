@@ -41,6 +41,20 @@ graphs:
 
 `settings` — the budget included — is declared once. A ceiling the shape gets to raise is not a ceiling, and a `hardened` graph that could grant itself more room than `quick` would make the run's maximum cost a function of a choice made after the file was reviewed. A shape that needs more work carries more nodes, each with its own `node.budget`. A `budget` inside a named graph is rejected, naming the graph.
 
+There are exactly two budget scopes, and this is the settled model: **run-wide, and per-node.** Nothing sits between them.
+
+### The run meter reads against the selected graph, not the run ceiling
+
+Rejecting a per-graph budget leaves a real problem, and it is worth naming because it is the honest half of the argument for one. `settings.budget` has two jobs: it stops a run, and — per `brief.md`, where "what it cost" is one of the three things a chat log hides — it makes cost legible. The stop wants one number set for the most expensive shape. Legibility does not: a `quick` run reporting "3k of 2,000,000" is a proportion that tells you nothing.
+
+The fix is to derive rather than declare. The expected cost of a run is the sum of the selected graph's per-node budgets, which is shape-specific by construction and needs no new field in the file. `tokensPerRun` stays exactly what it is — the hard backstop no shape can raise — and stops being asked to double as the denominator on a meter.
+
+*Alternative considered:* letting a named graph declare its own budget purely for display. Rejected — a number that looks like a ceiling and is not one is worse than either.
+
+### Per-node minutes, if it lands, overrides the per-node default and never the run ceiling
+
+Tracked separately (see `docs/product/inbox.md`) because it is a budget feature rather than a named-graph one, but the precedence has to match what `node.budget.tokens` already does: it overrides `settings.budget.tokensPerNode`, a per-node *default*, and never `tokensPerRun`. A node that could outlive `minutesPerRun` would be the ceiling-the-part-can-raise problem one level down. A node stops at whichever comes first — its own limit, or what is left of the run's.
+
 ### Selection happens before the first node, and is recorded
 
 `run` resolves the graph name up front: from an explicit name if given, otherwise via the `selectFromList` picker `init` already uses. Without a TTY and without a name the run fails rather than guessing — picking a verification depth on the user's behalf is exactly the decision this feature exists to give back. `RecordedGraph.selected` already exists to carry the answer.
@@ -64,5 +78,9 @@ Task 1.1 is settling this. Everything in sections 3–5 is independent of the an
 
 ## Open Questions
 
-- Should a named graph override the *non-ceiling* parts of `settings` — `model`, `concurrency`, `subagents`? The budget argument does not apply: a `quick` shape wanting a cheaper default model is a preference, not an escape from a limit. Allowing it for some settings and not others needs the line drawn on purpose rather than by whichever is implemented first.
 - Does specifying how `watch` renders close GAP-01, or does `watch` still need a capability spec about the command itself (attaching, pinning, refusing writes, reporting liveness)? Assume not closed until the shape of section 2 is settled.
+
+**Resolved, recorded so they are not reopened by accident:**
+
+- *Can a named graph override the budget?* No. Two scopes only — run-wide and per-node — with the run meter deriving its denominator from the selected graph rather than a declared per-graph number. Both decisions above.
+- *Can a named graph override the non-ceiling settings — `model`, `concurrency`, `subagents`?* Not now. The budget argument genuinely does not reach them (a `quick` shape wanting a cheaper default model is a preference, not an escape from a limit), so this is a deprioritization rather than a refusal: no real user has asked, and inventing the config surface ahead of the demand is how a file grows fields nobody set. Revisit on a request, not on a hunch.
