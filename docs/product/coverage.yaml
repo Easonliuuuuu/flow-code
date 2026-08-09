@@ -104,6 +104,7 @@ capabilities:
   worktree-agent-node: BR-07
   ci-pipeline: BR-02
   project-documentation: BR-02
+  mcp-driver-connector: BR-06
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
@@ -116,6 +117,15 @@ changes:
       Blocked on M2 by the proposal's own argument — guest mode adds a second
       producer of run-state and should not land while driver mode is still
       settling.
+  add-mcp-driver-connector:
+    br: BR-06
+    status: parked
+    note: >-
+      Blocked on M2, same reasoning as add-guest-mode-reporter — a second entry
+      point into the engine before driver mode is proven under real conditions.
+      Complements rather than replaces guest mode: this change keeps the
+      harness (flow-code still executes) where guest mode deliberately drops it
+      (a foreign agent self-reports instead).
 
 # Archived changes, mapped to the BR they closed. Used for the milestone rollup.
 # Unmapped archives are reported, not failed — the ledger postdates them.

@@ -72,13 +72,16 @@ _No OpenSpec change serves this yet._
 
 ## M3 — Meet users in the CLI they already use
 
-`░░░░░░░░░░ 0/29` tasks across 1 change(s)
+`░░░░░░░░░░ 0/53` tasks across 2 change(s)
 
 ### BR-06 — An external agent can drive the graph
+
+**Capabilities:** `mcp-driver-connector`
 
 | Change | State | Tasks |
 | --- | --- | --- |
 | `add-guest-mode-reporter` | parked | ░░░░░░░░░░ 0/29 |
+| `add-mcp-driver-connector` | parked | ░░░░░░░░░░ 0/24 |
 
 ## Parked
 
@@ -86,6 +89,8 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 - **`add-guest-mode-reporter`** (BR-06), opened 2026-08-04
   Blocked on M2 by the proposal's own argument — guest mode adds a second producer of run-state and should not land while driver mode is still settling.
+- **`add-mcp-driver-connector`** (BR-06), opened 2026-08-09
+  Blocked on M2, same reasoning as add-guest-mode-reporter — a second entry point into the engine before driver mode is proven under real conditions. Complements rather than replaces guest mode: this change keeps the harness (flow-code still executes) where guest mode deliberately drops it (a foreign agent self-reports instead).
 
 ## Drift
 
