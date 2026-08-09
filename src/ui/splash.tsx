@@ -153,8 +153,13 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
 
   useEffect(() => {
     if (skip) {
-      finish();
-      return;
+      // Deferred rather than called inline: this effect can run synchronously
+      // within the caller's `render()` call, and `onDone` (in ui/index.ts)
+      // closes over the `const` holding that same render's return value —
+      // calling it inline risks a TDZ crash ("Cannot access 'splash' before
+      // initialization") by firing before that assignment completes.
+      const timer = setTimeout(finish, 0);
+      return () => clearTimeout(timer);
     }
     const timer = setInterval(() => {
       setFrame((f) => {

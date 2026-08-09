@@ -20,6 +20,22 @@ export function runUi(opts: {
   watch?: boolean;
 }): Promise<void> {
   return new Promise((resolve) => {
+    // Ink's raw-mode-enabled stdin is what normally keeps the process alive
+    // while a UI is mounted, but the splash→App handoff — two sequential
+    // Ink instances on the same stdin — has a window where nothing holds
+    // the event loop open: the splash unrefs stdin on unmount, and the new
+    // instance's own raw-mode ref lands via React's scheduler rather than
+    // synchronously. When there's nothing else keeping Node alive (e.g. a
+    // fresh repo with no `.flow-code/runs/` yet, where the watcher's
+    // fs.watch never attaches and its poll timer is deliberately unref'd —
+    // see RunStateWatcher.start), the process can exit mid-session with no
+    // error and no unmount. A trivial ref'd timer for the lifetime of this
+    // promise closes that gap without depending on Ink internals.
+    const keepAlive = setInterval(() => {}, 1 << 30);
+    const finish = (): void => {
+      clearInterval(keepAlive);
+      resolve();
+    };
     const mountApp = (): void => {
       const instance = render(
         React.createElement(App, {
@@ -30,19 +46,19 @@ export function runUi(opts: {
           ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
           onExit: () => {
             instance.unmount();
-            resolve();
+            finish();
           },
           // App owns ctrl+c (exitOnCtrlC below is off) so we can interrupt the
           // engine, not just unmount the UI over a still-running session.
           onInterrupt: () => {
             instance.unmount();
             opts.onInterrupt();
-            resolve();
+            finish();
           },
         }),
         { exitOnCtrlC: false },
       );
-      void instance.waitUntilExit().then(() => resolve());
+      void instance.waitUntilExit().then(() => finish());
     };
 
     // The intro plays on its own alternate screen (restored to whatever was
