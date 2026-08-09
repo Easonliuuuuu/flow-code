@@ -18,6 +18,8 @@ export function runUi(opts: {
   modelContext: ModelContext;
   /** Read-only spectator mode — see `AppProps.watch`. */
   watch?: boolean;
+  /** Skip the startup splash entirely, even in a TTY (`--no-splash`). Defaults to playing it. */
+  splash?: boolean;
 }): Promise<void> {
   return new Promise((resolve) => {
     // Ink's raw-mode-enabled stdin is what normally keeps the process alive
@@ -65,7 +67,13 @@ export function runUi(opts: {
     // on screen before it, cleanly, the moment it unmounts) so it never
     // leaves stray frames in scrollback above the graph. Ink requires the
     // previous instance unmounted before a fresh `render()` reuses the same
-    // stdout, hence mounting App only from the splash's own completion.
+    // stdout, hence mounting App only from the splash's own completion. With
+    // the splash opted out there's no handoff to sequence, so App mounts
+    // immediately.
+    if (opts.splash === false) {
+      mountApp();
+      return;
+    }
     const splash = render(
       React.createElement(Splash, {
         onDone: () => {
