@@ -26,6 +26,12 @@ describe('parseResumeArg', () => {
     expect(parseResumeArg(['--resume', '--allow-dirty'])).toEqual({ resuming: true });
     expect(parseResumeArg(['--resume', '--no-splash'])).toEqual({ resuming: true });
   });
+
+  it('accepts -r as a shorthand for --resume', () => {
+    expect(parseResumeArg(['-r'])).toEqual({ resuming: true });
+    expect(parseResumeArg(['-r', 'abc123'])).toEqual({ resuming: true, runId: 'abc123' });
+    expect(parseResumeArg(['-r', '--allow-dirty'])).toEqual({ resuming: true });
+  });
 });
 
 describe('runExitCode', () => {

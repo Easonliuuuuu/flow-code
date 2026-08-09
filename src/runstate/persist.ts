@@ -32,6 +32,16 @@ export function readRunState(path: string): RunState {
   return JSON.parse(readFileSync(path, 'utf8')) as RunState;
 }
 
+/** Whether `pid` still belongs to a live process — a run with no `finishedAt` and a dead pid crashed rather than being active. */
+export function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function listRunStates(repoRoot: string): RunState[] {
   let files: string[];
   try {
