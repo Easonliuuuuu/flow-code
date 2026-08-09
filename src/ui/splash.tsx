@@ -174,21 +174,29 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
       const timer = setTimeout(finish, 0);
       return () => clearTimeout(timer);
     }
-    const timer = setInterval(() => {
-      setFrame((f) => {
-        const next = f + 1;
-        if (next >= AUTO_DONE_FRAME) {
-          clearInterval(timer);
-          finish();
-        }
-        return next;
-      });
-    }, FRAME_MS);
+    // Capped rather than left to run past the end: the updater has to stay a
+    // pure function of the previous frame (see the completion effect below),
+    // so it can't be the thing that stops its own interval. Once it pins at
+    // AUTO_DONE_FRAME the state stops changing, React bails out of the
+    // re-render, and the caller unmounts us a tick later anyway.
+    const timer = setInterval(() => setFrame((f) => Math.min(f + 1, AUTO_DONE_FRAME)), FRAME_MS);
     return () => clearInterval(timer);
     // `finish` is intentionally not a dependency: it closes over `onDone`
     // and the guard ref, neither of which changes across this component's
     // short lifetime, and including it would just churn the interval.
   }, [skip]);
+
+  // Completion is decided here rather than inside the setFrame updater above.
+  // `finish` unmounts this tree and mounts the next Ink instance, and running
+  // that from a render-phase callback made the new instance's effects flush
+  // synchronously — which is what let App claim raw mode *before* the splash
+  // instance's own deferred teardown turned it back off (see the handoff
+  // comment in ui/index.ts). An effect is also simply where a side effect of
+  // this size belongs; updaters must be re-runnable.
+  useEffect(() => {
+    if (!skip && frame >= AUTO_DONE_FRAME) finish();
+    // Same reasoning as above for leaving `finish` out of the deps.
+  }, [skip, frame]);
 
   if (skip) return null;
 

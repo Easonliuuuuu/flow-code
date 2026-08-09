@@ -78,7 +78,22 @@ export function runUi(opts: {
       React.createElement(Splash, {
         onDone: () => {
           splash.unmount();
-          mountApp();
+          // Deliberately a macrotask, not a synchronous call. Ink defers the
+          // *terminal* half of its raw-mode teardown to a queueMicrotask,
+          // guarded by a ref that is private to each Ink instance
+          // (`pendingDisableRawModeRef`, ink/components/App.js). Two instances
+          // over one process.stdin therefore can't see each other's pending
+          // teardown: mounting App synchronously here let its
+          // `stdin.setRawMode(true)` land first and the splash's queued
+          // `setRawMode(false)` + `stdin.unref()` land second, leaving the
+          // graph mounted over a cooked-mode tty — every keystroke echoed by
+          // the terminal, the mouse-tracking sequences App just enabled
+          // echoed as garbage alongside them, no key reaching Ink at all, and
+          // only a real SIGINT able to quit. (The same stray unref is what
+          // `keepAlive` above compensates for.) A timeout runs after the
+          // microtask queue drains, so the teardown always completes before
+          // App claims stdin.
+          setTimeout(mountApp, 0);
         },
       }),
       { exitOnCtrlC: false, alternateScreen: true },
