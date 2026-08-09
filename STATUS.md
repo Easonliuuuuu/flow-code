@@ -89,7 +89,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 6 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -101,6 +101,7 @@ Known debt, already decided about. Green on purpose — but still debt.
 | GAP-02 | module `runstate` | BR-04 |
 | GAP-05 | scope `runstate` | BR-04 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
+| GAP-12 | scope `testbed` | closed — non-issue |
 | GAP-10 | br `BR-01` | inbox |
 | GAP-11 | br `BR-05` | inbox |
 
