@@ -1,3 +1,5 @@
+import type { NodeBudget, RunSettings, WorkflowEdge } from '../workflow/schema.js';
+
 export const NODE_STATUSES = ['idle', 'running', 'waiting', 'done', 'error', 'skipped'] as const;
 
 export type NodeStatus = (typeof NODE_STATUSES)[number];
@@ -161,12 +163,54 @@ export interface RateLimits {
   updatedAt: string;
 }
 
+/**
+ * One node as recorded in a run document: enough to rebuild it, and nothing
+ * that cannot survive JSON. `type` is the registry id rather than the type
+ * definition, because a definition carries zod schemas and predicate
+ * functions; it is re-resolved against the registry on read.
+ */
+export interface RecordedNode {
+  id: string;
+  /** Registry id of the node type (`implement`, `test`, …). */
+  type: string;
+  /** Config as validated at load time, with the type's defaults applied. */
+  config: unknown;
+  budget?: NodeBudget;
+}
+
+/**
+ * The graph a run is executing, recorded in its own run document.
+ *
+ * This is what makes a run self-describing: a reader renders and resumes from
+ * this rather than re-loading `.flow-code/workflow.yaml`, which may have been
+ * edited — or replaced — since the run began.
+ *
+ * Deliberately a projection, not the loaded `Workflow`: adjacency and
+ * topological order are derived, and serializing derived structure invites it
+ * to disagree with the code that reads it. Both are recomputed on rehydration.
+ */
+export interface RecordedGraph {
+  nodes: RecordedNode[];
+  edges: WorkflowEdge[];
+  /** Run-wide settings as they applied to this run. */
+  settings: RunSettings;
+  /** Which named graph this run selected, when the file declared more than one. */
+  selected?: string;
+}
+
 export interface RunState {
   runId: string;
   createdAt: string;
   repoRoot: string;
   pid: number;
   baseline: RunBaseline | null;
+  /**
+   * The graph this run is executing. Optional only so run documents written
+   * before runs recorded their own shape still parse; a reader that finds it
+   * absent reports the shape as unavailable rather than substituting whatever
+   * the workflow file currently says.
+   */
+  graph?: RecordedGraph;
   nodes: Record<string, NodeRunState>;
   worktrees: WorktreeRecord[];
   activity: ActivityEntry[];

@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 241/241` tasks across 6 change(s)
+`█████████░ 241/275` tasks across 7 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -18,6 +18,7 @@ flatter you.
 
 | Change | State | Tasks |
 | --- | --- | --- |
+| `add-per-task-workflow-graphs` | active | ░░░░░░░░░░ 0/34 |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
@@ -56,7 +57,7 @@ _No OpenSpec change serves this yet._
 
 ## M2 — Driver mode is trustworthy
 
-`—` tasks across 0 change(s)
+`██████████ 25/25` tasks across 1 change(s)
 
 ### BR-03 — A second window can watch a live run without disturbing it
 
@@ -64,7 +65,11 @@ _No OpenSpec change serves this yet._
 
 ### BR-04 — Run-state survives real conditions
 
-_No OpenSpec change serves this yet._
+**Capabilities:** `run-state`
+
+| Change | State | Tasks |
+| --- | --- | --- |
+| `2026-08-09-add-workflow-validation-and-recorded-graph` | archived | ██████████ 25/25 |
 
 ### BR-05 — A graph bigger than the default stays navigable
 
@@ -94,7 +99,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 5 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -103,8 +108,6 @@ Known debt, already decided about. Green on purpose — but still debt.
 | Gap | Subject | Tracked by |
 | --- | --- | --- |
 | GAP-01 | scope `watch` | BR-03 |
-| GAP-02 | module `runstate` | BR-04 |
-| GAP-05 | scope `runstate` | BR-04 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
 | GAP-12 | scope `testbed` | closed — non-issue |
 | GAP-10 | br `BR-01` | inbox |
@@ -112,4 +115,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-7 archived change(s), 254 tasks. 16 modules under `src/`, 11 capability specs.
+8 archived change(s), 279 tasks. 16 modules under `src/`, 12 capability specs.

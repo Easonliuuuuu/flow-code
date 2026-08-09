@@ -14,6 +14,10 @@ gets deleted. Deleting is a real outcome — most lines should end that way.
 
 ## Unsorted
 
+- **"The process fits the task" has no BR.** One repo-level graph runs every task, so a typo fix and a risky refactor get the same verification. `add-per-task-workflow-graphs` builds named shapes a run picks among, and it is attributed to BR-08 for want of anywhere better — which is exactly how BR-08 becomes the bucket the `capabilities:` note above already warns about at five capabilities. Probably a BR in M2. Decide before that change archives, not after.
+- Can a named graph override the *non-ceiling* settings — `model`, `concurrency`, `subagents`? Settled that it may not raise `budget` (a ceiling the shape can raise is not a ceiling; use `node.budget`), but that argument does not reach the others: a `quick` shape wanting a cheaper default model is a preference, not an escape from a limit. Needs the line drawn on purpose rather than by whichever is implemented first.
+- `flow-code validate` is the first thing in the product that serves a stranger authoring a graph rather than running one, and it landed under `workflow-graph`/BR-08. Worth checking whether it is really BR-01 evidence — see GAP-10, which says nothing owns first-run.
+
 - **Open decision, the biggest one.** `brief.md` says the second audience has
   "the *most* to gain," but the roadmap gives them two sub-bullets and no BR.
   The missing outcome is roughly *"a gate is approvable without reading the
