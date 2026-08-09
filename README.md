@@ -1,11 +1,13 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/logo/flow-code-dark.svg">
-  <img alt="flow-code" src="docs/logo/flow-code-light.svg" height="70">
-</picture>
-
-[![CI](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml/badge.svg)](https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
-[![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](package.json)
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/logo/flow-code-dark.svg">
+    <img alt="flow-code" src="docs/logo/flow-code-light.svg" height="70">
+  </picture>
+  <br>
+  <a href="https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml"><img src="https://github.com/Easonliuuuuu/flow-code/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
+  <a href="package.json"><img src="https://img.shields.io/badge/node-%3E%3D20-brightgreen" alt="Node"></a>
+</p>
 
 A terminal-native node-graph interface for running and observing agentic coding workflows.
 
