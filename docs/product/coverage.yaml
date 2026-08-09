@@ -48,6 +48,9 @@ scopes:
   cli.ts: [workflow-graph, agent-execution]   # historical; prefer `cli`
   init: [workflow-graph]
   presets: [workflow-graph]
+  validate: [workflow-graph]
+  record: [run-state, workflow-graph]
+  runstate: [run-state]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
@@ -68,6 +71,7 @@ modules:
   git: [approval-gate]
   init: [workflow-graph, test-command-discovery]
   presets: [workflow-graph]
+  runstate: [run-state]
 
 # Which BR each capability serves — the BR -> ER edge. Exactly one BR per
 # capability (a strict tree, not many-to-many): if a capability's own purpose
@@ -99,6 +103,7 @@ capabilities:
   node-model-selection: BR-08
   test-command-discovery: BR-08
   terminal-canvas-ui: BR-09
+  run-state: BR-04
   node-skills: BR-07
   node-subagents: BR-07
   worktree-agent-node: BR-07
@@ -109,6 +114,15 @@ capabilities:
 # serve. `status: parked` means deliberately not scheduled — it silences the
 # staleness warning, which is the whole reason to record it.
 changes:
+  add-per-task-workflow-graphs:
+    br: BR-08
+    note: >-
+      The follow-on: readers use the recorded graph, and a file can declare
+      several named shapes a run selects among. Attributed to BR-08 — most of
+      it is the graph and how a run picks one — though the `watch` half also
+      serves BR-03. Blocked on one open decision recorded in its proposal: how
+      the UI receives a workflow it only learns on attaching to a run.
+
   add-guest-mode-reporter:
     br: BR-06
     status: parked
@@ -139,6 +153,7 @@ archived:
   2026-08-03-node-skills-and-test-discovery: BR-07
   2026-08-06-node-subagents: BR-07
   2026-08-08-wire-up-cicd-and-readme: BR-02
+  2026-08-09-add-workflow-validation-and-recorded-graph: BR-04
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
@@ -151,24 +166,6 @@ registered_gaps:
       spec. Flagged in the guest-mode proposal's Impact section but never
       tracked anywhere that looks.
     tracked_by: BR-03
-
-  - id: GAP-02
-    kind: module
-    subject: runstate
-    reason: >-
-      src/runstate/ has no owning capability spec, and both watch and guest mode
-      depend on it. Ownership and concurrent-write rules are currently
-      incidental rather than specified.
-    tracked_by: BR-04
-
-  - id: GAP-05
-    kind: scope
-    subject: runstate
-    reason: >-
-      Same as GAP-02, from the commit side. feat(runstate) shipped resuming an
-      interrupted run, including a Discuss conversation — behaviour with no
-      capability spec describing it.
-    tracked_by: BR-04
 
   - id: GAP-06
     kind: scope
@@ -220,6 +217,19 @@ registered_gaps:
       maps to BR-09 because it is mostly cards, panels, and the detail view;
       splitting it is deferred ER work rather than a missing mapping.
     tracked_by: inbox
+
+  # GAP-02 and GAP-05 (module and scope `runstate`) are closed. Both said the
+  # same thing from two directions: src/runstate/ had no owning capability spec
+  # while watch and guest mode both depended on it. `run-state` now owns the
+  # module and the scope, and specifies what a run records about itself and who
+  # may write it — which was the "ownership is incidental rather than
+  # specified" half of GAP-02 exactly.
+  #
+  # GAP-01 (scope `watch`) deliberately stays open past that archive. A spec
+  # for the run document is not a spec for the command that reads it: how
+  # `watch` attaches, pins to a run id, refuses writes, and reports liveness is
+  # still described nowhere. Closing it alongside GAP-02/05 would be the ledger
+  # flattering itself.
 
   # GAP-07/08/09 (capabilities node-skills, node-subagents, worktree-agent-node)
   # are closed. They were shipped, spec'd work that no BR claimed; BR-07 now

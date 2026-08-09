@@ -138,6 +138,7 @@ The scaffolded file is heavily commented. See the [workflow reference](docs/work
 | `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
 | `flow-code run` | Execute the workflow graph |
 | `flow-code watch` | Follow a run started elsewhere — same graph, read-only |
+| `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
 | `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
 | `flow-code doctor` | Diagnose environment, tools, and provider credentials |

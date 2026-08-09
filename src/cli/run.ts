@@ -14,6 +14,7 @@ import { RunStateStore } from '../runstate/store.js';
 import type { RunState } from '../runstate/types.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
 import type { Workflow } from '../workflow/load.js';
+import { recordGraph } from '../workflow/record.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../worktrees/reconcile.js';
 import { splashEnabled } from './args.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
@@ -181,13 +182,13 @@ export async function cmdRun(args: string[]): Promise<void> {
     await resetInterruptedWorktrees(repoRoot, resumeState);
     store = new RunStateStore({
       repoRoot,
-      nodeIds: workflow.nodes.map((n) => n.id),
+      graph: recordGraph(workflow),
       resumeFrom: resumeState,
     });
     console.log(`flow-code: resuming run ${store.runId.slice(0, 8)}.`);
   } else {
     baseline = await recordBaseline(repoRoot, allowDirty);
-    store = new RunStateStore({ repoRoot, nodeIds: workflow.nodes.map((n) => n.id) });
+    store = new RunStateStore({ repoRoot, graph: recordGraph(workflow) });
   }
   store.attachPersister(new FileRunStatePersister(repoRoot));
   store.setBaseline(baseline);

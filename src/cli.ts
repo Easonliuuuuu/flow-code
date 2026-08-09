@@ -7,6 +7,7 @@ import { cmdNodeTypes } from './cli/nodeTypes.js';
 import { cmdRun } from './cli/run.js';
 import { cmdRuns } from './cli/runs.js';
 import { cmdSkills } from './cli/skills.js';
+import { cmdValidate } from './cli/validate.js';
 import { cmdWatch } from './cli/watch.js';
 import { fail } from './cli/context.js';
 
@@ -31,6 +32,8 @@ Usage:
                               Follow a run started elsewhere — same graph, read-only, fed by the
                               run's state file. Defaults to whichever run is currently being
                               written, and picks up a run started after the viewer was opened
+  flow-code validate          Check .flow-code/workflow.yaml without running it — reports every
+                              problem it can find, and which checks a failure stopped it reaching
   flow-code node-types        List built-in node types, capabilities, config and output shapes
   flow-code skills            List skills attachable to a node, and where each was found
   flow-code doctor [--yes]    List/remove orphaned worktrees from crashed runs
@@ -47,6 +50,8 @@ async function main(): Promise<void> {
       return cmdRuns();
     case 'watch':
       return cmdWatch(args);
+    case 'validate':
+      return cmdValidate();
     case 'node-types':
       return cmdNodeTypes();
     case 'skills':

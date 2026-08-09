@@ -18,6 +18,7 @@ import {
   type NodeBudget,
   type RunSettings,
   type WorkflowEdge,
+  type WorkflowFileRaw,
 } from './schema.js';
 
 export const WORKFLOW_RELATIVE_PATH = '.flow-code/workflow.yaml';
@@ -60,8 +61,41 @@ export interface Workflow {
   order: string[];
 }
 
+/**
+ * The order validation runs in. Each stage depends on the one before it having
+ * passed — there is no point checking that an edge points backwards over a
+ * graph that does not parse — so a failure stops the load and leaves every
+ * later stage *unevaluated*, which is not the same as passed. `flow-code
+ * validate` reports that distinction; a run does not need to, because it stops
+ * either way.
+ */
+export const VALIDATION_STAGES = ['parse', 'file-schema', 'declarations', 'structure'] as const;
+
+export type ValidationStage = (typeof VALIDATION_STAGES)[number];
+
+/** What each stage checks, phrased for a validation report rather than a stack trace. */
+export const VALIDATION_STAGE_LABELS: Record<ValidationStage, string> = {
+  parse: 'YAML syntax',
+  'file-schema': 'file shape and run settings',
+  declarations: 'node types, node config, skills, and edge references',
+  structure: 'graph structure, loop-backs, and edge conditions',
+};
+
+/** The stages that never ran because `failed` stopped the load first. */
+export function stagesNotEvaluated(failed: ValidationStage): ValidationStage[] {
+  return VALIDATION_STAGES.slice(VALIDATION_STAGES.indexOf(failed) + 1);
+}
+
 export class WorkflowValidationError extends Error {
-  constructor(readonly problems: string[]) {
+  /**
+   * `problems` keeps the shape every existing caller reads. `stage` is
+   * additive: it says which check stopped the load, and therefore which checks
+   * were never reached.
+   */
+  constructor(
+    readonly problems: string[],
+    readonly stage: ValidationStage = 'declarations',
+  ) {
     super(`invalid workflow:\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     this.name = 'WorkflowValidationError';
   }
@@ -81,9 +115,10 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
   try {
     raw = parseYaml(source);
   } catch (err) {
-    throw new WorkflowValidationError([
-      `workflow file is not valid YAML: ${err instanceof Error ? err.message : String(err)}`,
-    ]);
+    throw new WorkflowValidationError(
+      [`workflow file is not valid YAML: ${err instanceof Error ? err.message : String(err)}`],
+      'parse',
+    );
   }
 
   const fileResult = workflowFileSchema.safeParse(raw);
@@ -108,10 +143,26 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
       const path = issue.path.length > 0 ? ` at \`${issue.path.join('.')}\`` : '';
       return `workflow file${path}: ${issue.message}`;
     });
-    throw new WorkflowValidationError(problems);
+    throw new WorkflowValidationError(problems, 'file-schema');
   }
 
-  const file = fileResult.data;
+  return buildWorkflow(fileResult.data, { repoRoot, skillRoots });
+}
+
+/**
+ * Everything after the file has parsed and matched its top-level shape:
+ * resolve node types and configs, resolve skills, and check the graph.
+ *
+ * Split out so a graph recorded in a run document can be rehydrated through
+ * exactly these checks rather than a second implementation of them. A resumed
+ * run and a fresh one therefore agree on what a valid graph is by
+ * construction — see `rehydrateGraph`.
+ */
+export function buildWorkflow(
+  file: WorkflowFileRaw,
+  context: { repoRoot: string; skillRoots: SkillRoots },
+): Workflow {
+  const { repoRoot, skillRoots } = context;
   const problems: string[] = [];
 
   // Node ids must be unique.
@@ -192,7 +243,7 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
     }
   }
 
-  if (problems.length > 0) throw new WorkflowValidationError(problems);
+  if (problems.length > 0) throw new WorkflowValidationError(problems, 'declarations');
 
   const graph = new Graph(
     nodes.map((n) => n.id),
@@ -203,7 +254,9 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
     order = graph.topologicalOrder();
   } catch (err) {
     if (err instanceof GraphCycleError) {
-      throw new WorkflowValidationError([err.message]);
+      // A cycle stops the structural stage here: every check below reads
+      // ancestry over the forward-edge subgraph, which a cycle makes meaningless.
+      throw new WorkflowValidationError([err.message], 'structure');
     }
     throw err;
   }
@@ -224,14 +277,16 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
       );
     }
   }
-  if (loopbackProblems.length > 0) throw new WorkflowValidationError(loopbackProblems);
-
   // A Test node that rediscovers its own commands and can be re-run by a
   // loop-back is a node that grades work with an exam it also chooses, and gets
   // several attempts to choose an easier one. Reject the combination, not
   // either half of it.
+  //
+  // Gated on the loop-backs being sound: this check reads `nodesBetween` over
+  // them, so running it against a loop-back already known to point the wrong
+  // way would report a second problem about the same broken edge.
   const autoProblems: string[] = [];
-  for (const node of nodes) {
+  for (const node of loopbackProblems.length > 0 ? [] : nodes) {
     if (node.type.id !== 'test') continue;
     if ((node.config as { commands?: unknown }).commands !== TEST_COMMANDS_AUTO) continue;
     for (const loop of graph.allLoopbacks()) {
@@ -244,8 +299,6 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
       break;
     }
   }
-  if (autoProblems.length > 0) throw new WorkflowValidationError(autoProblems);
-
   // A condition may only read a node whose output is guaranteed to exist by
   // the time the edge is evaluated: the edge's own source, or an ancestor of
   // it. Anything else is a race the graph cannot honour.
@@ -262,7 +315,10 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
       );
     }
   }
-  if (conditionProblems.length > 0) throw new WorkflowValidationError(conditionProblems);
+  // The three structural checks above are independent of each other, so they
+  // are reported together rather than one build at a time.
+  const structureProblems = [...loopbackProblems, ...autoProblems, ...conditionProblems];
+  if (structureProblems.length > 0) throw new WorkflowValidationError(structureProblems, 'structure');
 
   return {
     settings: file.settings ?? DEFAULT_SETTINGS,
@@ -279,9 +335,10 @@ export function loadWorkflow(repoRoot: string, options: LoadOptions = {}): Workf
   try {
     source = readFileSync(path, 'utf8');
   } catch {
-    throw new WorkflowValidationError([
-      `no workflow file found at ${path} — run \`flow-code init\` to scaffold one`,
-    ]);
+    throw new WorkflowValidationError(
+      [`no workflow file found at ${path} — run \`flow-code init\` to scaffold one`],
+      'parse',
+    );
   }
   return loadWorkflowFromString(source, { repoRoot, ...options });
 }

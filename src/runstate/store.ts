@@ -7,6 +7,7 @@ import type {
   NodeRunState,
   NodeStatus,
   RateLimitWindowState,
+  RecordedGraph,
   RunBaseline,
   RunState,
   TokenUsage,
@@ -34,7 +35,14 @@ export class RunStateStore {
   constructor(opts: {
     runId?: string;
     repoRoot: string;
-    nodeIds: string[];
+    /** Ignored when `graph` is given — a recorded graph is then the authority on which nodes exist. */
+    nodeIds?: string[];
+    /**
+     * The graph this run executes, recorded into the document so the run
+     * describes itself. Without it a reader can only report the shape as
+     * unavailable, which is what run documents written before this existed do.
+     */
+    graph?: RecordedGraph;
     /**
      * Continue a previously-interrupted run under its own runId: nodes
      * already `done` keep their recorded state; everything else resets to
@@ -43,8 +51,11 @@ export class RunStateStore {
      */
     resumeFrom?: RunState;
   }) {
+    // One source for which nodes exist, so the node map and the recorded graph
+    // cannot be seeded from two lists that disagree.
+    const nodeIds = opts.graph ? opts.graph.nodes.map((n) => n.id) : (opts.nodeIds ?? []);
     const nodes: Record<string, NodeRunState> = {};
-    for (const id of opts.nodeIds) {
+    for (const id of nodeIds) {
       const prior = opts.resumeFrom?.nodes[id];
       if (!prior) {
         nodes[id] = { status: 'idle', denials: 0 };
@@ -65,6 +76,9 @@ export class RunStateStore {
       repoRoot: opts.repoRoot,
       pid: process.pid,
       baseline: opts.resumeFrom?.baseline ?? null,
+      // Recorded at construction, which is before any node can leave `idle`:
+      // a reader attaching to a run at its first instant still sees the shape.
+      ...(opts.graph ? { graph: opts.graph } : {}),
       nodes,
       worktrees: opts.resumeFrom?.worktrees ?? [],
       activity: opts.resumeFrom?.activity ?? [],

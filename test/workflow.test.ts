@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES } from '../src/capabilities.js';
 import { listNodeTypes, nodeTypeRegistry } from '../src/registry/index.js';
-import { loadWorkflowFromString, WorkflowValidationError } from '../src/workflow/load.js';
+import {
+  loadWorkflowFromString,
+  stagesNotEvaluated,
+  WorkflowValidationError,
+} from '../src/workflow/load.js';
 import { DEFAULT_LOOPBACK_MAX_ATTEMPTS, DEFAULT_SETTINGS } from '../src/workflow/schema.js';
 
 const VALID = `
@@ -24,6 +28,16 @@ function problemsOf(yaml: string): string[] {
     loadWorkflowFromString(yaml);
   } catch (err) {
     if (err instanceof WorkflowValidationError) return err.problems;
+    throw err;
+  }
+  throw new Error('expected workflow to be invalid');
+}
+
+function failureOf(yaml: string): WorkflowValidationError {
+  try {
+    loadWorkflowFromString(yaml);
+  } catch (err) {
+    if (err instanceof WorkflowValidationError) return err;
     throw err;
   }
   throw new Error('expected workflow to be invalid');
@@ -196,6 +210,71 @@ edges:
   - { from: check, to: ship }
   - { from: check, to: impl, loopback: true }
 `;
+
+describe('staged validation', () => {
+  it('reports which stage stopped the load, so later checks are not read as passed', () => {
+    // The distinction `flow-code validate` exists to report: a structural check
+    // behind a parse failure did not pass, it never ran.
+    const failure = failureOf('nodes: [oh: [dear');
+    expect(failure.stage).toBe('parse');
+    expect(stagesNotEvaluated(failure.stage)).toEqual(['file-schema', 'declarations', 'structure']);
+  });
+
+  it('reports every independent declaration failure in one pass', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: mystery
+    type: no-such-type
+  - id: impl
+    type: implement
+    config:
+      instructions: 12
+edges:
+  - from: impl
+    to: ghost
+`);
+    expect(problems).toHaveLength(3);
+    expect(problems.join('\n')).toContain('unknown node type `no-such-type`');
+    expect(problems.join('\n')).toContain('`impl`');
+    expect(problems.join('\n')).toContain('unknown node `ghost`');
+  });
+
+  it('reports independent structural failures together', () => {
+    // A loop-back pointing the wrong way and a condition reading a node it
+    // cannot see are unrelated; finding one should not hide the other.
+    const failure = failureOf(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: x }
+  - id: c
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: a, to: c, loopback: { maxAttempts: 2 } }
+  - { from: a, to: b, when: "c.verdict == 'fail'" }
+`);
+    expect(failure.stage).toBe('structure');
+    expect(failure.problems.length).toBeGreaterThan(1);
+    expect(stagesNotEvaluated(failure.stage)).toEqual([]);
+  });
+
+  it('stops at the declaration stage without attempting structural checks', () => {
+    const failure = failureOf(`
+nodes:
+  - id: mystery
+    type: no-such-type
+edges: []
+`);
+    expect(failure.stage).toBe('declarations');
+    expect(stagesNotEvaluated(failure.stage)).toEqual(['structure']);
+  });
+});
 
 describe('loop-back edges', () => {
   it('loads a graph with a loop-back and orders it over forward edges', () => {
