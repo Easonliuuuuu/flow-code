@@ -1651,6 +1651,23 @@ export function App({
         } as const)
       : { height: panelHeight }),
   } as const;
+  // Ink only paints a Box's own border and its children's actual text — an
+  // absolutely-positioned panel gets no implicit background, so any row or
+  // column its content doesn't reach (a short line, unfilled height) leaves
+  // whatever the canvas painted underneath showing through the gap. A docked
+  // panel doesn't need this: it sits in normal flow, so nothing else is
+  // drawn at its rows in the first place. Plain spaces (no color) blank the
+  // gap without imposing a background the terminal's own theme doesn't have;
+  // painted first, every real content line drawn afterward lands on top of it.
+  const panelBackdrop = floating ? (
+    <Box position="absolute" top={0} left={0}>
+      <Text>
+        {Array.from({ length: Math.max(0, activeRect.h - 2) }, () =>
+          ' '.repeat(Math.max(0, activeRect.w - 2)),
+        ).join('\n')}
+      </Text>
+    </Box>
+  ) : null;
 
   return (
     <Box flexDirection="column" width={columns} height={rows}>
@@ -1703,6 +1720,7 @@ export function App({
       </Box>
       {discussPanelOpen && discussState ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Discussion — {discussState.nodeId}
@@ -1767,6 +1785,7 @@ export function App({
         </Box>
       ) : pendingTestCommands ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Test commands — {pendingTestCommands.req.nodeId}
@@ -1816,6 +1835,7 @@ export function App({
         </Box>
       ) : pendingConvergence ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Convergence — {pendingConvergence.req.nodeId} ({pendingConvergence.req.mode}
@@ -1841,6 +1861,7 @@ export function App({
         </Box>
       ) : pendingApproval ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Approval — {pendingApproval.req.title}
@@ -1900,6 +1921,7 @@ export function App({
         </Box>
       ) : pickerOpen && focusedNode ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Model — {focusedNode.id} ({focusedNode.type.displayName})
@@ -1975,6 +1997,7 @@ export function App({
         </Box>
       ) : skillPickerOpen && focusedNode ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Skills — {focusedNode.id} ({focusedNode.type.displayName})
@@ -2053,6 +2076,7 @@ export function App({
         </Box>
       ) : editorOpen && focusedNode ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           <PanelTitle>
             <Text bold color="yellow" wrap="truncate-end">
               Settings — {focusedNode.id} ({focusedNode.type.displayName})
@@ -2099,6 +2123,7 @@ export function App({
         </Box>
       ) : expanded && focusedNode ? (
         <Box {...panelBoxProps}>
+          {panelBackdrop}
           {(() => {
             const state = runState.nodes[focusedNode.id]!;
             // A decided approval gate has nothing else worth showing here —
