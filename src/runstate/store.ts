@@ -135,24 +135,33 @@ export class RunStateStore {
     this.commit();
   }
 
+  /**
+   * A detail belongs to the state that set it.
+   *
+   * Carrying one across a transition is how a Test node that ran `npm test`
+   * and passed went on reporting "no test command set yet" — the detail it
+   * had while `waiting` for the command it then received. So a status change
+   * with no detail of its own clears it, and only a same-status update keeps
+   * it: `running → running` is an executor refining what it is doing, which
+   * is exactly the case that must not lose the line it just wrote.
+   */
   setStatus(nodeId: string, status: NodeStatus, detail?: string): void {
     const node = this.node(nodeId);
     const now = new Date().toISOString();
     const terminal = status === 'done' || status === 'error' || status === 'skipped';
-    this.state.nodes = {
-      ...this.state.nodes,
-      [nodeId]: {
-        ...node,
-        status,
-        ...(detail !== undefined ? { statusDetail: detail } : {}),
-        // Timestamps bracket the node's wall-clock time, which the UI shows
-        // live while it runs and freezes once it finishes. `startedAt` is
-        // only stamped once, so a mid-run status detail update (running →
-        // running) doesn't restart the clock.
-        ...(status === 'running' && node.startedAt === undefined ? { startedAt: now } : {}),
-        ...(terminal ? { endedAt: now } : {}),
-      },
+    const next: NodeRunState = {
+      ...node,
+      status,
+      // Timestamps bracket the node's wall-clock time, which the UI shows
+      // live while it runs and freezes once it finishes. `startedAt` is
+      // only stamped once, so a mid-run status detail update (running →
+      // running) doesn't restart the clock.
+      ...(status === 'running' && node.startedAt === undefined ? { startedAt: now } : {}),
+      ...(terminal ? { endedAt: now } : {}),
     };
+    if (detail !== undefined) next.statusDetail = detail;
+    else if (status !== node.status) delete next.statusDetail;
+    this.state.nodes = { ...this.state.nodes, [nodeId]: next };
     this.commit();
   }
 
