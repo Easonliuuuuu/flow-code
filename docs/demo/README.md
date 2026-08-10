@@ -155,6 +155,7 @@ where the interesting moments land.
 | --- | --- |
 | `this recording has no recorded graph` | Captured from a build older than recorded graphs. Re-capture with `node dist/cli.js`. |
 | `demo: nothing captured` | `--repo` pointed somewhere without a run writing to `.flow-code/runs`. |
+| `ignoring <id> — already finished` | Not an error: a run from an earlier session is sitting in `.flow-code/runs`. The capture waits for a live one. Pass `--run <id>` to record that finished run anyway. |
 | `cannot rebuild the graph this run recorded` | The run used skills that don't exist on this machine — play it where they do. |
 | Replay races past | Lower `--speed`; it divides real gaps, so 1 is real time. |
 | Replay drags | Lower `--max-gap`. Long stalls are agents thinking, and they clamp well. |

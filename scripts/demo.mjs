@@ -156,6 +156,8 @@ function capture() {
   let startedAt;
   let frames = 0;
   let stopping;
+  /** Finished runs already reported as skipped, so the wait doesn't spam. */
+  const ignored = new Set();
 
   console.log(`demo: watching ${runsDir}`);
   console.log(`demo: writing ${out}`);
@@ -182,6 +184,22 @@ function capture() {
     }
 
     lastText = text;
+
+    // A run that was already over when this started is history, not a
+    // recording — capturing its final frame and stopping on the `finishedAt`
+    // it has always had is how a capture "succeeds" with one frame of a run
+    // nobody just did. Wait for a live one instead, and leave `pinned` unset
+    // so a run started later is still picked up. Naming a run with `--run`
+    // is the explicit opt-out: asking for it by id means wanting it however
+    // it ended.
+    if (frames === 0 && state.finishedAt && !runId) {
+      if (!ignored.has(path)) {
+        ignored.add(path);
+        console.log(`demo: ignoring ${state.runId.slice(0, 8)} — already finished; waiting for a new run`);
+      }
+      return;
+    }
+
     pinned ??= path;
     startedAt ??= Date.now();
     appendFileSync(out, `${JSON.stringify({ ms: Date.now() - startedAt, state: scrub(state, redact) })}\n`);
