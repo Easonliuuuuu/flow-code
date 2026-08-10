@@ -1,6 +1,6 @@
 {
   "name": "@easonliuuuuu/flow-code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Terminal-native node-graph interface for running and observing agentic coding workflows",
   "license": "MIT",
   "homepage": "https://github.com/Easonliuuuuu/flow-code#readme",

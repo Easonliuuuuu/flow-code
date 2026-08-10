@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.3.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.2.0...flow-code-v0.3.0) (2026-08-10)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** the NVIDIA provider is gone. NVIDIA_API_KEY is no longer consulted, and a project whose .flow-code/credentials.json records provider: "nvidia" now fails validation and falls back to an environment key or CLI login — re-run `flow-code init` to pick a supported provider.
+
+### Features
+
+* **cli:** add `flow-code runs` and a `-r` shorthand for `--resume` ([97499a4](https://github.com/Easonliuuuuu/flow-code/commit/97499a44d5573aef83b5306e7a41665d7b2d031e))
+* **cli:** split cli.ts into command modules and drop the NVIDIA provider ([6be24f0](https://github.com/Easonliuuuuu/flow-code/commit/6be24f0b92e11e770819b0363fec793d95e8caf4))
+* **splash:** fail/retry chain animation with fireworks ([4061c09](https://github.com/Easonliuuuuu/flow-code/commit/4061c090dcfc19c9f300fb86bddfa539e4112e1c))
+* **splash:** tighten pacing, reveal logo line-by-line, add --no-splash ([3d6b38b](https://github.com/Easonliuuuuu/flow-code/commit/3d6b38b81709f4ed47e680392dfc21a80b4fe569))
+* **testbed:** add ui/splash/clean modes ([91c2517](https://github.com/Easonliuuuuu/flow-code/commit/91c2517a17f52da02a70ff1ea2201ed46c7ac8c5))
+* **workflow:** check a workflow without running it, and record the graph a run executes ([0321894](https://github.com/Easonliuuuuu/flow-code/commit/0321894a6ba9f90b6d927ca5bc1fa9417bac3c7c))
+
+
+### Bug Fixes
+
+* **App.tsx:** show node config as labeled fields instead of raw JSON ([f8c1dbc](https://github.com/Easonliuuuuu/flow-code/commit/f8c1dbc47ba34576352767facb6f1b4c9bc9512b))
+* **demo.mjs:** wait for a live run instead of recording a finished one ([74ae947](https://github.com/Easonliuuuuu/flow-code/commit/74ae94791de7758e7cc920a30a04a8bcb11e0277))
+* **runstate:** stop counting cached tokens against a budget ([d2423bb](https://github.com/Easonliuuuuu/flow-code/commit/d2423bbf9caeec7785cadb606944ff6660e9eb7f))
+* **sdkRunner.ts:** isolate Claude nodes from the operator's global settings ([db04583](https://github.com/Easonliuuuuu/flow-code/commit/db04583cd69c1a812c3171b8b28d27e62ff5b815))
+* **status:** block on shallow clones, and map the six scopes CI found ([dbdd041](https://github.com/Easonliuuuuu/flow-code/commit/dbdd0417e3081ff4b0c7e494dca1bcc0ae7c5c23))
+* **store.ts:** clear a status detail when the status changes ([7fbe8f8](https://github.com/Easonliuuuuu/flow-code/commit/7fbe8f8d24df16676ff42028a1ecb53596902254))
+* **test:** stop racing a fixed-delay settle in the discovery-failure case ([7acff54](https://github.com/Easonliuuuuu/flow-code/commit/7acff549a996efc7799dd9dce3d0e042075e3bed))
+* **textwrap:** measure display columns instead of string length ([03fc23c](https://github.com/Easonliuuuuu/flow-code/commit/03fc23c18e44f87d6b1092c2603729c7ed6e88c0))
+* **ui:** keep raw mode on across the splash-&gt;graph handoff ([52368d9](https://github.com/Easonliuuuuu/flow-code/commit/52368d92e3087fd6fc467525e8077ae2ecb3fe5d))
+* **ui:** stop watch/run exiting or crashing before the graph is interactive ([44a7e23](https://github.com/Easonliuuuuu/flow-code/commit/44a7e23e3716f02da714fc5f8c903c3716126732))
+
 ## [0.2.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.1.0...flow-code-v0.2.0) (2026-08-07)
 
 
