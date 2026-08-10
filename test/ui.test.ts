@@ -37,8 +37,9 @@ import {
 import { RunInterruptedError } from '../src/engine/types.js';
 import { getNodeType } from '../src/registry/index.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
-import { wrapText } from '../src/ui/textwrap.js';
+import { fitText, wrapText } from '../src/ui/textwrap.js';
 import { storeFor, workflowFromYaml } from './helpers.js';
+import stringWidth from 'string-width';
 
 const WF = workflowFromYaml(`
 nodes:
@@ -916,6 +917,79 @@ describe('wrapText', () => {
     const wrapped = wrapText(text, 20);
     expect(wrapped.length).toBeGreaterThan(2);
     expect(wrapped.join(' ')).toContain('second paragraph');
+  });
+
+  it('wraps by display column, not string length, for full-width CJK text', () => {
+    // Each CJK character is 2 columns wide, so 3 characters fill a width-6 line.
+    const wrapped = wrapText('中文测试文字上下', 6);
+    expect(wrapped).toEqual(['中文测', '试文字', '上下']);
+    for (const line of wrapped) {
+      expect(stringWidth(line)).toBeLessThanOrEqual(6);
+    }
+  });
+
+  it('keeps a multi-codepoint emoji intact when greedily wrapping words', () => {
+    const family = '👨‍👩‍👧‍👦'; // ZWJ sequence: one grapheme, 2 display columns
+    const wrapped = wrapText(`hi ${family} folks`, 6);
+    for (const line of wrapped) {
+      expect(stringWidth(line)).toBeLessThanOrEqual(6);
+    }
+    // The emoji sequence must survive whole in one of the lines, never split
+    // across its constituent codepoints.
+    expect(wrapped.some((line) => line.includes(family))).toBe(true);
+  });
+
+  it('hard-breaks a run of wide emoji without splitting a single grapheme across lines', () => {
+    const family = '👨‍👩‍👧‍👦'; // 2 columns wide as one atomic unit
+    const wrapped = wrapText(family + family + family, 5);
+    expect(wrapped).toEqual([family + family, family]);
+    for (const line of wrapped) {
+      expect(stringWidth(line)).toBeLessThanOrEqual(5);
+    }
+  });
+});
+
+describe('fitText', () => {
+  it('returns short ASCII text unchanged', () => {
+    expect(fitText('hello', 10)).toBe('hello');
+  });
+
+  it('truncates long ASCII text with an ellipsis', () => {
+    expect(fitText('hello world', 8)).toBe('hello w…');
+  });
+
+  it('truncates full-width CJK text by display column, ending in an ellipsis', () => {
+    const result = fitText('中文测试文字', 5);
+    expect(result.endsWith('…')).toBe(true);
+    expect(stringWidth(result)).toBeLessThanOrEqual(5);
+    expect(result).toBe('中文…');
+  });
+
+  it('backs off before a double-width character that would overflow an odd width budget', () => {
+    // width=5 is odd; after "abc" (3 columns) only 1 column remains in the
+    // truncation budget, and 中 needs 2 — fitText must stop before it rather
+    // than emit a 6-column result.
+    const result = fitText('abc中d', 5);
+    expect(result).toBe('abc…');
+    expect(stringWidth(result)).toBeLessThan(5);
+  });
+
+  it('keeps a ZWJ emoji sequence intact when it fits, without splitting its codepoints', () => {
+    const family = '👨‍👩‍👧‍👦'; // 2 display columns as a single grapheme
+    const result = fitText(`AB${family}CD`, 5);
+    expect(result).toBe(`AB${family}…`);
+    expect(stringWidth(result)).toBeLessThanOrEqual(5);
+  });
+
+  it('drops a trailing ZWJ emoji sequence whole, rather than truncating mid-codepoint', () => {
+    const family = '👨‍👩‍👧‍👦'; // 2 display columns as a single grapheme
+    const result = fitText(`ABC${family}D`, 5);
+    expect(result).toBe('ABC…');
+    expect(stringWidth(result)).toBeLessThan(5);
+    // None of the family emoji's individual codepoints leak into the result.
+    for (const codePoint of family) {
+      expect(result.includes(codePoint)).toBe(false);
+    }
   });
 });
 
