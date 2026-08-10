@@ -1,4 +1,4 @@
-import { sumTokens } from '../runstate/types.js';
+import { promptTokens, sumTokens } from '../runstate/types.js';
 import type { ActivityEntry, NodeRunState } from '../runstate/types.js';
 import type { WorkflowNode } from '../workflow/load.js';
 
@@ -228,8 +228,7 @@ export function nodeMetrics(
 ): string {
   const parts: string[] = [];
   if (state.tokens) {
-    const prompt = state.tokens.input + state.tokens.cached;
-    parts.push(`↑${formatTokens(prompt)} ↓${formatTokens(state.tokens.output)}`);
+    parts.push(`↑${formatTokens(promptTokens(state.tokens))} ↓${formatTokens(state.tokens.output)}`);
   }
   if (options.clock !== false && state.startedAt) {
     const end = state.endedAt ? Date.parse(state.endedAt) : now;

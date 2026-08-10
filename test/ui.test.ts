@@ -291,7 +291,7 @@ describe('canvas rendering', () => {
   it('draws a live card: spinner, current tool call, tokens and elapsed time', () => {
     const store = storeFor(WF, '/tmp');
     store.setStatus('impl', 'running');
-    store.addTokens('impl', { input: 1_200, output: 340, cached: 0 });
+    store.addTokens('impl', { input: 1_200, output: 340, cacheRead: 0, cacheWrite: 0 });
     store.appendActivity({
       ts: new Date().toISOString(),
       nodeId: 'impl',
@@ -392,7 +392,7 @@ describe('canvas rendering', () => {
   it('draws a compact card as title plus metrics, with no rows past the border', () => {
     const store = storeFor(WF, '/tmp');
     store.setStatus('impl', 'running');
-    store.addTokens('impl', { input: 1_200, output: 340, cached: 0 });
+    store.addTokens('impl', { input: 1_200, output: 340, cacheRead: 0, cacheWrite: 0 });
     const layout = computeLayout(WF, undefined, { density: 'compact' });
     const started = Date.parse(store.snapshot().nodes['impl']!.startedAt!);
     const lines = gridToLines(

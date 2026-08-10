@@ -8,6 +8,7 @@ import { RunInterruptedError } from '../src/engine/types.js';
 import { builtinExecutors } from '../src/executors/index.js';
 import type { NodeTypeId } from '../src/registry/index.js';
 import type { RunBaseline } from '../src/runstate/types.js';
+import { sumTokens } from '../src/runstate/types.js';
 import { fakePorts, storeFor, throwingSessions, workflowFromYaml } from './helpers.js';
 
 const BASELINE: RunBaseline = { commit: 'c0', tree: 't0', dirtyOverride: false };
@@ -51,12 +52,16 @@ function doneAfter(output: unknown, body?: (ctx: ExecuteContext) => Promise<void
  * A node that keeps spending until something stops it — the shape a runaway
  * agent loop has, and the only thing a stop rule is really tested against.
  */
-function spendsUntilAborted(perTick: number): NodeExecutor {
+function spendsUntilAborted(
+  perTick: number,
+  field: 'input' | 'cacheRead' | 'cacheWrite' = 'input',
+  ticks = 1000,
+): NodeExecutor {
   return async function* (ctx): AsyncGenerator<StatusEvent, void, void> {
     yield { type: 'status', status: 'running' };
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < ticks; i++) {
       if (ctx.signal.aborted) throw new RunInterruptedError();
-      ctx.store.addTokens(ctx.node.id, { input: perTick, output: 0, cached: 0 });
+      ctx.store.addTokens(ctx.node.id, { [field]: perTick });
       await new Promise((r) => setTimeout(r, 1));
     }
     yield { type: 'result', output: IMPL_OUT };
@@ -94,10 +99,38 @@ describe('budgets as stop rules', () => {
     expect(store.snapshot().finishedAt).toBeDefined();
   });
 
+  it('does not spend a budget on tokens served from cache', async () => {
+    // The failure this pins: a session re-reads its cached prefix on every
+    // turn, so cache reads scale with turn count rather than with work done.
+    // Counted, they exhausted a 2,000,000-token run budget on a change whose
+    // real spend was a few hundred tokens.
+    const { engine, store } = engineWith(CHAIN('  budget: { tokensPerNode: 10000 }'), {
+      a: spendsUntilAborted(1_000_000, 'cacheRead', 20),
+      b: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+
+    expect(store.node('a').status).toBe('done');
+    expect(store.node('b').status).toBe('done');
+    expect(store.tokensFor('a')).toBe(0);
+    expect(sumTokens(store.node('a').tokens)).toBe(20_000_000);
+  });
+
+  it('spends a budget on tokens written to cache — that is context growing', async () => {
+    const { engine, store } = engineWith(CHAIN('  budget: { tokensPerNode: 10000 }'), {
+      a: spendsUntilAborted(5_000, 'cacheWrite'),
+      b: doneAfter(IMPL_OUT),
+    });
+    await engine.run();
+
+    expect(store.node('a').status).toBe('error');
+    expect(store.node('a').statusDetail).toContain('node token budget exhausted');
+  });
+
   it('leaves a node under its budget completely alone', async () => {
     const { engine, store } = engineWith(CHAIN('  budget: { tokensPerNode: 10000 }'), {
       a: doneAfter(IMPL_OUT, async (ctx) => {
-        ctx.store.addTokens('a', { input: 900, output: 100, cached: 0 });
+        ctx.store.addTokens('a', { input: 900, output: 100, cacheRead: 0, cacheWrite: 0 });
       }),
       b: doneAfter(IMPL_OUT),
     });
@@ -151,7 +184,7 @@ edges:
 `;
     const { engine, store } = engineWith(OVERRIDES, {
       a: doneAfter(IMPL_OUT, async (ctx) => {
-        ctx.store.addTokens('a', { input: 5_000, output: 0, cached: 0 });
+        ctx.store.addTokens('a', { input: 5_000, output: 0, cacheRead: 0, cacheWrite: 0 });
       }),
       b: spendsUntilAborted(100),
     });
@@ -212,7 +245,7 @@ edges:
   it('does nothing at all when no budget is configured', async () => {
     const { engine, store } = engineWith('nodes:\n  - id: a\n    type: implement\n    config: { instructions: x }', {
       a: doneAfter(IMPL_OUT, async (ctx) => {
-        ctx.store.addTokens('a', { input: 10_000_000, output: 0, cached: 0 });
+        ctx.store.addTokens('a', { input: 10_000_000, output: 0, cacheRead: 0, cacheWrite: 0 });
       }),
     });
     await engine.run();

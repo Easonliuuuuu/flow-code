@@ -83,7 +83,9 @@ describe('CodexSessionRunner', () => {
     const { finalText } = await runner.run(baseRequest(), store);
 
     expect(finalText).toBe('all done');
-    expect(store.tokensFor('impl')).toBe(10 + 2 + 1 + 5 + 3);
+    expect(store.node('impl').tokens).toEqual({ input: 10, output: 8, cacheRead: 2, cacheWrite: 1 });
+    // Reported in full, but cache reads never reach the budget.
+    expect(store.tokensFor('impl')).toBe(10 + 8 + 1);
   });
 
   it('maps read-only capabilities to sandboxMode read-only', async () => {

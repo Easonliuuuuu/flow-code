@@ -71,18 +71,87 @@ export interface AttemptRecord {
  * Tokens a node has consumed so far, accumulated across every API call it
  * makes (and, for a fan-out node, across all of its instances). Absent on
  * node types with no agent session — they cost nothing.
+ *
+ * The two cache terms are kept apart because they behave nothing alike. A
+ * cache *write* happens once per new prefix and is billed above base input; a
+ * cache *read* happens on every subsequent turn, is billed at a fraction of
+ * it, and therefore grows with how long a session runs rather than with how
+ * much work it does. Collapsing them into one number is what made
+ * {@link budgetedTokens} impossible to state honestly.
  */
 export interface TokenUsage {
   /** Fresh (uncached) prompt tokens. */
   input: number;
   output: number;
-  /** Prompt tokens served from, or written to, the provider's cache. */
-  cached: number;
+  /** Prompt tokens written to the provider's cache. */
+  cacheWrite: number;
+  /** Prompt tokens served from the provider's cache. */
+  cacheRead: number;
 }
 
-/** Every token a usage record accounts for — what a budget is measured against. */
+/**
+ * Run files written before the two cache terms were separated carry a single
+ * `cached` field holding their sum. It is only ever read, and it is counted as
+ * cache reads, which is what it overwhelmingly was — reads outnumber writes by
+ * roughly the number of turns in a session.
+ */
+interface LegacyTokenUsage {
+  cached?: number;
+}
+
+function cacheReadOf(usage: TokenUsage): number {
+  const legacy = (usage as TokenUsage & LegacyTokenUsage).cached;
+  return usage.cacheRead ?? legacy ?? 0;
+}
+
+function cacheWriteOf(usage: TokenUsage): number {
+  return usage.cacheWrite ?? 0;
+}
+
+/** Every token the provider moved — what the UI reports. */
 export function sumTokens(usage: TokenUsage | undefined): number {
-  return usage ? usage.input + usage.cached + usage.output : 0;
+  if (!usage) return 0;
+  return usage.input + usage.output + cacheReadOf(usage) + cacheWriteOf(usage);
+}
+
+/** Prompt-side tokens: fresh input plus both cache terms. */
+export function promptTokens(usage: TokenUsage | undefined): number {
+  if (!usage) return 0;
+  return usage.input + cacheReadOf(usage) + cacheWriteOf(usage);
+}
+
+/** Prompt tokens served from cache — reported, never budgeted. */
+export function cacheReadTokens(usage: TokenUsage | undefined): number {
+  return usage ? cacheReadOf(usage) : 0;
+}
+
+/** Prompt tokens written to cache — reported, and budgeted. */
+export function cacheWriteTokens(usage: TokenUsage | undefined): number {
+  return usage ? cacheWriteOf(usage) : 0;
+}
+
+/**
+ * What a budget counts: everything except tokens served from cache.
+ *
+ * A budget exists to stop a run that is spending without bound, so it has to
+ * track work done rather than context re-sent. Cache reads are neither: a
+ * long session re-reads the same cached prefix on every turn, so counting
+ * them makes the ceiling a measure of how many turns have passed. In
+ * practice that dominated everything else — a two-function change was
+ * observed spending 154 fresh input tokens, 403 output tokens, and 2,077,069
+ * cache reads, which exhausted the scaffolded 2,000,000-token run budget
+ * before the Test node ever ran. Cache reads are also the cheapest thing on
+ * the bill, at a fraction of base input, so counting them at full weight
+ * overstated cost by an order of magnitude in the same breath.
+ *
+ * Cache *writes* stay counted: they are billed above base input and they grow
+ * with context, which is exactly the runaway a token ceiling should catch. A
+ * run that spins without writing new context is bounded by `minutesPerRun`,
+ * which is the backstop suited to it.
+ */
+export function budgetedTokens(usage: TokenUsage | undefined): number {
+  if (!usage) return 0;
+  return usage.input + usage.output + cacheWriteOf(usage);
 }
 
 export interface NodeRunState {

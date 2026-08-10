@@ -158,7 +158,12 @@ describe('SdkSessionRunner.run', () => {
 
     const store = storeFor();
     await runner.run(baseReq(), store);
-    expect(store.snapshot().nodes['n1']!.tokens).toEqual({ input: 10, output: 3, cached: 7 });
+    expect(store.snapshot().nodes['n1']!.tokens).toEqual({
+      input: 10,
+      output: 3,
+      cacheRead: 5,
+      cacheWrite: 2,
+    });
   });
 
   it('records a rate-limit window the provider reports', async () => {

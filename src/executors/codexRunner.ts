@@ -120,7 +120,8 @@ async function drainTurn(
         store.addTokens(req.nodeId, {
           input: event.usage.input_tokens,
           output: event.usage.output_tokens + event.usage.reasoning_output_tokens,
-          cached: event.usage.cached_input_tokens + event.usage.cache_write_input_tokens,
+          cacheRead: event.usage.cached_input_tokens,
+          cacheWrite: event.usage.cache_write_input_tokens,
         });
         break;
       case 'turn.failed':
