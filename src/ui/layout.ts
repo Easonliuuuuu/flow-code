@@ -173,77 +173,99 @@ export interface LayoutOptions {
    * callers opt individual density passes into wrapping, `computeLayout`
    * doesn't decide that itself.
    *
-   * Wrapping only takes effect if every band boundary is a shape a wrap edge
-   * can actually route without dodging another band's own boxes: single
-   * node at the end of one band, single node at the start of the next, no
-   * loop-back crossing it. If any boundary fails that, the whole layout
-   * falls back to one flat band rather than wrapping some boundaries and not
-   * others — see `bandsWrapCleanly`.
+   * A band only ever ends where a wrap edge can actually route without
+   * dodging another band's own boxes — single node at the end, single node
+   * at the start of the next, no loop-back crossing it (see
+   * `validCutPoints`). Reaching `wrapWidth` mid-fan-out doesn't stop
+   * wrapping outright: the boundary backs off to the nearest earlier legal
+   * point that still fits, or — if the *whole* band up to here is one long
+   * illegal run — grows past `wrapWidth` to the next legal point wherever
+   * that is, rather than giving up on wrapping entirely.
    */
   wrapWidth?: number;
 }
 
 /**
- * Assigns each layer to a band so no band's accumulated width exceeds
- * `wrapWidth`. One band (index 0) for every layer when `wrapWidth` is
- * undefined — today's unwrapped behavior.
+ * Every layer boundary a band is legally allowed to end at, as an ascending
+ * list of layer indices (a band spanning `[a, c)` for some `c` in this list
+ * is one `renderGraph`'s wrap edge can actually draw). Always ends with
+ * `layerCount` — the end of the graph is always a legal place to stop.
+ *
+ * A cut is legal only if the layers on both sides of it are single nodes,
+ * and no edge — forward or loop-back — spans across it without landing on
+ * exactly that adjacent pair. An edge spanning several layers (a fan-out
+ * converging a few layers later, a loop-back reaching back further than
+ * one step) knocks out every cut inside its span, which has the wanted
+ * side effect of forcing that whole run to share one band — nothing further
+ * has to check for it once band widths are being decided.
  */
-function assignBands(layerWidths: number[], wrapWidth: number | undefined): number[] {
-  if (wrapWidth === undefined) return layerWidths.map(() => 0);
-  const bands: number[] = [];
-  let band = 0;
-  let bandX = 0;
-  for (const w of layerWidths) {
-    // Never wrap before a band's first layer — a lone layer wider than
-    // wrapWidth still has to go somewhere.
-    if (bandX > 0 && bandX + w > wrapWidth) {
-      band += 1;
-      bandX = 0;
-    }
-    bands.push(band);
-    bandX += w + GAP_X;
+function validCutPoints(
+  workflow: Workflow,
+  layerOf: Map<string, number>,
+  layers: Map<number, string[]>,
+  layerCount: number,
+): number[] {
+  const legal = new Array<boolean>(layerCount + 1).fill(true);
+  legal[0] = false; // nothing precedes the first layer
+  for (let c = 1; c < layerCount; c++) {
+    if ((layers.get(c - 1)?.length ?? 0) !== 1) legal[c] = false;
+    if ((layers.get(c)?.length ?? 0) !== 1) legal[c] = false;
   }
-  return bands;
+  for (const edge of workflow.edges) {
+    const f = layerOf.get(edge.from);
+    const t = layerOf.get(edge.to);
+    if (f === undefined || t === undefined || f === t) continue;
+    const lo = Math.min(f, t);
+    const hi = Math.max(f, t);
+    if (!edge.loopback && hi - lo === 1) continue; // an ordinary adjacent edge is never a problem
+    for (let c = lo + 1; c <= hi; c++) legal[c] = false;
+  }
+  const cuts: number[] = [];
+  for (let c = 1; c <= layerCount; c++) {
+    if (c === layerCount || legal[c]) cuts.push(c);
+  }
+  return cuts;
 }
 
 /**
- * True only if every edge that crosses a band boundary can be drawn as the
- * one shape `renderGraph`'s wrap edge knows how to route: from the *only*
- * node in its band's last layer, to the *only* node in the next band's
- * first layer, skipping no band in between, and never a loop-back (those
- * already have their own return-path drawing and aren't taught this lane).
- * Anything else — a fan-out sitting right at the boundary, a skip-layer
- * edge, a loop-back that would cross it — fails this for the *whole*
- * layout, not just that boundary; see `wrapWidth`.
+ * Assigns each layer to a band, packing as many as fit under `wrapWidth`
+ * before starting the next — but only ever ending a band at one of
+ * `validCuts`: the furthest one that still fits, backing off to an earlier
+ * one otherwise, or past `wrapWidth` altogether if nothing before it is
+ * legal. One band (index 0) for every layer when `wrapWidth` is undefined —
+ * today's unwrapped behavior.
  */
-function bandsWrapCleanly(
-  workflow: Workflow,
-  layerOf: Map<string, number>,
-  layerBand: number[],
-  layers: Map<number, string[]>,
-): boolean {
-  const bandFirstLayer = new Map<number, number>();
-  const bandLastLayer = new Map<number, number>();
-  layerBand.forEach((band, layer) => {
-    if (!bandFirstLayer.has(band)) bandFirstLayer.set(band, layer);
-    bandLastLayer.set(band, layer);
-  });
+function assignBands(layerWidths: number[], wrapWidth: number | undefined, validCuts: number[]): number[] {
+  if (wrapWidth === undefined) return layerWidths.map(() => 0);
+  const n = layerWidths.length;
+  // Cumulative width including one GAP_X after every layer, so the width of
+  // layers [a, b) packed contiguously is prefix[b] - prefix[a] - GAP_X (no
+  // trailing gap once the band actually ends).
+  const prefix = [0];
+  for (const w of layerWidths) prefix.push(prefix[prefix.length - 1]! + w + GAP_X);
+  const spanWidth = (a: number, b: number): number => prefix[b]! - prefix[a]! - GAP_X;
 
-  for (const edge of workflow.edges) {
-    const fromLayer = layerOf.get(edge.from);
-    const toLayer = layerOf.get(edge.to);
-    if (fromLayer === undefined || toLayer === undefined) continue;
-    const fromBand = layerBand[fromLayer]!;
-    const toBand = layerBand[toLayer]!;
-    if (fromBand === toBand) continue; // same band: today's routing already handles this
-    if (edge.loopback) return false;
-    if (toBand !== fromBand + 1) return false;
-    if (fromLayer !== bandLastLayer.get(fromBand)) return false;
-    if (toLayer !== bandFirstLayer.get(toBand)) return false;
-    if ((layers.get(fromLayer)?.length ?? 0) !== 1) return false;
-    if ((layers.get(toLayer)?.length ?? 0) !== 1) return false;
+  const bands = new Array<number>(n).fill(0);
+  let band = 0;
+  let bandStart = 0;
+  let ci = 0;
+  while (bandStart < n) {
+    while (validCuts[ci]! <= bandStart) ci++;
+    let chosen = validCuts[ci]!;
+    let j = ci;
+    // Keep extending to the next legal cut as long as it still fits — this
+    // is the "back off to the nearest one that fits" behavior, expressed as
+    // walking forward and remembering the last one that still qualified.
+    while (j + 1 < validCuts.length && spanWidth(bandStart, validCuts[j + 1]!) <= wrapWidth) {
+      j++;
+      chosen = validCuts[j]!;
+    }
+    for (let l = bandStart; l < chosen; l++) bands[l] = band;
+    band++;
+    bandStart = chosen;
+    ci = j + 1;
   }
-  return true;
+  return bands;
 }
 
 /**
@@ -277,16 +299,21 @@ export function computeLayout(
     widths.set(node.id, boxWidth(node, options.density ?? 'full'));
   }
 
-  const layerCount = Math.max(...layers.keys()) + 1;
+  // `Math.max()` on no layers is `-Infinity` — harmless to `Array.from`
+  // below (its length coerces negatives to 0), but `validCutPoints`'
+  // `new Array(...)` throws on it, so a graphless workflow (the `watch`
+  // placeholder before a run attaches) needs the floor made explicit.
+  const layerCount = layers.size === 0 ? 0 : Math.max(...layers.keys()) + 1;
   const layerWidths = Array.from({ length: layerCount }, (_, l) => {
     const ids = layers.get(l) ?? [];
     return Math.max(...ids.map((id) => widths.get(id)!), 0);
   });
 
-  let layerBand = assignBands(layerWidths, options.wrapWidth);
-  if (options.wrapWidth !== undefined && !bandsWrapCleanly(workflow, layerOf, layerBand, layers)) {
-    layerBand = layerWidths.map(() => 0);
-  }
+  const layerBand = assignBands(
+    layerWidths,
+    options.wrapWidth,
+    validCutPoints(workflow, layerOf, layers, layerCount),
+  );
 
   const boxes = new Map<string, NodeBox>();
   let bandX = 0;
