@@ -55,6 +55,10 @@ const ANSI: Record<string, string> = {
   // A skill badge is a standing config choice, not a transient run signal —
   // dim like the model badge, but yellow so it doesn't read as identical.
   'skill-badge': '\x1b[33m',
+  // Where a loop-back's vertical run passes through a wrap lane on its way to
+  // the reserved row below the whole graph — see `putLoopbackRun`. Neutral so
+  // it reads as "two unrelated lines cross here", not as a piece of either.
+  crossing: '\x1b[37m',
 };
 const RESET = '\x1b[0m';
 
@@ -130,6 +134,23 @@ function drawWrapEdge(grid: Grid, from: NodeBox, to: NodeBox, style: string): vo
   }
   for (let y = laneY + 1; y < to.y - 1; y++) put(grid, tx, y, '│', style);
   put(grid, tx, to.y - 1, '▼', style);
+}
+
+/**
+ * A loop-back's vertical run, from a box's edge down to its reserved row
+ * below the whole graph. That row sits below every band, so a loop-back
+ * whose nodes live above the last band has to pass through every wrap lane
+ * between them on the way — band-wrap and loop-backs are laid out by two
+ * independent allocators that don't know about each other's rows. Marking
+ * the cell as an explicit crossing instead of just overwriting it keeps the
+ * wrap edge legible instead of silently breaking wherever a loop-back
+ * happens to run through its column.
+ */
+function putLoopbackRun(grid: Grid, x: number, y0: number, y1: number, style: string): void {
+  for (let y = y0; y < y1; y++) {
+    if (grid[y]?.[x]?.style === 'wrap') put(grid, x, y, '┼', 'crossing');
+    else put(grid, x, y, '╎', style);
+  }
 }
 
 /**
@@ -211,12 +232,12 @@ export function renderGraph(
       (runState.nodes[loop.from]?.priorAttempts?.length ?? 0) > 0;
     const style = fired ? 'loopback-fired' : 'loopback';
 
-    for (let y = from.y + from.h; y < bandY; y++) put(grid, sx, y, '╎', style);
+    putLoopbackRun(grid, sx, from.y + from.h, bandY, style);
     put(grid, sx, bandY, '╯', style);
     const [left, right] = tx < sx ? [tx, sx] : [sx, tx];
     for (let x = left + 1; x < right; x++) put(grid, x, bandY, '╌', style);
     put(grid, tx, bandY, '╰', style);
-    for (let y = to.y + to.h + 1; y < bandY; y++) put(grid, tx, y, '╎', style);
+    putLoopbackRun(grid, tx, to.y + to.h + 1, bandY, style);
     put(grid, tx, to.y + to.h, '▲', style);
 
     if (fired) {
