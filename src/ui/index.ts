@@ -147,7 +147,15 @@ export function runUi(opts: {
             finish();
           },
         }),
-        { exitOnCtrlC: false },
+        // A fresh Ink instance has no memory of what's on screen — its
+        // diff-based redraw assumes zero previous output. On the primary
+        // screen that assumption can drift from reality (terminal scroll,
+        // leftover splash frame), which a full-canvas repaint like panning
+        // then reveals as stray glyphs. The alternate screen sidesteps this:
+        // entering it always starts from a guaranteed-blank buffer, so the
+        // diff math and the terminal agree from frame one. Same reasoning as
+        // the splash mount below.
+        { exitOnCtrlC: false, alternateScreen: true },
       );
       void instance.waitUntilExit().then(() => finish());
     };
