@@ -50,6 +50,10 @@
     "test:integration:local": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts",
     "docs:node-types": "node scripts/gen-node-types-doc.mjs",
     "docs:check": "node scripts/gen-node-types-doc.mjs --check",
+    "demo:capture": "node scripts/demo.mjs capture",
+    "demo:play": "node scripts/demo.mjs play",
+    "demo:duration": "node scripts/demo.mjs duration",
+    "demo:record": "vhs docs/demo/flow-code.tape",
     "status": "node scripts/status.mjs",
     "status:check": "node scripts/status.mjs --check"
   },
