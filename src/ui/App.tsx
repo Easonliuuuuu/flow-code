@@ -315,10 +315,16 @@ export function App({
   useEffect(() => store.subscribe(setRunState), [store]);
   useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
 
-  // Animation clock for running node cards (spinner, ticking elapsed time).
-  // It only runs while something is actually running, so an idle or finished
-  // graph costs nothing and redraws nothing.
-  const anyRunning = Object.values(runState.nodes).some((n) => n.status === 'running');
+  // Animation clock for in-flight node cards (spinner, ticking elapsed time).
+  // A node is in flight from the moment it starts until it reaches a terminal
+  // status, even while its status is `waiting` (e.g. an approval gate) rather
+  // than `running` — otherwise the elapsed-time display freezes mid-flight
+  // and only snaps to the correct value once the node finishes. It only runs
+  // while something is actually in flight, so an idle or finished graph costs
+  // nothing and redraws nothing.
+  const anyRunning = Object.values(runState.nodes).some(
+    (n) => n.startedAt !== undefined && n.endedAt === undefined,
+  );
   useEffect(() => {
     if (!anyRunning) return;
     const timer = setInterval(() => setFrame((f) => f + 1), ANIMATION_INTERVAL_MS);
