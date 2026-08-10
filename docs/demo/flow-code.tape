@@ -21,10 +21,13 @@ Output docs/demo/flow-code.gif
 Require node
 
 Set Shell "bash"
-Set FontSize 13
+Set FontSize 16
 # ~200 columns, which is what the eight-node graph needs in compact form.
 Set Width 1600
-Set Height 560
+# ~14 rows: header, the graph with its loop-back arcs beneath it, and the key
+# hints. The canvas pins its hint line to the bottom of the terminal, so extra
+# height is dead space between the two rather than a bigger graph.
+Set Height 380
 Set Padding 20
 Set Framerate 20
 # Dark, so the GIF reads the same against GitHub's light and dark themes.
