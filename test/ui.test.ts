@@ -6,12 +6,15 @@ import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS
 import { defaultSkillRoots } from '../src/skills/discover.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
 import {
+  BAND_GAP_Y,
   centerOnBox,
   clampOffset,
   COMPACT_BOX_HEIGHT,
+  COMPACT_MIN_BOX_CONTENT,
   computeLayout,
   FOCUS_ANCHOR_X_FRACTION,
   FOCUS_ANCHOR_Y_ROWS,
+  GAP_X,
   hitTest,
   MAX_BOX_CONTENT,
   MINI_BOX_HEIGHT,
@@ -722,6 +725,205 @@ describe('loop-back rendering', () => {
     store.setStatus('impl', 'done');
     store.resetNode('impl');
     expect(renderText(LOOP_WF, store)).toContain(`${STATUS_GLYPHS.idle} impl`);
+  });
+});
+
+describe('band-wrap layout (compact only)', () => {
+  // Every node here has a short id, so each lands on compact's width floor —
+  // COMPACT_MIN_BOX_CONTENT plus the border — making the wrap point exact
+  // and reproducible rather than a guess.
+  const compactW = COMPACT_MIN_BOX_CONTENT + 2;
+  // Room for exactly two layers per band: the third always overflows.
+  const wrapWidth = 2 * compactW + GAP_X;
+
+  const CHAIN_WF = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+`);
+
+  it('is unaffected when wrapWidth is not given', () => {
+    const layout = computeLayout(CHAIN_WF, undefined, { density: 'compact' });
+    for (const id of ['a', 'b', 'c', 'd']) expect(layout.boxes.get(id)!.band).toBe(0);
+  });
+
+  it('wraps a straight chain into bands once a band would exceed wrapWidth', () => {
+    const layout = computeLayout(CHAIN_WF, undefined, { density: 'compact', wrapWidth });
+    expect(layout.boxes.get('a')!.band).toBe(0);
+    expect(layout.boxes.get('b')!.band).toBe(0);
+    expect(layout.boxes.get('c')!.band).toBe(1);
+    expect(layout.boxes.get('d')!.band).toBe(1);
+    // Band two restarts at x=0, BAND_GAP_Y rows below band one's bottom.
+    expect(layout.boxes.get('c')!.x).toBe(0);
+    expect(layout.boxes.get('c')!.y).toBe(COMPACT_BOX_HEIGHT + BAND_GAP_Y);
+  });
+
+  it('leaves a wider workflow flat when wrapWidth never triggers a wrap', () => {
+    const wide = computeLayout(CHAIN_WF, undefined, { density: 'compact', wrapWidth: 10_000 });
+    const flat = computeLayout(CHAIN_WF, undefined, { density: 'compact' });
+    for (const id of ['a', 'b', 'c', 'd']) {
+      expect(wide.boxes.get(id)).toEqual(flat.boxes.get(id));
+    }
+  });
+
+  it('falls back to a flat layout when a fan-out would sit at the band boundary', () => {
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c1
+    type: review
+  - id: c2
+    type: review
+  - id: d
+    type: validate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c1 }
+  - { from: b, to: c2 }
+  - { from: c1, to: d }
+  - { from: c2, to: d }
+`);
+    const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
+    const flat = computeLayout(wf, undefined, { density: 'compact' });
+    for (const id of ['a', 'b', 'c1', 'c2', 'd']) {
+      expect(wrapped.boxes.get(id)!.band).toBe(0);
+      expect(wrapped.boxes.get(id)).toEqual(flat.boxes.get(id));
+    }
+  });
+
+  it('falls back to a flat layout when an edge skips over the band boundary', () => {
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+  - { from: a, to: d }
+`);
+    const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
+    for (const id of ['a', 'b', 'c', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(0);
+  });
+
+  it('falls back to a flat layout when a loop-back would cross the band boundary', () => {
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+  - { from: d, to: a, loopback: true }
+`);
+    const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
+    for (const id of ['a', 'b', 'c', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(0);
+  });
+
+  it('draws a wrap edge, distinct from a forward edge, at the band boundary', () => {
+    const store = storeFor(CHAIN_WF, '/tmp');
+    const layout = computeLayout(CHAIN_WF, undefined, { density: 'compact', wrapWidth });
+    const grid = renderGraph(CHAIN_WF, layout, store.snapshot(), null);
+    const styles = new Set(grid.flat().map((cell) => cell.style));
+    expect(styles.has('wrap')).toBe(true);
+    const text = grid
+      .map((row) => row.map((c) => c.ch).join(''))
+      .join('\n');
+    expect(text).toContain('▼');
+  });
+
+  it('leaves full density unwrapped even with the same graph', () => {
+    const layout = computeLayout(CHAIN_WF, undefined, { density: 'full' });
+    for (const id of ['a', 'b', 'c', 'd']) expect(layout.boxes.get(id)!.band).toBe(0);
+  });
+
+  it("routes the wrap lane below the whole band, not just the wrap source's own row", () => {
+    // b fans out to a taller layer (c1/c2) *before* the band's single-node
+    // wrap point (d) — the lane has to clear c1/c2 too, not just d's own row.
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c1
+    type: review
+  - id: c2
+    type: review
+  - id: d
+    type: validate
+  - id: e
+    type: approval-gate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c1 }
+  - { from: b, to: c2 }
+  - { from: c1, to: d }
+  - { from: c2, to: d }
+  - { from: d, to: e }
+`);
+    // Room for exactly the four layers (a, b, the fan-out, d) before e overflows.
+    const wideEnoughForFourLayers = 4 * compactW + 3 * GAP_X;
+    const layout = computeLayout(wf, undefined, { density: 'compact', wrapWidth: wideEnoughForFourLayers });
+    const d = layout.boxes.get('d')!;
+    const c1 = layout.boxes.get('c1')!;
+    const c2 = layout.boxes.get('c2')!;
+    expect(d.band).toBe(0);
+    expect(layout.boxes.get('e')!.band).toBe(1);
+    // The band's bottom has to account for the taller fan-out layer, not
+    // stop at d's own single row — this is exactly the bug: routing off
+    // `d.y + d.h` instead cut the lane straight through c1/c2.
+    const fanOutBottom = Math.max(c1.y + c1.h, c2.y + c2.h);
+    expect(fanOutBottom).toBeGreaterThan(d.y + d.h);
+    expect(d.bandBottom).toBe(fanOutBottom);
+
+    const store = storeFor(wf, '/tmp');
+    const grid = renderGraph(wf, layout, store.snapshot(), null);
+    // The lane's corner glyph is where the edge turns from vertical to
+    // horizontal — the one row that has to clear the fan-out. (The vertical
+    // drop above it runs under `d`'s own column, past a different row range,
+    // and isn't a collision — checking *every* wrap-styled cell's row would
+    // wrongly flag that too.) Boxes paint over edges afterward, so a wrong
+    // row wouldn't corrupt c1/c2's glyphs — the corner's actual row is what
+    // has to be checked, not whether anything visibly overlaps.
+    const cornerRow = grid.findIndex((row) => row.some((cell) => cell.style === 'wrap' && cell.ch === '╯'));
+    expect(cornerRow).toBeGreaterThanOrEqual(fanOutBottom);
   });
 });
 

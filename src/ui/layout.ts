@@ -9,6 +9,13 @@ export const COMPACT_BOX_HEIGHT = 3;
 export const MINI_BOX_HEIGHT = 1;
 export const GAP_X = 5;
 export const GAP_Y = 1;
+/**
+ * Rows reserved between two wrapped bands — see `computeLayout`'s `wrapWidth`
+ * option. Wider than `GAP_Y` because a wrap edge needs room to route through:
+ * one blank row, one lane row for the bend, one arrow row into the next
+ * band's top border.
+ */
+export const BAND_GAP_Y = 3;
 
 /** Mini-card width bounds — much narrower than a full/compact card's, since it holds no subtitle or metrics. */
 export const MINI_MIN_BOX_CONTENT = 6;
@@ -56,6 +63,18 @@ export interface NodeBox {
   w: number;
   h: number;
   layer: number;
+  /** Which wrapped band this box's layer landed in — see `computeLayout`'s
+   * `wrapWidth` option. Always 0 when the graph isn't wrapped. */
+  band: number;
+  /**
+   * Bottom edge of this box's whole *band* — not just this box's own row.
+   * A wrap edge's lane has to clear every layer in the band it's leaving,
+   * not just the single (validated) layer it happens to start from: that
+   * layer can sit at the band's top while an earlier, taller layer (a
+   * fan-out, say) reaches further down. Routing the lane off `from.y +
+   * from.h` instead cuts straight through that layer's boxes.
+   */
+  bandBottom: number;
 }
 
 export interface Layout {
@@ -146,6 +165,85 @@ export interface LayoutOptions {
    * detail panel. Defaults to 'full'.
    */
   density?: Density;
+  /**
+   * When set, layers wrap into bands rather than running off to the right
+   * forever: once a band's accumulated width would exceed this, the next
+   * layer starts a new band back at x=0, one `BAND_GAP_Y` below. Left
+   * undefined, the graph lays out as one flat band exactly as before —
+   * callers opt individual density passes into wrapping, `computeLayout`
+   * doesn't decide that itself.
+   *
+   * Wrapping only takes effect if every band boundary is a shape a wrap edge
+   * can actually route without dodging another band's own boxes: single
+   * node at the end of one band, single node at the start of the next, no
+   * loop-back crossing it. If any boundary fails that, the whole layout
+   * falls back to one flat band rather than wrapping some boundaries and not
+   * others — see `bandsWrapCleanly`.
+   */
+  wrapWidth?: number;
+}
+
+/**
+ * Assigns each layer to a band so no band's accumulated width exceeds
+ * `wrapWidth`. One band (index 0) for every layer when `wrapWidth` is
+ * undefined — today's unwrapped behavior.
+ */
+function assignBands(layerWidths: number[], wrapWidth: number | undefined): number[] {
+  if (wrapWidth === undefined) return layerWidths.map(() => 0);
+  const bands: number[] = [];
+  let band = 0;
+  let bandX = 0;
+  for (const w of layerWidths) {
+    // Never wrap before a band's first layer — a lone layer wider than
+    // wrapWidth still has to go somewhere.
+    if (bandX > 0 && bandX + w > wrapWidth) {
+      band += 1;
+      bandX = 0;
+    }
+    bands.push(band);
+    bandX += w + GAP_X;
+  }
+  return bands;
+}
+
+/**
+ * True only if every edge that crosses a band boundary can be drawn as the
+ * one shape `renderGraph`'s wrap edge knows how to route: from the *only*
+ * node in its band's last layer, to the *only* node in the next band's
+ * first layer, skipping no band in between, and never a loop-back (those
+ * already have their own return-path drawing and aren't taught this lane).
+ * Anything else — a fan-out sitting right at the boundary, a skip-layer
+ * edge, a loop-back that would cross it — fails this for the *whole*
+ * layout, not just that boundary; see `wrapWidth`.
+ */
+function bandsWrapCleanly(
+  workflow: Workflow,
+  layerOf: Map<string, number>,
+  layerBand: number[],
+  layers: Map<number, string[]>,
+): boolean {
+  const bandFirstLayer = new Map<number, number>();
+  const bandLastLayer = new Map<number, number>();
+  layerBand.forEach((band, layer) => {
+    if (!bandFirstLayer.has(band)) bandFirstLayer.set(band, layer);
+    bandLastLayer.set(band, layer);
+  });
+
+  for (const edge of workflow.edges) {
+    const fromLayer = layerOf.get(edge.from);
+    const toLayer = layerOf.get(edge.to);
+    if (fromLayer === undefined || toLayer === undefined) continue;
+    const fromBand = layerBand[fromLayer]!;
+    const toBand = layerBand[toLayer]!;
+    if (fromBand === toBand) continue; // same band: today's routing already handles this
+    if (edge.loopback) return false;
+    if (toBand !== fromBand + 1) return false;
+    if (fromLayer !== bandLastLayer.get(fromBand)) return false;
+    if (toLayer !== bandFirstLayer.get(toBand)) return false;
+    if ((layers.get(fromLayer)?.length ?? 0) !== 1) return false;
+    if ((layers.get(toLayer)?.length ?? 0) !== 1) return false;
+  }
+  return true;
 }
 
 /**
@@ -179,24 +277,55 @@ export function computeLayout(
     widths.set(node.id, boxWidth(node, options.density ?? 'full'));
   }
 
-  const boxes = new Map<string, NodeBox>();
-  let x = 0;
   const layerCount = Math.max(...layers.keys()) + 1;
+  const layerWidths = Array.from({ length: layerCount }, (_, l) => {
+    const ids = layers.get(l) ?? [];
+    return Math.max(...ids.map((id) => widths.get(id)!), 0);
+  });
+
+  let layerBand = assignBands(layerWidths, options.wrapWidth);
+  if (options.wrapWidth !== undefined && !bandsWrapCleanly(workflow, layerOf, layerBand, layers)) {
+    layerBand = layerWidths.map(() => 0);
+  }
+
+  const boxes = new Map<string, NodeBox>();
+  let bandX = 0;
+  let bandTop = 0;
+  let bandHeight = 0;
+  let currentBand = 0;
   for (let l = 0; l < layerCount; l++) {
     const ids = layers.get(l) ?? [];
-    const layerWidth = Math.max(...ids.map((id) => widths.get(id)!), 0);
+    const band = layerBand[l]!;
+    if (band !== currentBand) {
+      bandTop += bandHeight + BAND_GAP_Y;
+      bandX = 0;
+      bandHeight = 0;
+      currentBand = band;
+    }
+    if (ids.length > 0) bandHeight = Math.max(bandHeight, ids.length * (boxHeight + GAP_Y) - GAP_Y);
     ids.forEach((id, row) => {
       boxes.set(id, {
         id,
-        x,
-        y: row * (boxHeight + GAP_Y),
+        x: bandX,
+        y: bandTop + row * (boxHeight + GAP_Y),
         w: widths.get(id)!,
         h: boxHeight,
         layer: l,
+        band,
+        bandBottom: 0, // filled in below, once every layer's height is known
       });
     });
-    x += layerWidth + GAP_X;
+    bandX += layerWidths[l]! + GAP_X;
   }
+
+  // A box's own layer can be shorter than another layer elsewhere in its
+  // band (a fan-out earlier in the same band, say) — `bandBottom` has to be
+  // the tallest of them, which isn't known until every layer's been placed.
+  const bandBottom = new Map<number, number>();
+  for (const box of boxes.values()) {
+    bandBottom.set(box.band, Math.max(bandBottom.get(box.band) ?? 0, box.y + box.h));
+  }
+  for (const box of boxes.values()) box.bandBottom = bandBottom.get(box.band)!;
 
   // Captured before overrides move anything: this is the yardstick `dxFrac`
   // is measured against, and it has to mean the same thing on every call or a

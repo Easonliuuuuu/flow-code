@@ -1,7 +1,7 @@
 import type { ActivityEntry, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import { BOX_HEIGHT, MINI_BOX_HEIGHT, type Layout, type Viewport } from './layout.js';
+import { BOX_HEIGHT, MINI_BOX_HEIGHT, type Layout, type NodeBox, type Viewport } from './layout.js';
 import { delegationBadge, nodeMetrics, nodeSubtitle, spinnerFrame } from './nodeCard.js';
 import { fitText as fit } from './textwrap.js';
 
@@ -48,6 +48,10 @@ const ANSI: Record<string, string> = {
   // Return paths read as a different kind of line from forward edges.
   loopback: '\x1b[35m',
   'loopback-fired': '\x1b[1;35m',
+  // A band-wrap edge is still a forward edge, just routed through a reserved
+  // lane instead of straight across — its own color so it doesn't read as a
+  // stray loop-back or a plain elbow with a bug in it.
+  wrap: '\x1b[94m',
   // A skill badge is a standing config choice, not a transient run signal —
   // dim like the model badge, but yellow so it doesn't read as identical.
   'skill-badge': '\x1b[33m',
@@ -102,6 +106,33 @@ function put(grid: Grid, x: number, y: number, text: string, style: string): voi
 }
 
 /**
+ * A band-to-band wrap edge: down out of the source's bottom, across a lane
+ * below the *whole band* — not just below the source box's own row, which
+ * can sit above other, taller layers in the same band (a fan-out earlier in
+ * it, say) and cut straight through them — back down into the target's top.
+ * The same reserved-lane shape the loop-back edges below use, just pointed
+ * forward. `layout.ts`'s `bandBottom` plus `BAND_GAP_Y` (3) guarantees the
+ * lane always has room, regardless of how the source's own row compares to
+ * its band's tallest layer.
+ */
+function drawWrapEdge(grid: Grid, from: NodeBox, to: NodeBox, style: string): void {
+  const sx = from.x + Math.floor(from.w / 2);
+  const tx = to.x + Math.floor(to.w / 2);
+  const laneY = from.bandBottom + 1;
+  for (let y = from.y + from.h; y < laneY; y++) put(grid, sx, y, '│', style);
+  if (sx === tx) {
+    put(grid, sx, laneY, '│', style);
+  } else {
+    put(grid, sx, laneY, sx > tx ? '╯' : '╰', style);
+    const [left, right] = sx < tx ? [sx, tx] : [tx, sx];
+    for (let x = left + 1; x < right; x++) put(grid, x, laneY, '─', style);
+    put(grid, tx, laneY, sx > tx ? '╭' : '╮', style);
+  }
+  for (let y = laneY + 1; y < to.y - 1; y++) put(grid, tx, y, '│', style);
+  put(grid, tx, to.y - 1, '▼', style);
+}
+
+/**
  * Animation inputs, passed in rather than read from the clock so a render is
  * a pure function of its arguments (and so tests get stable frames).
  */
@@ -138,6 +169,14 @@ export function renderGraph(
   for (const edge of workflow.edges.filter((e) => !e.loopback)) {
     const from = layout.boxes.get(edge.from)!;
     const to = layout.boxes.get(edge.to)!;
+    if (from.band !== to.band) {
+      // Wrapped layout only ever produces this for a band's last (single)
+      // node into the next band's first (single) node — see
+      // `bandsWrapCleanly` in layout.ts — so there's exactly one shape to
+      // draw here, not a general router.
+      drawWrapEdge(grid, from, to, 'wrap');
+      continue;
+    }
     const sx = from.x + from.w;
     // The title row for a full/compact card, or its only row for a mini one.
     const sy = from.y + Math.min(1, from.h - 1);
