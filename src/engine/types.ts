@@ -98,8 +98,8 @@ export interface ConvergenceRequest {
 export interface DiscussPort {
   /** Called when the discussion opens; `seedTranscript` replays a resumed conversation into the UI. */
   begin(nodeId: string, topic: string | undefined, seedTranscript?: DiscussTranscriptEntry[]): void;
-  /** Assistant text to show the user. */
-  postAssistant(nodeId: string, text: string): void;
+  /** Assistant text to show the user; `options` are choices to present alongside it. */
+  postAssistant(nodeId: string, text: string, options?: string[] | null): void;
   /** Next user message; resolve null when the user signals the discussion is done. */
   nextUserMessage(nodeId: string): Promise<string | null>;
   end(nodeId: string): void;
