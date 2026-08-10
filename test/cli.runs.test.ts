@@ -3,6 +3,8 @@ import { cmdRuns, runStatusLabel } from '../src/cli/runs.js';
 import { FileRunStatePersister } from '../src/runstate/persist.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import type { RunState } from '../src/runstate/types.js';
+import { loadWorkflowFromString } from '../src/workflow/load.js';
+import { recordGraph } from '../src/workflow/record.js';
 import { makeTempGitRepo } from './helpers.js';
 
 function baseState(overrides: Partial<RunState> = {}): RunState {
@@ -73,5 +75,20 @@ describe('cmdRuns', () => {
     expect(output).toContain('finished');
     expect(output).toContain('1 done');
     expect(output).toContain('1 error');
+  });
+
+  it('shows the selected graph name for a run that recorded one', async () => {
+    const repo = makeTempGitRepo();
+    const workflow = loadWorkflowFromString('nodes:\n  - id: n1\n    type: implement\n    config: { instructions: x }\n');
+    const store = new RunStateStore({ repoRoot: repo, graph: recordGraph(workflow, 'hardened') });
+    store.attachPersister(new FileRunStatePersister(repo));
+    store.markFinished(false);
+
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const cwd = vi.spyOn(process, 'cwd').mockReturnValue(repo);
+    await cmdRuns();
+    cwd.mockRestore();
+
+    expect(spy.mock.calls.flat().join('\n')).toContain('(hardened)');
   });
 });

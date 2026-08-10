@@ -136,7 +136,13 @@ edges:
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
 ```
 
-The scaffolded file is heavily commented. See the [workflow reference](docs/workflow-reference.md) for everything it accepts — loop-backs, conditional routing, budgets, worktrees — and the [node type reference](docs/node-types.md) for each type's config fields and output. `flow-code node-types` prints the same reference in your terminal.
+The scaffolded file is heavily commented. See the [workflow reference](docs/workflow-reference.md) for everything it accepts — loop-backs, conditional routing, budgets, worktrees, named graphs — and the [node type reference](docs/node-types.md) for each type's config fields and output. `flow-code node-types` prints the same reference in your terminal.
+
+A file can also declare more than one named graph — a quick shape and a heavily
+verified one, say — instead of one flat `nodes`/`edges` list. `flow-code run` asks
+which to execute when more than one is declared and none is given on the command
+line; `--graph <name>` skips the question. See
+[Named graphs](docs/workflow-reference.md#named-graphs) for the file shape.
 
 ## CLI reference
 
@@ -146,6 +152,7 @@ The scaffolded file is heavily commented. See the [workflow reference](docs/work
 | `flow-code init --preset openspec` | Scaffold the OpenSpec graph (`explore → propose → apply → archive`) |
 | `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
 | `flow-code run` | Execute the workflow graph |
+| `flow-code run --graph <name>` | Execute a named graph, for a file declaring more than one |
 | `flow-code watch` | Follow a run started elsewhere — same graph, read-only |
 | `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
@@ -183,7 +190,7 @@ Nodes can be edited mid-run: focus one and press `e` for its settings, `m` for i
 | Guide | Covers |
 | --- | --- |
 | [Node type reference](docs/node-types.md) | Every node type: capabilities, config fields, recorded output |
-| [Workflow reference](docs/workflow-reference.md) | Nodes, edges, loop-backs, conditional routing, budgets, worktrees |
+| [Workflow reference](docs/workflow-reference.md) | Nodes, edges, loop-backs, conditional routing, budgets, worktrees, named graphs |
 | [Skills](docs/skills.md) | Attaching custom `SKILL.md` instructions to a node |
 
 ## Contributing

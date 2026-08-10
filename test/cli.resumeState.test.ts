@@ -6,17 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resetInterruptedWorktrees, resolveResumeState } from '../src/cli/run.js';
 import { runsDir } from '../src/runstate/persist.js';
 import type { RunState } from '../src/runstate/types.js';
-import { workflowFromYaml } from './helpers.js';
-
-const WORKFLOW = `
-nodes:
-  - id: a
-    type: implement
-    config: { instructions: x }
-  - id: b
-    type: test
-    config: { commands: ["true"] }
-`;
+import { DEFAULT_SETTINGS } from '../src/workflow/schema.js';
 
 function tempRepo(): string {
   return mkdtempSync(join(tmpdir(), 'flow-code-cli-resume-'));
@@ -29,6 +19,14 @@ function runState(repoRoot: string, over: Partial<RunState> = {}): RunState {
     repoRoot,
     pid: process.pid,
     baseline: { commit: 'c'.repeat(40), tree: 't'.repeat(40), dirtyOverride: false },
+    graph: {
+      nodes: [
+        { id: 'a', type: 'implement', config: { instructions: 'x' } },
+        { id: 'b', type: 'test', config: { commands: ['true'] } },
+      ],
+      edges: [],
+      settings: DEFAULT_SETTINGS,
+    },
     nodes: { a: { status: 'done', denials: 0 }, b: { status: 'running', denials: 0 } },
     worktrees: [],
     activity: [],
@@ -60,7 +58,7 @@ describe('resolveResumeState', () => {
   it('returns the named interrupted run', () => {
     const repo = tempRepo();
     writeRun(repo, runState(repo));
-    const state = resolveResumeState(repo, workflowFromYaml(WORKFLOW), 'run-0123456789');
+    const state = resolveResumeState(repo, 'run-0123456789');
     expect(state.runId).toBe('run-0123456789');
   });
 
@@ -68,41 +66,37 @@ describe('resolveResumeState', () => {
     const repo = tempRepo();
     writeRun(repo, runState(repo, { runId: 'older', createdAt: '2020-01-01T00:00:00.000Z' }));
     writeRun(repo, runState(repo, { runId: 'newer', createdAt: '2030-01-01T00:00:00.000Z' }));
-    expect(resolveResumeState(repo, workflowFromYaml(WORKFLOW)).runId).toBe('newer');
+    expect(resolveResumeState(repo).runId).toBe('newer');
   });
 
   it('exits when no interrupted run exists at all', () => {
     const repo = tempRepo();
     const { error } = trapExit();
-    expect(() => resolveResumeState(repo, workflowFromYaml(WORKFLOW))).toThrow('process.exit called');
+    expect(() => resolveResumeState(repo)).toThrow('process.exit called');
     expect(error).toHaveBeenCalledWith(expect.stringContaining('no interrupted run found'));
   });
 
   it('names the run that could not be found when given an explicit id', () => {
     const repo = tempRepo();
     const { error } = trapExit();
-    expect(() => resolveResumeState(repo, workflowFromYaml(WORKFLOW), 'nope')).toThrow(
-      'process.exit called',
-    );
+    expect(() => resolveResumeState(repo, 'nope')).toThrow('process.exit called');
     expect(error).toHaveBeenCalledWith(expect.stringContaining('`nope`'));
   });
 
-  it('refuses a run whose nodes the workflow no longer has', () => {
+  it('refuses a run that predates recorded graphs', () => {
     const repo = tempRepo();
-    writeRun(
-      repo,
-      runState(repo, { nodes: { a: { status: 'done', denials: 0 }, gone: { status: 'idle', denials: 0 } } }),
-    );
+    const { graph: _graph, ...withoutGraph } = runState(repo);
+    writeRun(repo, withoutGraph);
     const { error } = trapExit();
-    expect(() => resolveResumeState(repo, workflowFromYaml(WORKFLOW))).toThrow('process.exit called');
-    expect(error).toHaveBeenCalledWith(expect.stringContaining('missing node(s): gone'));
+    expect(() => resolveResumeState(repo)).toThrow('process.exit called');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('predates recorded graphs'));
   });
 
   it('refuses a run with no recorded baseline to diff against', () => {
     const repo = tempRepo();
     writeRun(repo, runState(repo, { baseline: null }));
     const { error } = trapExit();
-    expect(() => resolveResumeState(repo, workflowFromYaml(WORKFLOW))).toThrow('process.exit called');
+    expect(() => resolveResumeState(repo)).toThrow('process.exit called');
     expect(error).toHaveBeenCalledWith(expect.stringContaining('no recorded baseline'));
   });
 
@@ -110,7 +104,7 @@ describe('resolveResumeState', () => {
     const repo = tempRepo();
     writeRun(repo, runState(repo, { interrupted: false }));
     const { error } = trapExit();
-    expect(() => resolveResumeState(repo, workflowFromYaml(WORKFLOW))).toThrow('process.exit called');
+    expect(() => resolveResumeState(repo)).toThrow('process.exit called');
     expect(error).toHaveBeenCalledWith(expect.stringContaining('no interrupted run found'));
   });
 });

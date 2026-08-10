@@ -9,7 +9,20 @@ import {
 import { RunStateStore } from '../src/runstate/store.js';
 import { budgetedTokens, promptTokens, sumTokens } from '../src/runstate/types.js';
 import type { TokenUsage } from '../src/runstate/types.js';
+import { loadWorkflowFromString } from '../src/workflow/load.js';
+import { recordGraph } from '../src/workflow/record.js';
 import { makeTempGitRepo } from './helpers.js';
+
+const GRAPH_YAML = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+    budget: { tokens: 500 }
+  - id: check
+    type: test
+    config: { commands: ["true"] }
+`;
 
 describe('run-state persistence', () => {
   it('persists every activity entry as it occurs, so a crash cannot lose them', () => {
@@ -115,6 +128,57 @@ describe('run-state persistence', () => {
     const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
     store.markFinished();
     expect(store.snapshot().interrupted).toBe(false);
+  });
+});
+
+describe('patchGraphNode', () => {
+  it('replaces one recorded node’s config and budget, notifying subscribers', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({
+      repoRoot: repo,
+      graph: recordGraph(loadWorkflowFromString(GRAPH_YAML)),
+    });
+    const seen: unknown[] = [];
+    store.subscribe((s) => seen.push(s.graph));
+
+    store.patchGraphNode('impl', { config: { instructions: 'y' }, budget: { tokens: 900 } });
+
+    const patched = store.snapshot().graph!.nodes.find((n) => n.id === 'impl')!;
+    expect(patched.config).toEqual({ instructions: 'y' });
+    expect(patched.budget).toEqual({ tokens: 900 });
+    // Every other node is untouched.
+    expect(store.snapshot().graph!.nodes.find((n) => n.id === 'check')!.config).toEqual({
+      commands: ['true'],
+    });
+    expect(seen).toHaveLength(1);
+  });
+
+  it('clears a node’s budget when the patch omits one', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({
+      repoRoot: repo,
+      graph: recordGraph(loadWorkflowFromString(GRAPH_YAML)),
+    });
+    expect(store.snapshot().graph!.nodes.find((n) => n.id === 'impl')!.budget).toEqual({ tokens: 500 });
+
+    store.patchGraphNode('impl', { config: { instructions: 'y' } });
+
+    expect(store.snapshot().graph!.nodes.find((n) => n.id === 'impl')!.budget).toBeUndefined();
+  });
+
+  it('rejects an edit naming a node id absent from the recorded graph', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({
+      repoRoot: repo,
+      graph: recordGraph(loadWorkflowFromString(GRAPH_YAML)),
+    });
+    expect(() => store.patchGraphNode('nope', { config: {} })).toThrow('nope');
+  });
+
+  it('rejects any edit when the run has no recorded graph at all', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['impl'] });
+    expect(() => store.patchGraphNode('impl', { config: {} })).toThrow();
   });
 });
 

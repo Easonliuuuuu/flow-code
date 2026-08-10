@@ -155,6 +155,47 @@ distinction.
 **A budget stop is final.** It never triggers a loop-back retry — retrying past a
 ceiling is exactly what the ceiling exists to prevent.
 
+## Named graphs
+
+A file may declare more than one named graph instead of one flat `nodes`/`edges`
+list, so a repo can carry several shapes of its process — a quick pass for a typo
+fix, a heavily verified one for a risky change — in one reviewable file:
+
+```yaml
+settings: { ... }          # declared once — applies to whichever graph runs
+graphs:
+  quick:
+    description: Small, well-understood changes.
+    nodes: [...]
+    edges: [...]
+  hardened:
+    description: Risky changes — extra validation, review before gate.
+    nodes: [...]
+    edges: [...]
+```
+
+`graphs:` and a top-level `nodes:`/`edges:` are mutually exclusive — a file
+declaring both is rejected rather than resolved by guessing which one wins. Each
+named graph is validated independently and in full, and a failure in one is
+reported against that graph's name, never mistaken for a failure in another.
+
+`settings` — budget included — is declared once, outside `graphs:`, and applies to
+whichever graph a run selects. **A named graph cannot declare its own `budget`.**
+A ceiling a shape gets to raise on its own behalf is not a ceiling: a `hardened`
+graph that could grant itself more room than `quick` would make the run's maximum
+cost a function of which shape was picked, after the file was already reviewed. A
+graph that genuinely needs more room carries more nodes, each with its own
+`nodes[].budget.tokens` — the same per-node override single-graph files already
+have.
+
+`flow-code run` resolves which graph it executes before any node starts: name one
+explicitly with `--graph <name>`, or — in a terminal, with more than one
+declared — you're asked, showing each name with its description. A file
+declaring exactly one graph never asks. Without a terminal and without a name,
+the run fails rather than guessing, listing the graphs the file declares. The
+selected name is recorded on the run and shown in the header, in both `run` and
+`watch`.
+
 ## Git worktrees
 
 `worktree-agent` fans out N agent instances, each in its own git worktree and branch,

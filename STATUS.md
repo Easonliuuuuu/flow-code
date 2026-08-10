@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`█████████░ 241/275` tasks across 7 change(s)
+`██████████ 241/241` tasks across 6 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -18,7 +18,6 @@ flatter you.
 
 | Change | State | Tasks |
 | --- | --- | --- |
-| `add-per-task-workflow-graphs` | active | ░░░░░░░░░░ 0/34 |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
@@ -115,4 +114,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-8 archived change(s), 279 tasks. 16 modules under `src/`, 12 capability specs.
+9 archived change(s), 313 tasks. 16 modules under `src/`, 12 capability specs.

@@ -111,6 +111,63 @@ edges:
   });
 });
 
+describe('flow-code validate — named graphs', () => {
+  it('reports every declared graph, all passing', async () => {
+    const repo = repoWithWorkflow(`
+graphs:
+  quick:
+    description: fast path
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+  hardened:
+    description: extra scrutiny
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+      - id: check
+        type: test
+        config: { commands: ["echo ok"] }
+    edges: []
+`);
+    process.chdir(repo);
+    const { exit, out } = captureOutput();
+
+    await cmdValidate();
+
+    expect(exit).not.toHaveBeenCalled();
+    expect(out()).toContain('declares 2 named graphs');
+    expect(out()).toContain('graph `quick` is valid');
+    expect(out()).toContain('graph `hardened` is valid');
+  });
+
+  it('attributes a failure to the graph it came from, and still reports the other as valid', async () => {
+    const repo = repoWithWorkflow(`
+graphs:
+  quick:
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+  hardened:
+    nodes:
+      - id: impl
+        type: no-such-type
+`);
+    process.chdir(repo);
+    const { exit, out, err } = captureOutput();
+
+    await expect(cmdValidate()).rejects.toThrow('process.exit called');
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(out()).toContain('graph `quick` is valid');
+    expect(err()).toContain('graph `hardened` is invalid');
+    expect(err()).toContain('no-such-type');
+  });
+});
+
 describe('validate and run agree', () => {
   // The guarantee: a file `validate` accepts cannot then fail a pre-execution
   // check. Both go through `loadWorkflow`, and this is what would catch a

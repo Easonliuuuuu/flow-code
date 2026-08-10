@@ -10,7 +10,7 @@ import {
 } from '../init/testDiscoverAgent.js';
 import { nodeWantsAgentStep, PLACEHOLDER_TEST_COMMAND, TEST_COMMANDS_AUTO, type TestConfig } from '../registry/index.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
-import { setNodeTestCommands } from '../workflow/write.js';
+import { editRunningNode } from '../workflow/write.js';
 import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
 
 interface CommandResult {
@@ -108,8 +108,11 @@ async function resolvePlaceholder(ctx: ExecuteContext): Promise<string[] | null>
 
   // Persisted before running anything: a command good enough to run is good
   // enough to keep, and a run interrupted mid-suite shouldn't ask again.
-  setNodeTestCommands(join(ctx.repoRoot, WORKFLOW_RELATIVE_PATH), ctx.node.id, chosen);
-  ctx.node.config = { ...(ctx.node.config as Record<string, unknown>), commands: chosen };
+  const result = editRunningNode(join(ctx.repoRoot, WORKFLOW_RELATIVE_PATH), ctx.store, ctx.node.id, {
+    kind: 'testCommands',
+    value: chosen,
+  });
+  ctx.node.config = result.nodes.find((n) => n.id === ctx.node.id)!.config;
   return chosen;
 }
 

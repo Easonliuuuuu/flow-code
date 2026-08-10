@@ -11,13 +11,7 @@ import { isAttached, isDriverAlive } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
-import {
-  setNodeBudgetTokens,
-  setNodeConfigString,
-  setNodeModel,
-  setNodeSkills,
-  WorkflowWriteError,
-} from '../workflow/write.js';
+import { editRunningNode, WorkflowWriteError } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
 import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
 import { rateLimitSegments, type RateLimitTone } from './rateLimit.js';
@@ -109,6 +103,14 @@ export interface AppProps {
    * `workflow.yaml` — see {@link WATCH_READ_ONLY_MESSAGE}.
    */
   watch?: boolean;
+  /**
+   * Set by `WorkflowHost` (`src/ui/index.ts`) when it could not derive a
+   * workflow to show from the run it just attached to — a run document
+   * carrying no recorded graph, or one whose recorded graph no longer
+   * rehydrates (a node type this build doesn't have). Rendered in the
+   * header; `workflow` keeps showing whatever shape was already on screen.
+   */
+  graphIssue?: string | null;
 }
 
 /** Matches the header's other signals: yellow warns, red is already failing. */
@@ -202,6 +204,7 @@ export function App({
   onInterrupt,
   modelContext,
   watch = false,
+  graphIssue = null,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
   const { stdout } = useStdout();
@@ -493,6 +496,10 @@ export function App({
   };
 
   const openModelPicker = (nodeId: string): void => {
+    if (watch) {
+      showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      return;
+    }
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     if (!node.type.hasModelField) {
@@ -511,6 +518,10 @@ export function App({
   };
 
   const openSkillPicker = (nodeId: string): void => {
+    if (watch) {
+      showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      return;
+    }
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     if (!nodeTypeAcceptsAgentStep(node.type)) {
@@ -530,6 +541,10 @@ export function App({
   const editorField = editorFields[Math.min(editorCursor, editorFields.length - 1)];
 
   const openEditor = (nodeId: string): void => {
+    if (watch) {
+      showPickerMessage(WATCH_READ_ONLY_MESSAGE);
+      return;
+    }
     setEditorCursor(0);
     setEditorBuffer(null);
     setPanelNodeId(nodeId);
@@ -563,6 +578,20 @@ export function App({
   };
 
   /**
+   * A workflow swap (`watch` rehydrating a different run's recorded graph
+   * onto an already-mounted `WorkflowHost` — see `src/ui/index.ts`) leaves
+   * `focusIdx` and any open per-node panel pointing at whichever node used to
+   * sit there. Reset explicitly rather than relying on `focusIdx`'s
+   * incidental `Math.min` clamp, which is crash-safe but would otherwise
+   * settle focus on an unrelated node. Runs harmlessly once on the `run`
+   * path's initial mount too, since `workflow` there never changes again.
+   */
+  useEffect(() => {
+    setFocusIdx(0);
+    closeNodePanel();
+  }, [workflow]);
+
+  /**
    * Writes one edited field to disk and to the same in-memory `WorkflowNode`
    * the engine reads at node-start time, so a node that hasn't run yet picks
    * the change up without restarting the run — the pattern confirmModel and
@@ -577,24 +606,30 @@ export function App({
       return;
     }
     const path = join(runState.repoRoot, WORKFLOW_RELATIVE_PATH);
+    let result;
     try {
-      if (parsed.kind === 'number') setNodeBudgetTokens(path, nodeId, parsed.value);
-      else setNodeConfigString(path, nodeId, field.key, parsed.value);
+      result =
+        parsed.kind === 'number'
+          ? editRunningNode(path, store, nodeId, { kind: 'budgetTokens', value: parsed.value })
+          : editRunningNode(path, store, nodeId, {
+              kind: 'configString',
+              field: field.key,
+              value: parsed.value,
+            });
     } catch (err) {
       showPickerMessage(
         err instanceof WorkflowWriteError ? err.message : `could not save ${field.label}: ${String(err)}`,
       );
       return;
     }
-    if (parsed.kind === 'number') {
-      if (parsed.value === null) delete node.budget;
-      else node.budget = { ...node.budget, tokens: parsed.value };
-    } else {
-      const config = { ...(node.config as Record<string, unknown>) };
-      if (parsed.value === null) delete config[field.key];
-      else config[field.key] = parsed.value;
-      node.config = config;
-    }
+    // Mutate the same in-memory `WorkflowNode` the engine reads at node-start
+    // time, rather than swapping it for `editRunningNode`'s freshly-built
+    // one — so a node that hasn't run yet picks the change up without
+    // restarting the run.
+    const resultNode = result.nodes.find((n) => n.id === nodeId)!;
+    node.config = resultNode.config;
+    if (resultNode.budget) node.budget = resultNode.budget;
+    else delete node.budget;
     setModelTick((t) => t + 1);
     setEditorBuffer(null);
   };
@@ -611,18 +646,19 @@ export function App({
     const node = workflow.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     const toWrite = model === workflow.settings.model ? null : model;
+    let result;
     try {
-      setNodeModel(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), nodeId, toWrite);
+      result = editRunningNode(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), store, nodeId, {
+        kind: 'model',
+        value: toWrite,
+      });
     } catch (err) {
       showPickerMessage(
         err instanceof WorkflowWriteError ? err.message : `could not save model: ${String(err)}`,
       );
       return;
     }
-    const config = { ...(node.config as Record<string, unknown>) };
-    if (toWrite === null) delete config['model'];
-    else config['model'] = toWrite;
-    node.config = config;
+    node.config = result.nodes.find((n) => n.id === nodeId)!.config;
     setModelTick((t) => t + 1);
   };
 
@@ -640,21 +676,21 @@ export function App({
     const entries = (node.config as { skills?: string[] }).skills ?? [];
     const preserved = entries.filter((e) => !catalogIds.has(e));
     const toWrite = [...preserved, ...selected];
+    let result;
     try {
-      setNodeSkills(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), nodeId, toWrite);
+      result = editRunningNode(join(runState.repoRoot, WORKFLOW_RELATIVE_PATH), store, nodeId, {
+        kind: 'skills',
+        value: toWrite,
+      });
     } catch (err) {
       showPickerMessage(
         err instanceof WorkflowWriteError ? err.message : `could not save skills: ${String(err)}`,
       );
       return;
     }
-    const config = { ...(node.config as Record<string, unknown>) };
-    if (toWrite.length === 0) delete config['skills'];
-    else config['skills'] = toWrite;
-    node.config = config;
-    node.skills = toWrite
-      .map((id) => skillCatalog.find((s) => s.id === id))
-      .filter((s): s is DiscoveredSkill => s !== undefined);
+    const resultNode = result.nodes.find((n) => n.id === nodeId)!;
+    node.config = resultNode.config;
+    node.skills = resultNode.skills;
     setModelTick((t) => t + 1);
   };
 
@@ -1465,14 +1501,11 @@ export function App({
     } else if (key.return) {
       setExpanded((e) => !e);
     } else if (input === 'm') {
-      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      else if (focusedNode) openModelPicker(focusedNode.id);
+      if (focusedNode) openModelPicker(focusedNode.id);
     } else if (input === 's') {
-      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      else if (focusedNode) openSkillPicker(focusedNode.id);
+      if (focusedNode) openSkillPicker(focusedNode.id);
     } else if (input === 'e') {
-      if (watch) showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      else if (focusedNode) openEditor(focusedNode.id);
+      if (focusedNode) openEditor(focusedNode.id);
     } else if (input === 'z') {
       // One step along the zoom axis: full ←→ compact, and out of mini into
       // compact rather than jumping two stops at once.
@@ -1538,6 +1571,9 @@ export function App({
       ? `watching ${runState.runId.slice(0, 8)}`
       : 'waiting for a run'
     : `run ${runState.runId.slice(0, 8)}`;
+  // Which named graph this run selected, when the file declared more than
+  // one — legible without comparing the graph on screen to the file.
+  const selectedGraph = runState.graph?.selected;
 
   // Docked panels stay in normal flow (as before); a floating one is drawn
   // absolutely-positioned on top of the canvas, at whatever rect the user
@@ -1568,7 +1604,9 @@ export function App({
         <Text bold color="cyan">
           flow-code
         </Text>
-        <Text dimColor> {runLabel} · </Text>
+        <Text dimColor> {runLabel}</Text>
+        {selectedGraph ? <Text dimColor> ({selectedGraph})</Text> : null}
+        <Text dimColor> · </Text>
         <Text>{headerParts.join('  ')}</Text>
         {runTokens > 0 ? (
           <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
@@ -1583,6 +1621,7 @@ export function App({
           </Text>
         ))}
         {driverGone ? <Text color="yellow"> · driver gone</Text> : null}
+        {graphIssue ? <Text color="yellow"> · {graphIssue}</Text> : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {/* Lives in the header rather than the bottom hint line because the
             hint line disappears behind a docked panel — which is exactly when

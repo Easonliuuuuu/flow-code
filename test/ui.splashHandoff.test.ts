@@ -44,11 +44,10 @@ vi.mock('ink', async (importOriginal) => {
   };
 });
 
-const { runUi } = await import('../src/ui/index.js');
+const { runUi, WorkflowHost } = await import('../src/ui/index.js');
 const { Splash } = await import('../src/ui/splash.js');
-const { App } = await import('../src/ui/App.js');
 
-/** `runUi`'s arguments are all forwarded straight to `App`, which never renders here. */
+/** `runUi`'s arguments are all forwarded straight to `WorkflowHost` (which renders `App`), never rendered here. */
 function startUi(): Promise<void> {
   return runUi({
     workflow: { order: [], nodes: {} } as unknown as Workflow,
@@ -56,6 +55,7 @@ function startUi(): Promise<void> {
     ports: {} as unknown as UiInteractionPorts,
     modelContext: {} as unknown as ModelContext,
     onInterrupt: () => {},
+    repoRoot: '/repo',
   });
 }
 
@@ -80,7 +80,7 @@ describe('splash → App handoff', () => {
 
     await nextMacrotask();
     expect(hoisted.rendered).toHaveLength(2);
-    expect(hoisted.rendered[1]?.type).toBe(App);
+    expect(hoisted.rendered[1]?.type).toBe(WorkflowHost);
 
     // Releases runUi's keep-alive interval so the suite doesn't hold a timer.
     (hoisted.rendered[1]?.props['onExit'] as () => void)();
@@ -95,11 +95,12 @@ describe('splash → App handoff', () => {
       ports: {} as unknown as UiInteractionPorts,
       modelContext: {} as unknown as ModelContext,
       onInterrupt: () => {},
+      repoRoot: '/repo',
       splash: false,
     });
 
     expect(hoisted.rendered).toHaveLength(1);
-    expect(hoisted.rendered[0]?.type).toBe(App);
+    expect(hoisted.rendered[0]?.type).toBe(WorkflowHost);
 
     (hoisted.rendered[0]?.props['onExit'] as () => void)();
     await done;

@@ -14,6 +14,7 @@ import type {
 import type { DiscussTranscriptEntry } from '../src/runstate/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { loadWorkflowFromString, type Workflow } from '../src/workflow/load.js';
+import { recordGraph } from '../src/workflow/record.js';
 
 export function makeTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'flow-code-test-'));
@@ -36,7 +37,7 @@ export function workflowFromYaml(yaml: string): Workflow {
 }
 
 export function storeFor(workflow: Workflow, repoRoot: string): RunStateStore {
-  return new RunStateStore({ repoRoot, nodeIds: workflow.nodes.map((n) => n.id) });
+  return new RunStateStore({ repoRoot, graph: recordGraph(workflow) });
 }
 
 export interface FakePortOptions {

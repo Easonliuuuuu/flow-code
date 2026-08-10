@@ -117,3 +117,39 @@ export const workflowFileSchema = z.strictObject({
 });
 
 export type WorkflowFileRaw = z.infer<typeof workflowFileSchema>;
+
+/**
+ * One named shape in a `graphs:` file. `budget` is accepted structurally
+ * (typed loosely, not `nodeBudgetSchema`/`budgetSchema`) so a graph carrying
+ * one parses far enough for `resolveSelectedGraph` in `load.ts` to reject it
+ * with a message naming the graph — a `strictObject` "unrecognized key"
+ * error can't do that.
+ */
+export const namedGraphEntrySchema = z.strictObject({
+  description: z.string().min(1).optional(),
+  nodes: z.array(nodeEntrySchema).min(1),
+  edges: z.array(edgeSchema).default([]),
+  budget: z.unknown().optional(),
+});
+
+export type NamedGraphEntryRaw = z.infer<typeof namedGraphEntrySchema>;
+
+/**
+ * A file may declare several named graphs instead of one flat graph, with
+ * `settings` still declared once, applying to whichever graph a run selects.
+ * Mutually exclusive with the flat form — see `workflowDocumentSchema`.
+ */
+export const namedGraphsFileSchema = z.strictObject({
+  settings: settingsSchema.optional(),
+  graphs: z
+    .record(z.string().min(1), namedGraphEntrySchema)
+    .refine((graphs) => Object.keys(graphs).length > 0, {
+      message: 'graphs must declare at least one named graph',
+    }),
+});
+
+export type NamedGraphsFileRaw = z.infer<typeof namedGraphsFileSchema>;
+
+export const workflowDocumentSchema = z.union([workflowFileSchema, namedGraphsFileSchema]);
+
+export type WorkflowDocumentRaw = z.infer<typeof workflowDocumentSchema>;

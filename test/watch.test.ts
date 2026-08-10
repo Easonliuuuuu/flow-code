@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { FileRunStatePersister, runFilePath, runsDir } from '../src/runstate/persist.js';
@@ -10,7 +10,6 @@ import {
   isDriverAlive,
   latestRunState,
   newestRunFile,
-  reconcileRunState,
   RunStateWatcher,
 } from '../src/runstate/watch.js';
 import { makeTempGitRepo } from './helpers.js';
@@ -38,43 +37,6 @@ async function until(predicate: () => boolean, timeoutMs = 2000): Promise<void> 
   }
   throw new Error('timed out waiting for the watcher');
 }
-
-describe('reconcileRunState', () => {
-  it('renders nodes the run never knew about as idle, so a workflow edited mid-run still draws', () => {
-    const state = stateFixture({
-      nodes: { discuss: { status: 'done', denials: 0 } },
-    });
-
-    const reconciled = reconcileRunState(state, ['discuss', 'implement']);
-
-    expect(reconciled.nodes['discuss']!.status).toBe('done');
-    expect(reconciled.nodes['implement']).toEqual({ status: 'idle', denials: 0 });
-  });
-
-  it('drops nodes the workflow no longer has, since the canvas indexes by workflow node id', () => {
-    const state = stateFixture({
-      nodes: {
-        discuss: { status: 'done', denials: 0 },
-        removed: { status: 'error', denials: 3 },
-      },
-    });
-
-    const reconciled = reconcileRunState(state, ['discuss']);
-
-    expect(Object.keys(reconciled.nodes)).toEqual(['discuss']);
-  });
-
-  it('keeps the activity log whole, including entries for departed nodes', () => {
-    const state = stateFixture({
-      nodes: { discuss: { status: 'done', denials: 0 } },
-      activity: [
-        { ts: '2026-01-01T00:00:01.000Z', nodeId: 'removed', tool: 'Bash', summary: 'ls', decision: 'allowed' },
-      ],
-    });
-
-    expect(reconcileRunState(state, ['discuss']).activity).toHaveLength(1);
-  });
-});
 
 describe('emptyRunState', () => {
   it('is not attached, and gives every workflow node an idle card to draw', () => {
@@ -133,7 +95,7 @@ describe('newestRunFile', () => {
 });
 
 describe('RunStateWatcher', () => {
-  it('emits the state a driver persists, reconciled to the workflow', async () => {
+  it('emits the state a driver persists, unmodified — no reconciliation against any node list', async () => {
     const repo = makeTempGitRepo();
     const driver = new RunStateStore({ repoRoot: repo, nodeIds: ['discuss'] });
     driver.attachPersister(new FileRunStatePersister(repo));
@@ -141,7 +103,6 @@ describe('RunStateWatcher', () => {
     const seen: RunState[] = [];
     const watcher = new RunStateWatcher({
       repoRoot: repo,
-      nodeIds: ['discuss', 'implement'],
       onState: (s) => seen.push(s),
       pollIntervalMs: 20,
     });
@@ -150,8 +111,9 @@ describe('RunStateWatcher', () => {
       driver.setStatus('discuss', 'running');
       await until(() => seen.at(-1)?.nodes['discuss']?.status === 'running');
 
-      // The driver never knew about `implement`; the viewer still draws it.
-      expect(seen.at(-1)!.nodes['implement']).toEqual({ status: 'idle', denials: 0 });
+      // The driver never knew about `implement`; the watcher has no node
+      // list of its own to reconcile against, so it just isn't there.
+      expect(seen.at(-1)!.nodes['implement']).toBeUndefined();
 
       driver.setStatus('discuss', 'done');
       await until(() => seen.at(-1)?.nodes['discuss']?.status === 'done');
@@ -165,7 +127,6 @@ describe('RunStateWatcher', () => {
     const seen: RunState[] = [];
     const watcher = new RunStateWatcher({
       repoRoot: repo,
-      nodeIds: ['discuss'],
       onState: (s) => seen.push(s),
       pollIntervalMs: 20,
     });
@@ -194,7 +155,6 @@ describe('RunStateWatcher', () => {
     const seen: RunState[] = [];
     const watcher = new RunStateWatcher({
       repoRoot: repo,
-      nodeIds: ['discuss'],
       runId: pinned.runId,
       onState: (s) => seen.push(s),
       pollIntervalMs: 20,
@@ -216,6 +176,67 @@ describe('RunStateWatcher', () => {
     }
   });
 
+  it('is unaffected by workflow.yaml being edited mid-run — it never reads it', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, 'workflow.yaml');
+    writeFileSync(workflowPath, 'nodes:\n  - id: discuss\n    type: discuss\n');
+    const driver = new RunStateStore({ repoRoot: repo, nodeIds: ['discuss'] });
+    driver.attachPersister(new FileRunStatePersister(repo));
+
+    const seen: RunState[] = [];
+    const watcher = new RunStateWatcher({
+      repoRoot: repo,
+      onState: (s) => seen.push(s),
+      pollIntervalMs: 20,
+    });
+    watcher.start();
+    try {
+      driver.setStatus('discuss', 'running');
+      await until(() => seen.at(-1)?.nodes['discuss']?.status === 'running');
+
+      // Adds a node the run never knew about — a reconciling watcher would
+      // pick this up; this one has no node list to reconcile against at all.
+      writeFileSync(
+        workflowPath,
+        'nodes:\n  - id: discuss\n    type: discuss\n  - id: extra\n    type: implement\n    config: {}\n',
+      );
+
+      driver.setStatus('discuss', 'done');
+      await until(() => seen.at(-1)?.nodes['discuss']?.status === 'done');
+      expect(seen.at(-1)!.nodes['extra']).toBeUndefined();
+    } finally {
+      watcher.close();
+    }
+  });
+
+  it('keeps rendering a run after workflow.yaml has been deleted outright', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, 'workflow.yaml');
+    writeFileSync(workflowPath, 'nodes:\n  - id: discuss\n    type: discuss\n');
+    const driver = new RunStateStore({ repoRoot: repo, nodeIds: ['discuss'] });
+    driver.attachPersister(new FileRunStatePersister(repo));
+
+    const seen: RunState[] = [];
+    const watcher = new RunStateWatcher({
+      repoRoot: repo,
+      onState: (s) => seen.push(s),
+      pollIntervalMs: 20,
+    });
+    watcher.start();
+    try {
+      driver.setStatus('discuss', 'running');
+      await until(() => seen.at(-1)?.nodes['discuss']?.status === 'running');
+
+      unlinkSync(workflowPath);
+
+      driver.setStatus('discuss', 'done');
+      await until(() => seen.at(-1)?.nodes['discuss']?.status === 'done');
+      expect(seen.at(-1)!.nodes['discuss']!.status).toBe('done');
+    } finally {
+      watcher.close();
+    }
+  });
+
   it('never writes to the run it is watching', async () => {
     const repo = makeTempGitRepo();
     const driver = new RunStateStore({ repoRoot: repo, nodeIds: ['discuss'] });
@@ -225,7 +246,6 @@ describe('RunStateWatcher', () => {
     const viewer = new RunStateStore({ repoRoot: repo, nodeIds: ['discuss'] });
     const watcher = new RunStateWatcher({
       repoRoot: repo,
-      nodeIds: ['discuss'],
       onState: (s) => viewer.applySnapshot(s),
       pollIntervalMs: 20,
     });

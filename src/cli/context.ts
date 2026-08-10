@@ -1,5 +1,5 @@
 import { git } from '../git/ops.js';
-import { loadWorkflow, WorkflowValidationError, type Workflow } from '../workflow/load.js';
+import { loadWorkflow, WorkflowValidationError, type LoadOptions, type Workflow } from '../workflow/load.js';
 
 export function fail(message: string): never {
   console.error(`flow-code: ${message}`);
@@ -15,12 +15,14 @@ export async function repoRootFromCwd(): Promise<string> {
 }
 
 /** Loads the project's workflow, reporting validation problems as a listing rather than a stack. */
-export function loadWorkflowOrFail(repoRoot: string): Workflow {
+export function loadWorkflowOrFail(repoRoot: string, options: LoadOptions = {}): Workflow {
   try {
-    return loadWorkflow(repoRoot);
+    return loadWorkflow(repoRoot, options);
   } catch (err) {
     if (err instanceof WorkflowValidationError) {
-      console.error('flow-code: the workflow file is invalid:');
+      console.error(
+        `flow-code: the workflow file is invalid${err.graph !== undefined ? ` (graph \`${err.graph}\`)` : ''}:`,
+      );
       for (const problem of err.problems) console.error(`  - ${problem}`);
       process.exit(1);
     }

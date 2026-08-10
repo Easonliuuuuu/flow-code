@@ -53,27 +53,6 @@ export function isAttached(state: RunState): boolean {
 }
 
 /**
- * Rewrites a persisted run's node map to exactly the nodes the loaded
- * workflow has.
- *
- * A viewer cannot assume the two agree: `workflow.yaml` may have been edited
- * since the run started, and unlike `--resume` (which refuses outright) a
- * viewer has no business failing over it. Nodes the run never knew about
- * render idle; nodes the workflow has since dropped are discarded, because
- * the canvas indexes `runState.nodes` by workflow node id and a missing entry
- * would take that node's card down with it.
- *
- * `activity` is deliberately left whole — it is only ever bucketed by node
- * id, so entries for departed nodes cost nothing, and dropping them would
- * quietly rewrite the run's history.
- */
-export function reconcileRunState(state: RunState, nodeIds: string[]): RunState {
-  const nodes: Record<string, NodeRunState> = {};
-  for (const id of nodeIds) nodes[id] = state.nodes[id] ?? { status: 'idle', denials: 0 };
-  return { ...state, nodes };
-}
-
-/**
  * Path of the most recently *written* run file, or undefined if there are
  * none.
  *
@@ -138,8 +117,6 @@ export function isDriverAlive(state: RunState): boolean {
 
 export interface RunStateWatcherOptions {
   repoRoot: string;
-  /** Node ids of the loaded workflow; every emitted state is reconciled to them. */
-  nodeIds: string[];
   /**
    * Pin to one run. Left unset, the watcher follows whichever run is being
    * written — so a `flow-code run` started after the viewer was already open
@@ -241,6 +218,6 @@ export class RunStateWatcher {
     this.lastPath = path;
     this.lastSignature = signature;
     this.lastText = text;
-    this.opts.onState(reconcileRunState(state, this.opts.nodeIds));
+    this.opts.onState(state);
   }
 }
