@@ -413,12 +413,22 @@ export function App({
   // position on that swing, right as focus was moving on to the next click —
   // this is what silently changed the badge a click a moment later landed on.
   const undockedCanvasHeight = Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
-  const measuredLayout = useMemo(() => computeLayout(workflow), [workflow]);
-  const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
-  // Wrapping is scoped to compact for now — see layout.ts's `wrapWidth` doc
-  // comment. Extending it to full mode later is just passing `wrapWidth`
-  // here too; `computeLayout` itself doesn't know or care which density
-  // asked for it.
+  // Wrapping folds excess width into height, so the "is this graph too tall"
+  // measurement below has to see the *wrapped* height or it under-triggers
+  // compact for a graph that's wide rather than tall — canvasWidth doesn't
+  // shift with a docked panel the way canvasHeight does, so no undocked/
+  // docked split is needed for it the way there is for height.
+  const measuredLayout = useMemo(
+    () => computeLayout(workflow, undefined, { wrapWidth: canvasWidth }),
+    [workflow, canvasWidth],
+  );
+  const fullLayout = useMemo(
+    () => computeLayout(workflow, overrides, { wrapWidth: canvasWidth }),
+    [workflow, overrides, canvasWidth],
+  );
+  // Mini isn't wrapped (yet) — nothing technical stops it (the mechanism is
+  // density-agnostic), it just hasn't been asked for: mini's cards are
+  // already narrow enough that a graph needs it far less often.
   const compactLayout = useMemo(
     () => computeLayout(workflow, overrides, { density: 'compact', wrapWidth: canvasWidth }),
     [workflow, overrides, canvasWidth],
