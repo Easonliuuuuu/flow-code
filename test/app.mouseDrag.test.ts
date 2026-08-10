@@ -441,6 +441,28 @@ describe('canvas zoom', () => {
     }
   });
 
+  it('w toggles band-wrap off and back on, independent of zoom', async () => {
+    const { stdout, stdin, unmount } = mountApp();
+    try {
+      await settle();
+      const frame = () => lastFrameLines(stdout).join('\n');
+      // On by default — a graph that doesn't currently need to wrap says
+      // nothing about it, the same way 'free camera' stays silent at 'center'.
+      expect(frame()).not.toContain('wrap off');
+
+      stdin.write('w');
+      await settle();
+      expect(frame()).toContain('wrap off');
+      expect(zoomOf(stdout)).toBe('full');
+
+      stdin.write('w');
+      await settle();
+      expect(frame()).not.toContain('wrap off');
+    } finally {
+      unmount();
+    }
+  });
+
   it('o jumps to overview and back to the zoom it left', async () => {
     const { stdout, stdin, unmount } = mountApp();
     try {
