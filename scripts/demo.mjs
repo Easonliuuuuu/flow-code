@@ -35,11 +35,18 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { gunzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_RECORDING = join(repoRoot, 'docs', 'demo', 'run.jsonl');
+const DEMO_DIR = join(repoRoot, 'docs', 'demo');
+
+/** The committed recording, gzipped by preference — see readFrames. */
+function defaultRecording() {
+  const packed = join(DEMO_DIR, 'run.jsonl.gz');
+  return existsSync(packed) ? packed : join(DEMO_DIR, 'run.jsonl');
+}
 
 const [, , command, ...argv] = process.argv;
 
@@ -144,7 +151,7 @@ function capture() {
   const repo = asPath(flag('repo', process.cwd()));
   const runsDir = join(repo, '.flow-code', 'runs');
   const runId = flag('run');
-  const out = asPath(flag('out', DEFAULT_RECORDING));
+  const out = asPath(flag('out', join(DEMO_DIR, 'run.jsonl')));
   const intervalMs = num('interval', 200);
   const redact = bool('redact');
 
@@ -239,11 +246,20 @@ function capture() {
 
 // ----------------------------------------------------------------- playback
 
+/**
+ * A recording is committed gzipped — full run-state documents repeated once
+ * per frame compress to about a sixth of their size, and this blob is in git
+ * history permanently. Captures are still written plain: a capture is
+ * append-only so that a ctrl+c (or a crash) keeps every frame it already had,
+ * which a single gzip stream would not survive.
+ */
 function readFrames(path) {
   if (!existsSync(path)) {
     fail(`no recording at ${path} — record one with \`node scripts/demo.mjs capture\`.`);
   }
-  const frames = readFileSync(path, 'utf8')
+  const raw = readFileSync(path);
+  const frames = (path.endsWith('.gz') ? gunzipSync(raw) : raw)
+    .toString('utf8')
     .split('\n')
     .filter((line) => line.trim().length > 0)
     .map((line, i) => {
@@ -276,7 +292,7 @@ function dist(relative) {
 }
 
 async function play() {
-  const recordingPath = asPath(flag('recording', DEFAULT_RECORDING));
+  const recordingPath = asPath(flag('recording', defaultRecording()));
   const speed = num('speed', 4);
   const maxGapMs = num('max-gap', 1200);
   const holdMs = num('hold', 2500);
@@ -348,7 +364,7 @@ async function play() {
 }
 
 function duration() {
-  const frames = readFrames(asPath(flag('recording', DEFAULT_RECORDING)));
+  const frames = readFrames(asPath(flag('recording', defaultRecording())));
   const total = delays(frames, num('speed', 4), num('max-gap', 1200)).reduce((a, b) => a + b, 0);
   const seconds = (total + num('hold', 2500)) / 1000;
   console.log(
