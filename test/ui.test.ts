@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { defaultSkillRoots } from '../src/skills/discover.js';
-import { loadWorkflowFromString } from '../src/workflow/load.js';
+import { emptyWorkflow, loadWorkflowFromString } from '../src/workflow/load.js';
 import {
   BAND_GAP_Y,
   centerOnBox,
@@ -759,6 +759,14 @@ edges:
     for (const id of ['a', 'b', 'c', 'd']) expect(layout.boxes.get(id)!.band).toBe(0);
   });
 
+  it('does not crash on a graphless workflow with wrapWidth set', () => {
+    // `Math.max()` on no layers is `-Infinity` — the `watch` placeholder
+    // before a run attaches is exactly this shape, and computeLayout is
+    // called with wrapWidth unconditionally now (App.tsx).
+    const layout = computeLayout(emptyWorkflow('/tmp'), undefined, { wrapWidth });
+    expect(layout.boxes.size).toBe(0);
+  });
+
   it('wraps a straight chain into bands once a band would exceed wrapWidth', () => {
     const layout = computeLayout(CHAIN_WF, undefined, { density: 'compact', wrapWidth });
     expect(layout.boxes.get('a')!.band).toBe(0);
@@ -778,7 +786,11 @@ edges:
     }
   });
 
-  it('falls back to a flat layout when a fan-out would sit at the band boundary', () => {
+  it('backs off to the nearest legal cut when the greedy width fill lands inside a fan-out', () => {
+    // Landing exactly at the fan-out (b -> c1/c2) is illegal — but a/b is a
+    // perfectly good place to wrap, one layer earlier. b, c1, c2, and d all
+    // have to share the next band regardless of width, since there's no
+    // legal cut anywhere inside that fan-out-then-converge run.
     const wf = workflowFromYaml(`
 nodes:
   - id: a
@@ -801,11 +813,39 @@ edges:
   - { from: c2, to: d }
 `);
     const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
-    const flat = computeLayout(wf, undefined, { density: 'compact' });
-    for (const id of ['a', 'b', 'c1', 'c2', 'd']) {
-      expect(wrapped.boxes.get(id)!.band).toBe(0);
-      expect(wrapped.boxes.get(id)).toEqual(flat.boxes.get(id));
-    }
+    expect(wrapped.boxes.get('a')!.band).toBe(0);
+    for (const id of ['b', 'c1', 'c2', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(1);
+  });
+
+  it('wraps around a skip-layer edge instead of giving up once it clears it', () => {
+    // b -> d skips c, so no cut can land between b and d — but a|b and
+    // d|e are both still fine, so this ends up three bands, not one.
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+  - id: e
+    type: approval-gate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+  - { from: d, to: e }
+  - { from: b, to: d }
+`);
+    const wideEnoughForThreeLayers = 3 * compactW + 2 * GAP_X;
+    const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth: wideEnoughForThreeLayers });
+    expect(wrapped.boxes.get('a')!.band).toBe(0);
+    for (const id of ['b', 'c', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(1);
+    expect(wrapped.boxes.get('e')!.band).toBe(2);
   });
 
   it('falls back to a flat layout when an edge skips over the band boundary', () => {
