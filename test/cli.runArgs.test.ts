@@ -1,6 +1,19 @@
-import { describe, expect, it } from 'vitest';
-import { formatRunSummary, parseResumeArg, runExitCode } from '../src/cli/run.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { formatRunSummary, parseGraphArg, parseResumeArg, runExitCode } from '../src/cli/run.js';
 import type { NodeRunState, NodeStatus } from '../src/runstate/types.js';
+
+/** Makes `fail`'s process.exit observable rather than killing the test runner. */
+function trapExit() {
+  const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+    throw new Error('process.exit called');
+  });
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  return { exit, error };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function nodes(...statuses: NodeStatus[]): Record<string, NodeRunState> {
   return Object.fromEntries(statuses.map((status, i) => [`n${i}`, { status, denials: 0 }]));
@@ -58,5 +71,28 @@ describe('formatRunSummary', () => {
 
   it('says interrupted rather than finished when the run was aborted', () => {
     expect(formatRunSummary('abcdefgh1234', nodes('done'), true)).toContain('interrupted');
+  });
+});
+
+describe('parseGraphArg', () => {
+  it('is undefined when the flag is absent', () => {
+    expect(parseGraphArg([])).toBeUndefined();
+    expect(parseGraphArg(['--allow-dirty'])).toBeUndefined();
+  });
+
+  it('takes the following argument as the graph name', () => {
+    expect(parseGraphArg(['--graph', 'hardened'])).toBe('hardened');
+  });
+
+  it('exits when the flag is given with no name', () => {
+    const { error } = trapExit();
+    expect(() => parseGraphArg(['--graph'])).toThrow('process.exit called');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('requires a graph name'));
+  });
+
+  it('exits rather than mistaking a following flag for a name', () => {
+    const { error } = trapExit();
+    expect(() => parseGraphArg(['--graph', '--allow-dirty'])).toThrow('process.exit called');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('requires a graph name'));
   });
 });

@@ -3,8 +3,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_WORKFLOW_YAML } from '../src/defaultWorkflow.js';
+import { RunStateStore } from '../src/runstate/store.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
+import { recordGraph } from '../src/workflow/record.js';
 import {
+  editRunningNode,
   setNodeBudgetTokens,
   setNodeConfigString,
   setNodeModel,
@@ -281,5 +284,73 @@ describe('setNodeConfigString', () => {
     // Implement's `instructions` is required, so clearing it must not land.
     expect(() => setNodeConfigString(path, 'a', 'instructions', null)).toThrow(WorkflowWriteError);
     expect(readFileSync(path, 'utf8')).toBe(FIXTURE);
+  });
+});
+
+describe('editRunningNode', () => {
+  function storeFor(path: string, yaml: string, graph?: string): RunStateStore {
+    const repoRoot = dirname(dirname(path));
+    const workflow = loadWorkflowFromString(yaml, { repoRoot, ...(graph ? { graph } : {}) });
+    return new RunStateStore({ repoRoot, graph: recordGraph(workflow, graph) });
+  }
+
+  it('writes the file and mirrors the result onto the recorded graph, through one path', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    const store = storeFor(path, FIXTURE);
+
+    const result = editRunningNode(path, store, 'a', { kind: 'model', value: 'haiku' });
+
+    expect(result.nodes.find((n) => n.id === 'a')!.config).toMatchObject({ model: 'haiku' });
+    expect(readFileSync(path, 'utf8')).toContain('model: haiku');
+    expect(store.snapshot().graph!.nodes.find((n) => n.id === 'a')!.config).toMatchObject({
+      model: 'haiku',
+    });
+  });
+
+  it('rejects an edit naming a node id absent from the recorded graph, before touching the file', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    const store = storeFor(path, FIXTURE);
+    const before = readFileSync(path, 'utf8');
+
+    expect(() => editRunningNode(path, store, 'nope', { kind: 'model', value: 'haiku' })).toThrow(
+      WorkflowWriteError,
+    );
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  it('rejects any edit when the run has no recorded graph at all', () => {
+    const path = tempWorkflowFile(FIXTURE);
+    const store = new RunStateStore({ repoRoot: dirname(dirname(path)), nodeIds: ['a', 'b', 'c'] });
+
+    expect(() => editRunningNode(path, store, 'a', { kind: 'model', value: 'haiku' })).toThrow(
+      WorkflowWriteError,
+    );
+  });
+
+  it('targets the named graph the run selected, leaving the other declared graphs untouched', () => {
+    const NAMED = `
+graphs:
+  quick:
+    nodes:
+      - id: a
+        type: implement
+        config: { instructions: do a }
+  hardened:
+    nodes:
+      - id: a
+        type: implement
+        config: { instructions: do a carefully }
+`;
+    const path = tempWorkflowFile(NAMED);
+    const repoRoot = dirname(dirname(path));
+    const store = storeFor(path, NAMED, 'hardened');
+
+    editRunningNode(path, store, 'a', { kind: 'model', value: 'haiku' });
+
+    const after = readFileSync(path, 'utf8');
+    const hardened = loadWorkflowFromString(after, { repoRoot, graph: 'hardened' });
+    const quick = loadWorkflowFromString(after, { repoRoot, graph: 'quick' });
+    expect((hardened.nodes[0]!.config as { model?: string }).model).toBe('haiku');
+    expect((quick.nodes[0]!.config as { model?: string }).model).toBeUndefined();
   });
 });

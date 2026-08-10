@@ -59,16 +59,19 @@ Tracked separately (see `docs/product/inbox.md`) because it is a budget feature 
 
 `run` resolves the graph name up front: from an explicit name if given, otherwise via the `selectFromList` picker `init` already uses. Without a TTY and without a name the run fails rather than guessing — picking a verification depth on the user's behalf is exactly the decision this feature exists to give back. `RecordedGraph.selected` already exists to carry the answer.
 
-## Open Decision — settle first
+### The UI receives its workflow through a swappable wrapper, not a static prop
 
-Making `watch` render from the recorded graph is blocked on how the UI receives its workflow. `runUi` takes `workflow` as a static prop at mount (`src/ui/index.ts:44`) and `App` memoizes all four layouts on it, but `cmdWatch` cannot know the recorded graph at mount time: it attaches to a run later, and `emptyRunState` exists precisely so the graph is on screen before any run exists.
+Making `watch` render from the recorded graph was blocked on how the UI receives its workflow. `runUi` takes `workflow` as a static prop at mount (`src/ui/index.ts:44`) and `App` memoizes all four layouts on it, but `cmdWatch` cannot know the recorded graph at mount time: it attaches to a run later, and `emptyRunState` exists precisely so the graph is on screen before any run exists.
 
-Deriving the workflow inside `App` from `runState.graph` is the obvious move and is rejected: on the `run` path `state.graph` is always present, so `App` would re-rehydrate a graph it was already handed — disk I/O and a new failure mode on the main path — and the natural fallback when rehydration fails is `workflow.yaml`, the exact substitution these requirements forbid.
+Deriving the workflow inside `App` from `runState.graph` unconditionally is rejected: on the `run` path `state.graph` is always present, so `App` would re-rehydrate a graph it was already handed — disk I/O and a new failure mode on the main path — and the natural fallback when rehydration fails is `workflow.yaml`, the exact substitution these requirements forbid.
 
-1. **Make `runUi`'s workflow swappable.** It accepts an initial shape plus updates; `run` passes its in-memory `Workflow` once and is unaffected; `watch` pushes the rehydrated graph on attach. Correct for a viewer left open across runs of different shapes. Costs a real diff through `ui/index.ts` and `App.tsx`, and `app.watch` tests move with it.
-2. **Defer `watch`'s mount until it attaches.** Smallest diff. Costs the "graph on screen immediately" property `emptyRunState` was built for, and a viewer spanning two runs of different shapes cannot swap.
+**Decided: a new `WorkflowHost` wrapper in `src/ui/index.ts`, mounted by `runUi` in place of `App` on both paths.** It holds `workflow` in local state, seeded from an `initialWorkflow` prop. A `useEffect` gated on `watch` (false on the `run` path, so the body never executes there — zero new I/O, zero new failure mode on the main path) subscribes to the store and, on each `RunState` whose `graph` differs by reference from the last one seen, calls `rehydrateGraph` and swaps `workflow` in. `graph === undefined` on an attached run reports "shape unavailable" (a legacy run document) rather than falling back to the file; a `RecordedGraphError` surfaces as its own state rather than an empty graph. `run` passes its in-memory `Workflow` once as `initialWorkflow` with `watch` false, and is unaffected — this is the same shape `run` already has today.
 
-Task 1.1 is settling this. Everything in sections 3–5 is independent of the answer and can proceed either way.
+`App` gains one prop, `graphIssue?: string | null`, rendered next to the existing `driverGone`-style header messaging. On a workflow swap, `App` resets `focusIdx` and closes any open node panel (a `useEffect` keyed on `workflow`, the same identity signal the four layout memos already use) rather than relying on `focusIdx`'s incidental `Math.min` clamp, which degrades gracefully but would otherwise leave focus pointing at an unrelated node after a swap.
+
+*Alternative considered — defer `watch`'s mount until it attaches.* Smallest diff, but costs the "graph on screen immediately" property `emptyRunState` was built for, and a viewer spanning two runs of different shapes cannot swap. Rejected: both properties are real guarantees today, not incidental behavior worth trading for a smaller diff.
+
+*Found while resolving this, worth fixing alongside it:* the mouse badge-click path (`src/ui/App.tsx`, the click handler around the node-card badge row) opens the model/skill picker with no `watch` guard — only the keyboard `m`/`s`/`e` handlers check `watch` today. Once mid-run edits write through the recorded graph (see the mid-run-edits task), a click during `watch` reaching that path would write to `workflow.yaml` from a read-only viewer. The same guard the keyboard handlers use belongs on the click path too, closing the hole rather than leaving it as a latent bug this change would otherwise make reachable.
 
 ## Risks / Trade-offs
 

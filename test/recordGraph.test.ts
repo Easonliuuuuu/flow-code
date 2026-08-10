@@ -136,6 +136,25 @@ nodes:
     expect(readFileSync(path, 'utf8')).toContain('some-other-model');
   });
 
+  it('resumes what was recorded, not what a completely different current workflow file would load', () => {
+    // What `--resume` relies on: rehydrating never reads `workflow.yaml` at
+    // all, so a file that has since changed shape entirely (fewer nodes, a
+    // different structure) cannot leak into a resumed run.
+    const recorded = recordGraph(loadWorkflowFromString(GRAPH));
+
+    const DIVERGED = `
+nodes:
+  - id: solo
+    type: implement
+    config: { instructions: something else entirely }
+`;
+    const currentFileWorkflow = loadWorkflowFromString(DIVERGED);
+    expect(currentFileWorkflow.nodes.map((n) => n.id)).toEqual(['solo']);
+
+    const rebuilt = rehydrateGraph(recorded, { repoRoot: process.cwd() });
+    expect(rebuilt.nodes.map((n) => n.id)).toEqual(['impl', 'check', 'review', 'gate']);
+  });
+
   it('is on the run document before any node can leave idle', () => {
     const recorded = recordGraph(loadWorkflowFromString(GRAPH));
     const store = new RunStateStore({ repoRoot: process.cwd(), graph: recorded });

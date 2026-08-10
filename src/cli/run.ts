@@ -5,6 +5,7 @@ import { builtinExecutors, SdkSessionRunner } from '../executors/index.js';
 import { ensureGitExclude } from '../git/exclude.js';
 import { git, recordBaseline, removeWorktree } from '../git/ops.js';
 import { confirm } from '../init/prompts.js';
+import { selectFromList } from '../init/SelectList.js';
 import {
   FileRunStatePersister,
   findInterruptedRun,
@@ -13,8 +14,8 @@ import {
 import { RunStateStore } from '../runstate/store.js';
 import type { RunState } from '../runstate/types.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
-import type { Workflow } from '../workflow/load.js';
-import { recordGraph } from '../workflow/record.js';
+import { declaredGraphs, type Workflow } from '../workflow/load.js';
+import { RecordedGraphError, recordGraph, rehydrateGraph } from '../workflow/record.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../worktrees/reconcile.js';
 import { splashEnabled } from './args.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
@@ -40,11 +41,28 @@ export function parseResumeArg(args: string[]): ResumeArg {
 }
 
 /**
- * The interrupted run `--resume` targets, or a failure explaining why it can't
- * be resumed: no such run, a workflow that has since dropped nodes the run
- * recorded, or a run with no baseline to diff against.
+ * `--graph <name>` selects which declared graph a fresh run executes. Not
+ * meaningful with `--resume` — a resumed run continues whichever graph it
+ * already recorded.
  */
-export function resolveResumeState(repoRoot: string, workflow: Workflow, runId?: string): RunState {
+export function parseGraphArg(args: string[]): string | undefined {
+  const idx = args.findIndex((a) => a === '--graph');
+  if (idx < 0) return undefined;
+  const next = args[idx + 1];
+  if (next === undefined || next.startsWith('-')) {
+    fail('--graph requires a graph name.');
+  }
+  return next;
+}
+
+/**
+ * The interrupted run `--resume` targets, or a failure explaining why it
+ * can't be resumed: no such run, one that predates recorded graphs, or a run
+ * with no baseline to diff against. Resuming rehydrates the graph the run
+ * itself recorded (see `cmdRun`), not the current `workflow.yaml` — so this
+ * no longer needs the workflow loaded at all to decide resumability.
+ */
+export function resolveResumeState(repoRoot: string, runId?: string): RunState {
   const resumeState = runId ? findInterruptedRun(repoRoot, runId) : findLatestInterruptedRun(repoRoot);
   if (!resumeState) {
     fail(
@@ -53,18 +71,57 @@ export function resolveResumeState(repoRoot: string, workflow: Workflow, runId?:
         : 'no interrupted run found to resume — start a new one with `flow-code run`.',
     );
   }
-  const currentIds = new Set(workflow.nodes.map((n) => n.id));
-  const missing = Object.keys(resumeState.nodes).filter((id) => !currentIds.has(id));
-  if (missing.length > 0) {
-    fail(
-      `the workflow has changed since run ${resumeState.runId.slice(0, 8)} — ` +
-        `missing node(s): ${missing.join(', ')}. Start a new run instead.`,
-    );
+  if (!resumeState.graph) {
+    fail(`run ${resumeState.runId.slice(0, 8)} predates recorded graphs — cannot resume.`);
   }
   if (!resumeState.baseline) {
     fail(`run ${resumeState.runId.slice(0, 8)} has no recorded baseline — cannot resume.`);
   }
   return resumeState;
+}
+
+/** The shape of `selectFromList` `resolveGraphSelection` needs — narrowed so a test can inject a fake without a real TTY. */
+type GraphPicker = (
+  items: { label: string; value: string }[],
+  opts: { prompt: string },
+) => Promise<string | undefined>;
+
+/**
+ * Resolves which declared graph a fresh run executes, before any node
+ * starts: an explicit `--graph`, the sole declared name (no prompt), an
+ * interactive pick, or a failure naming what the file declares. `undefined`
+ * for a flat-form file (nothing to select) or one that fails to even parse —
+ * the subsequent `loadWorkflowOrFail` surfaces that failure properly instead
+ * of this duplicating it.
+ */
+export async function resolveGraphSelection(
+  repoRoot: string,
+  explicit: string | undefined,
+  deps: { pick?: GraphPicker } = {},
+): Promise<string | undefined> {
+  const pick = deps.pick ?? selectFromList;
+  const declared = declaredGraphs(repoRoot);
+  if (declared === null) return undefined;
+  const names = declared.map((g) => g.name);
+  if (explicit !== undefined) {
+    if (!names.includes(explicit)) {
+      fail(`graph \`${explicit}\` is not declared — this file declares: ${names.join(', ')}`);
+    }
+    return explicit;
+  }
+  if (declared.length === 1) return declared[0]!.name;
+  if (!process.stdin.isTTY) {
+    fail(`this file declares more than one graph (${names.join(', ')}) — pass --graph <name>.`);
+  }
+  const chosen = await pick(
+    declared.map((g) => ({
+      label: g.description ? `${g.name} — ${g.description}` : g.name,
+      value: g.name,
+    })),
+    { prompt: 'Which graph should this run execute?' },
+  );
+  if (chosen === undefined) fail('no graph selected.');
+  return chosen;
 }
 
 /**
@@ -128,9 +185,33 @@ export async function cmdRun(args: string[]): Promise<void> {
   const allowDirty = args.includes('--allow-dirty');
   const splash = splashEnabled(args, process.env);
   const { resuming, runId: resumeRunId } = parseResumeArg(args);
+  const explicitGraph = parseGraphArg(args);
   const repoRoot = await repoRootFromCwd();
 
-  const workflow = loadWorkflowOrFail(repoRoot);
+  let workflow: Workflow;
+  let resumeState: RunState | undefined;
+  // Which named graph this run executes, when the file declares more than
+  // one — resolved once, up front, and carried through to `recordGraph` and
+  // the run header rather than re-derived later.
+  let graphName: string | undefined;
+
+  if (resuming) {
+    resumeState = resolveResumeState(repoRoot, resumeRunId);
+    try {
+      workflow = rehydrateGraph(resumeState.graph!, { repoRoot });
+    } catch (err) {
+      if (err instanceof RecordedGraphError) fail(err.message);
+      throw err;
+    }
+    graphName = resumeState.graph!.selected;
+    console.log(
+      `flow-code: resuming run ${resumeState.runId.slice(0, 8)} — continuing its recorded graph` +
+        `${graphName ? ` (\`${graphName}\`)` : ''}, not the current workflow file.`,
+    );
+  } else {
+    graphName = await resolveGraphSelection(repoRoot, explicitGraph);
+    workflow = loadWorkflowOrFail(repoRoot, graphName !== undefined ? { graph: graphName } : {});
+  }
 
   // Captured before the fallback below can overwrite it, so the run UI can
   // still tell a node that inherits the workflow's own `settings.model` apart
@@ -141,10 +222,7 @@ export async function cmdRun(args: string[]): Promise<void> {
     workflow.settings.model = resolved.model;
   }
 
-  let resumeState: RunState | undefined;
-  if (resuming) {
-    resumeState = resolveResumeState(repoRoot, workflow, resumeRunId);
-  } else {
+  if (!resuming) {
     // Reconcile orphans from crashed runs before starting a new one. Skipped
     // while resuming: this run's own retained worktrees would show up here
     // too (nothing distinguishes them from a truly abandoned run) and must
@@ -182,13 +260,12 @@ export async function cmdRun(args: string[]): Promise<void> {
     await resetInterruptedWorktrees(repoRoot, resumeState);
     store = new RunStateStore({
       repoRoot,
-      graph: recordGraph(workflow),
+      graph: recordGraph(workflow, graphName),
       resumeFrom: resumeState,
     });
-    console.log(`flow-code: resuming run ${store.runId.slice(0, 8)}.`);
   } else {
     baseline = await recordBaseline(repoRoot, allowDirty);
-    store = new RunStateStore({ repoRoot, graph: recordGraph(workflow) });
+    store = new RunStateStore({ repoRoot, graph: recordGraph(workflow, graphName) });
   }
   store.attachPersister(new FileRunStatePersister(repoRoot));
   store.setBaseline(baseline);
@@ -250,6 +327,7 @@ export async function cmdRun(args: string[]): Promise<void> {
     workflow,
     store,
     ports,
+    repoRoot,
     onInterrupt: triggerInterrupt,
     splash,
     modelContext: {

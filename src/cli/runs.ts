@@ -32,8 +32,10 @@ export async function cmdRuns(): Promise<void> {
   console.log(`flow-code: ${states.length} run(s), newest first:`);
   for (const state of states) {
     const tally = tallyNodeStatuses(state.nodes);
+    const graphName = state.graph?.selected;
     console.log(
       `  ${state.runId.slice(0, 8)}  ${formatTimestamp(state.createdAt)}  ${runStatusLabel(state).padEnd(11)}` +
+        (graphName ? `  (${graphName})` : '') +
         (tally ? `  ${tally}` : ''),
     );
   }

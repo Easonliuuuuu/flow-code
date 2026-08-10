@@ -14,9 +14,13 @@ import { parseCondition } from './condition.js';
 import { Graph, GraphCycleError } from './graph.js';
 import {
   DEFAULT_SETTINGS,
+  namedGraphsFileSchema,
+  workflowDocumentSchema,
   workflowFileSchema,
+  type NamedGraphsFileRaw,
   type NodeBudget,
   type RunSettings,
+  type WorkflowDocumentRaw,
   type WorkflowEdge,
   type WorkflowFileRaw,
 } from './schema.js';
@@ -44,6 +48,25 @@ export interface LoadOptions {
   repoRoot?: string;
   /** Overrides the discovery roots; tests point this at a fixture tree. */
   skillRoots?: SkillRoots;
+  /**
+   * Which named graph to load, for a file declaring `graphs:`. Ignored by a
+   * flat-form file. Omitted with exactly one declared graph auto-selects it;
+   * omitted with more than one is an error naming the declared graphs — the
+   * CLI is expected to have already resolved this via `declaredGraphs` before
+   * calling in, so that case should only be reached by a caller that skipped
+   * that step.
+   */
+  graph?: string;
+}
+
+/** One graph a workflow file declares, for a selection prompt or listing. */
+export interface GraphDescriptor {
+  name: string;
+  description?: string;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** `skills` sits at the top level of every config shape that carries it. */
@@ -89,12 +112,15 @@ export function stagesNotEvaluated(failed: ValidationStage): ValidationStage[] {
 export class WorkflowValidationError extends Error {
   /**
    * `problems` keeps the shape every existing caller reads. `stage` is
-   * additive: it says which check stopped the load, and therefore which checks
-   * were never reached.
+   * additive: it says which check stopped the load, and therefore which
+   * checks were never reached. `graph` is additive too: which named graph
+   * (for a `graphs:` file) the problems belong to, unset for a flat-form file
+   * or a failure in graph *selection* itself rather than a graph's contents.
    */
   constructor(
     readonly problems: string[],
     readonly stage: ValidationStage = 'declarations',
+    readonly graph?: string,
   ) {
     super(`invalid workflow:\n${problems.map((p) => `  - ${p}`).join('\n')}`);
     this.name = 'WorkflowValidationError';
@@ -105,6 +131,139 @@ function describeZodIssues(prefix: string, error: z.ZodError): string[] {
   return error.issues.map((issue) => {
     const path = issue.path.length > 0 ? ` at \`${issue.path.join('.')}\`` : '';
     return `${prefix}${path}: ${issue.message}`;
+  });
+}
+
+/** Every name a `graphs:` file declares, with its description if it has one. */
+export function declaredGraphsOf(file: WorkflowDocumentRaw): GraphDescriptor[] | null {
+  if (!('graphs' in file)) return null;
+  return Object.entries(file.graphs).map(([name, entry]) => ({
+    name,
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+  }));
+}
+
+/**
+ * Disk-reading convenience for a CLI that must resolve a graph name *before*
+ * calling `loadWorkflow` — `run`'s selection prompt needs the declared names
+ * without yet knowing which one it's loading. Returns `null` both for a
+ * flat-form file and for one that fails to parse at all; the latter is
+ * deliberate; the real, well-attributed error surfaces from the subsequent
+ * `loadWorkflow` call instead of being duplicated here.
+ */
+export function declaredGraphs(repoRoot: string): GraphDescriptor[] | null {
+  const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
+  let source: string;
+  try {
+    source = readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(source);
+  } catch {
+    return null;
+  }
+  const parsed = workflowDocumentSchema.safeParse(raw);
+  if (!parsed.success) return null;
+  return declaredGraphsOf(parsed.data);
+}
+
+/**
+ * Picks one named graph out of a `graphs:` file and reduces it to the flat
+ * shape `buildWorkflow` already validates — the single place a `settings`
+ * (once) and a graph's own `nodes`/`edges` come together. Rejects a `budget`
+ * declared inside the graph here, naming it, since this is the one place that
+ * knows both the graph's name and its raw (not-yet-typed-away) content.
+ */
+export function resolveSelectedGraph(
+  file: NamedGraphsFileRaw,
+  selected: string | undefined,
+): { file: WorkflowFileRaw; selectedName: string } {
+  const names = Object.keys(file.graphs);
+  let name: string;
+  if (selected !== undefined) {
+    if (!(selected in file.graphs)) {
+      throw new WorkflowValidationError(
+        [`graph \`${selected}\` is not declared — this file declares: ${names.join(', ')}`],
+        'file-schema',
+      );
+    }
+    name = selected;
+  } else if (names.length === 1) {
+    name = names[0]!;
+  } else {
+    throw new WorkflowValidationError(
+      [`this file declares more than one graph (${names.join(', ')}) — a graph name is required`],
+      'file-schema',
+    );
+  }
+  const entry = file.graphs[name]!;
+  if (entry.budget !== undefined) {
+    throw new WorkflowValidationError(
+      [
+        `graph \`${name}\`: budget is set once at the top level (settings.budget) — it cannot be declared inside a named graph; use node.budget on the node(s) that need one.`,
+      ],
+      'file-schema',
+      name,
+    );
+  }
+  return {
+    file: { settings: file.settings, nodes: entry.nodes, edges: entry.edges },
+    selectedName: name,
+  };
+}
+
+function formatFlatSchemaIssues(error: z.ZodError, raw: unknown): string[] {
+  return error.issues.map((issue) => {
+    const [head, index, ...rest] = issue.path;
+    // Name the offending edge or setting rather than a bare path.
+    if (head === 'edges' && typeof index === 'number') {
+      const edges = (raw as { edges?: unknown[] })?.edges;
+      const edge = edges?.[index] as { from?: unknown; to?: unknown } | undefined;
+      const label =
+        edge && (edge.from !== undefined || edge.to !== undefined)
+          ? `edge ${String(edge.from)} -> ${String(edge.to)}`
+          : `edge #${index}`;
+      const field = rest.length > 0 ? ` (\`${rest.join('.')}\`)` : '';
+      return `${label}${field}: ${issue.message}`;
+    }
+    if (head === 'settings') {
+      const field = [index, ...rest].filter((p) => p !== undefined).join('.');
+      return `settings${field ? ` \`${field}\`` : ''}: ${issue.message}`;
+    }
+    const path = issue.path.length > 0 ? ` at \`${issue.path.join('.')}\`` : '';
+    return `workflow file${path}: ${issue.message}`;
+  });
+}
+
+function formatNamedGraphsIssues(error: z.ZodError, raw: unknown): string[] {
+  return error.issues.map((issue) => {
+    const [head, graphName, ...rest] = issue.path;
+    if (head === 'graphs' && typeof graphName === 'string') {
+      const [field, index, ...tail] = rest;
+      if (field === 'edges' && typeof index === 'number') {
+        const graphs = (raw as { graphs?: Record<string, { edges?: unknown[] }> })?.graphs;
+        const edge = graphs?.[graphName]?.edges?.[index] as
+          | { from?: unknown; to?: unknown }
+          | undefined;
+        const label =
+          edge && (edge.from !== undefined || edge.to !== undefined)
+            ? `edge ${String(edge.from)} -> ${String(edge.to)}`
+            : `edge #${index}`;
+        const tailField = tail.length > 0 ? ` (\`${tail.join('.')}\`)` : '';
+        return `graph \`${graphName}\`, ${label}${tailField}: ${issue.message}`;
+      }
+      const path = rest.length > 0 ? ` at \`${rest.join('.')}\`` : '';
+      return `graph \`${graphName}\`${path}: ${issue.message}`;
+    }
+    if (head === 'settings') {
+      const field = [graphName, ...rest].filter((p) => p !== undefined).join('.');
+      return `settings${field ? ` \`${field}\`` : ''}: ${issue.message}`;
+    }
+    const path = issue.path.length > 0 ? ` at \`${issue.path.join('.')}\`` : '';
+    return `workflow file${path}: ${issue.message}`;
   });
 }
 
@@ -121,29 +280,36 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
     );
   }
 
+  const declaresGraphs = isPlainObject(raw) && 'graphs' in raw;
+  const declaresFlat = isPlainObject(raw) && ('nodes' in raw || 'edges' in raw);
+  if (declaresGraphs && declaresFlat) {
+    throw new WorkflowValidationError(
+      [
+        'workflow file: declares both top-level nodes/edges and graphs — a file may have one shape or the other, not both',
+      ],
+      'file-schema',
+    );
+  }
+
+  if (declaresGraphs) {
+    const namedResult = namedGraphsFileSchema.safeParse(raw);
+    if (!namedResult.success) {
+      throw new WorkflowValidationError(formatNamedGraphsIssues(namedResult.error, raw), 'file-schema');
+    }
+    const { file, selectedName } = resolveSelectedGraph(namedResult.data, options.graph);
+    try {
+      return buildWorkflow(file, { repoRoot, skillRoots });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) {
+        throw new WorkflowValidationError(err.problems, err.stage, selectedName);
+      }
+      throw err;
+    }
+  }
+
   const fileResult = workflowFileSchema.safeParse(raw);
   if (!fileResult.success) {
-    const problems = fileResult.error.issues.map((issue) => {
-      const [head, index, ...rest] = issue.path;
-      // Name the offending edge or setting rather than a bare path.
-      if (head === 'edges' && typeof index === 'number') {
-        const edges = (raw as { edges?: unknown[] })?.edges;
-        const edge = edges?.[index] as { from?: unknown; to?: unknown } | undefined;
-        const label =
-          edge && (edge.from !== undefined || edge.to !== undefined)
-            ? `edge ${String(edge.from)} -> ${String(edge.to)}`
-            : `edge #${index}`;
-        const field = rest.length > 0 ? ` (\`${rest.join('.')}\`)` : '';
-        return `${label}${field}: ${issue.message}`;
-      }
-      if (head === 'settings') {
-        const field = [index, ...rest].filter((p) => p !== undefined).join('.');
-        return `settings${field ? ` \`${field}\`` : ''}: ${issue.message}`;
-      }
-      const path = issue.path.length > 0 ? ` at \`${issue.path.join('.')}\`` : '';
-      return `workflow file${path}: ${issue.message}`;
-    });
-    throw new WorkflowValidationError(problems, 'file-schema');
+    throw new WorkflowValidationError(formatFlatSchemaIssues(fileResult.error, raw), 'file-schema');
   }
 
   return buildWorkflow(fileResult.data, { repoRoot, skillRoots });
@@ -327,6 +493,18 @@ export function buildWorkflow(
     graph,
     order,
   };
+}
+
+/**
+ * The placeholder graph a viewer shows before it has attached to any run —
+ * zero nodes, drawn honestly rather than reloading `workflow.yaml` (which
+ * `watch` no longer does at all; see `RunStateWatcher`/`WorkflowHost`).
+ */
+export function emptyWorkflow(repoRoot: string, skillRoots?: SkillRoots): Workflow {
+  return buildWorkflow(
+    { settings: DEFAULT_SETTINGS, nodes: [], edges: [] },
+    { repoRoot, skillRoots: skillRoots ?? defaultSkillRoots(repoRoot) },
+  );
 }
 
 export function loadWorkflow(repoRoot: string, options: LoadOptions = {}): Workflow {

@@ -174,7 +174,12 @@ registered_gaps:
     reason: >-
       `flow-code watch` shipped as a full user-facing command with no capability
       spec. Flagged in the guest-mode proposal's Impact section but never
-      tracked anywhere that looks.
+      tracked anywhere that looks. `add-per-task-workflow-graphs` changed what
+      `watch` renders — the run's own recorded graph, never
+      `workflow.yaml` — but that is run-state spec surface, not a spec for the
+      command itself. Re-evaluated on that change's own design.md question and
+      left open on purpose: still nothing describes how `watch` attaches, pins
+      to a run id, refuses writes, or reports liveness.
     tracked_by: BR-03
 
   - id: GAP-06

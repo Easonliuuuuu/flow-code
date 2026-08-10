@@ -5,6 +5,7 @@ import {
   loadWorkflowFromString,
   stagesNotEvaluated,
   WorkflowValidationError,
+  type LoadOptions,
 } from '../src/workflow/load.js';
 import { DEFAULT_LOOPBACK_MAX_ATTEMPTS, DEFAULT_SETTINGS } from '../src/workflow/schema.js';
 
@@ -23,9 +24,9 @@ edges:
     to: check
 `;
 
-function problemsOf(yaml: string): string[] {
+function problemsOf(yaml: string, options?: LoadOptions): string[] {
   try {
-    loadWorkflowFromString(yaml);
+    loadWorkflowFromString(yaml, options);
   } catch (err) {
     if (err instanceof WorkflowValidationError) return err.problems;
     throw err;
@@ -192,6 +193,129 @@ nodes:
     type: git-ops
 `);
     expect(wf.nodes[0]!.config).toEqual({});
+  });
+});
+
+const NAMED_GRAPHS = `
+settings:
+  concurrency: 1
+graphs:
+  quick:
+    description: Small, well-understood changes.
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: do it fast }
+    edges: []
+  hardened:
+    description: Risky changes — extra validation.
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: do it carefully }
+      - id: check
+        type: test
+        config: { commands: ["echo ok"] }
+    edges:
+      - { from: impl, to: check }
+`;
+
+describe('named graphs', () => {
+  it('loads a single-graph (flat-form) file exactly as before, with no graph option', () => {
+    const wf = loadWorkflowFromString(VALID);
+    expect(wf.nodes.map((n) => n.id)).toEqual(['impl', 'check']);
+  });
+
+  it('loads the named graph asked for, applying the settings declared once at the top', () => {
+    const quick = loadWorkflowFromString(NAMED_GRAPHS, { graph: 'quick' });
+    expect(quick.nodes.map((n) => n.id)).toEqual(['impl']);
+    expect(quick.settings.concurrency).toBe(1);
+
+    const hardened = loadWorkflowFromString(NAMED_GRAPHS, { graph: 'hardened' });
+    expect(hardened.nodes.map((n) => n.id)).toEqual(['impl', 'check']);
+    expect(hardened.settings.concurrency).toBe(1);
+  });
+
+  it('auto-selects the sole declared graph when none is named', () => {
+    const ONE = `
+graphs:
+  solo:
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+`;
+    expect(loadWorkflowFromString(ONE).nodes.map((n) => n.id)).toEqual(['impl']);
+  });
+
+  it('fails, listing the declared names, when more than one graph is declared and none is named', () => {
+    const failure = failureOf(NAMED_GRAPHS);
+    expect(failure.problems.join('\n')).toMatch(/quick.*hardened|hardened.*quick/s);
+  });
+
+  it('fails, naming the requested graph, when the requested name is not declared', () => {
+    const problems = problemsOf(NAMED_GRAPHS, { graph: 'nope' });
+    expect(problems.join('\n')).toContain('`nope`');
+    expect(problems.join('\n')).toMatch(/quick.*hardened|hardened.*quick/s);
+  });
+
+  it('rejects a file declaring both top-level nodes/edges and graphs, rather than resolving it by precedence', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+graphs:
+  quick:
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+`);
+    expect(problems.join('\n')).toContain('both');
+  });
+
+  it('rejects a budget declared inside a named graph, naming the graph', () => {
+    const problems = problemsOf(`
+graphs:
+  hardened:
+    budget: { tokensPerRun: 1000 }
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+`);
+    expect(problems.join('\n')).toContain('hardened');
+    expect(problems.join('\n')).toContain('node.budget');
+  });
+
+  it('validates every named graph independently, attributing a failure to the graph it came from', () => {
+    const BROKEN_HARDENED = `
+graphs:
+  quick:
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+  hardened:
+    nodes:
+      - id: impl
+        type: no-such-node-type
+`;
+    let caught: WorkflowValidationError | undefined;
+    try {
+      loadWorkflowFromString(BROKEN_HARDENED, { graph: 'hardened' });
+    } catch (err) {
+      if (err instanceof WorkflowValidationError) caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught!.graph).toBe('hardened');
+    expect(caught!.problems.join('\n')).toContain('no-such-node-type');
+
+    // The other graph is unaffected — it loads cleanly on its own.
+    expect(loadWorkflowFromString(BROKEN_HARDENED, { graph: 'quick' }).nodes.map((n) => n.id)).toEqual([
+      'impl',
+    ]);
   });
 });
 

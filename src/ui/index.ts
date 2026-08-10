@@ -1,13 +1,100 @@
 import { render } from 'ink';
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { RunStateStore } from '../runstate/store.js';
+import type { RecordedGraph, RunState } from '../runstate/types.js';
+import { isAttached } from '../runstate/watch.js';
 import type { Workflow } from '../workflow/load.js';
+import { RecordedGraphError, rehydrateGraph } from '../workflow/record.js';
 import { App, type ModelContext } from './App.js';
 import type { UiInteractionPorts } from './ports.js';
 import { Splash } from './splash.js';
 
 export { UiInteractionPorts } from './ports.js';
 export type { ModelContext } from './App.js';
+
+interface WorkflowHostProps {
+  initialWorkflow: Workflow;
+  store: RunStateStore;
+  ports: UiInteractionPorts;
+  onExit: () => void;
+  onInterrupt: () => void;
+  modelContext: ModelContext;
+  watch: boolean;
+  repoRoot: string;
+}
+
+/**
+ * Bridges the store's recorded graph into `App`'s `workflow` prop, so `App`
+ * itself never has to know where a graph came from.
+ *
+ * `run` mounts this with `watch` false: the effect below returns immediately,
+ * so `workflow` never changes from `initialWorkflow` and the path is exactly
+ * as it was before this existed — no new I/O, no new failure mode.
+ *
+ * `watch` mounts with `emptyWorkflow`'s placeholder and no run attached yet.
+ * The effect re-derives `workflow` from whichever `RecordedGraph` the store's
+ * current — or next — snapshot carries, by reference: unchanged on every
+ * status/token update a run produces, and changing only when the graph itself
+ * does (first attach, or a long-lived viewer later attaching to a *different*
+ * run with a different recorded shape).
+ */
+export function WorkflowHost({
+  initialWorkflow,
+  store,
+  ports,
+  onExit,
+  onInterrupt,
+  modelContext,
+  watch,
+  repoRoot,
+}: WorkflowHostProps): React.ReactElement {
+  const [workflow, setWorkflow] = useState<Workflow>(initialWorkflow);
+  const [graphIssue, setGraphIssue] = useState<string | null>(null);
+  const lastGraphRef = useRef<RecordedGraph | undefined>(undefined);
+
+  useEffect(() => {
+    if (!watch) return;
+    const apply = (state: RunState): void => {
+      // The reference-equality skip only applies once there is a graph to
+      // compare by reference. `undefined === undefined` would otherwise make
+      // every graphless state look unchanged — including the transition from
+      // "nothing attached yet" to "attached, but this run predates recorded
+      // graphs", which is exactly the distinction `graphIssue` exists to draw.
+      if (state.graph !== undefined && state.graph === lastGraphRef.current) return;
+      lastGraphRef.current = state.graph;
+      if (state.graph === undefined) {
+        // No fallback to `workflow.yaml`: keep showing whatever shape is
+        // already up, and only say something when there is a run to blame it
+        // on — the pre-attach placeholder isn't "unavailable", it's honest.
+        setGraphIssue(isAttached(state) ? 'shape unavailable — this run predates recorded graphs' : null);
+        return;
+      }
+      try {
+        setWorkflow(rehydrateGraph(state.graph, { repoRoot }));
+        setGraphIssue(null);
+      } catch (err) {
+        if (err instanceof RecordedGraphError) setGraphIssue(err.message);
+        else throw err;
+      }
+    };
+    // Catch up on whatever the store already holds — `RunStateWatcher.start`
+    // runs its first check synchronously, which can land before this effect
+    // subscribes — then follow every snapshot after.
+    apply(store.snapshot());
+    return store.subscribe(apply);
+  }, [watch, store, repoRoot]);
+
+  return React.createElement(App, {
+    workflow,
+    store,
+    ports,
+    modelContext,
+    watch,
+    graphIssue,
+    onExit,
+    onInterrupt,
+  });
+}
 
 /** Mount the terminal UI; resolves when the user exits. */
 export function runUi(opts: {
@@ -16,6 +103,7 @@ export function runUi(opts: {
   ports: UiInteractionPorts;
   onInterrupt: () => void;
   modelContext: ModelContext;
+  repoRoot: string;
   /** Read-only spectator mode — see `AppProps.watch`. */
   watch?: boolean;
   /** Skip the startup splash entirely, even in a TTY (`--no-splash`). Defaults to playing it. */
@@ -40,12 +128,13 @@ export function runUi(opts: {
     };
     const mountApp = (): void => {
       const instance = render(
-        React.createElement(App, {
-          workflow: opts.workflow,
+        React.createElement(WorkflowHost, {
+          initialWorkflow: opts.workflow,
           store: opts.store,
           ports: opts.ports,
           modelContext: opts.modelContext,
-          ...(opts.watch !== undefined ? { watch: opts.watch } : {}),
+          watch: opts.watch ?? false,
+          repoRoot: opts.repoRoot,
           onExit: () => {
             instance.unmount();
             finish();

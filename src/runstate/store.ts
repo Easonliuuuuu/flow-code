@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { NodeBudget } from '../workflow/schema.js';
 import { budgetedTokens } from './types.js';
 import type {
   ActivityEntry,
@@ -132,6 +133,29 @@ export class RunStateStore {
 
   setBaseline(baseline: RunBaseline): void {
     this.state.baseline = baseline;
+    this.commit();
+  }
+
+  /**
+   * Apply a mid-run node edit (model, skills, budget, or test commands) to
+   * the recorded graph, so a reader attached via `applySnapshot` sees it
+   * without reloading `workflow.yaml` — the file and the recording move
+   * together through this one path (see `editRunningNode` in
+   * `src/workflow/write.ts`, the only caller).
+   *
+   * Throws when there is no recorded graph, or no node `nodeId` in it: an
+   * edit naming a node this run isn't running describes no node in this run.
+   */
+  patchGraphNode(nodeId: string, patch: { config: unknown; budget?: NodeBudget }): void {
+    const graph = this.state.graph;
+    const index = graph?.nodes.findIndex((n) => n.id === nodeId) ?? -1;
+    if (!graph || index < 0) {
+      throw new Error(`no node \`${nodeId}\` in this run's recorded graph`);
+    }
+    const nodes = [...graph.nodes];
+    const { budget: _budget, ...rest } = nodes[index]!;
+    nodes[index] = { ...rest, config: patch.config, ...(patch.budget !== undefined ? { budget: patch.budget } : {}) };
+    this.state.graph = { ...graph, nodes };
     this.commit();
   }
 
