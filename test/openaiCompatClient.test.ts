@@ -126,7 +126,7 @@ describe('callOpenAiCompatChat usage reporting', () => {
 
     await callOpenAiCompatChat({ ...chatOpts(), onUsage });
 
-    expect(onUsage).toHaveBeenCalledWith({ input: 200, output: 120, cached: 800 });
+    expect(onUsage).toHaveBeenCalledWith({ input: 200, output: 120, cacheRead: 800 });
   });
 
   it('stays quiet when the provider reports no usage at all', async () => {

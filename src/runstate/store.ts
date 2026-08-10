@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { sumTokens } from './types.js';
+import { budgetedTokens } from './types.js';
 import type {
   ActivityEntry,
   AttemptRecord,
@@ -183,11 +183,12 @@ export class RunStateStore {
    */
   addTokens(nodeId: string, delta: Partial<TokenUsage>): void {
     const node = this.node(nodeId);
-    const prev = node.tokens ?? { input: 0, output: 0, cached: 0 };
+    const prev = node.tokens ?? { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 };
     const tokens: TokenUsage = {
       input: prev.input + (delta.input ?? 0),
       output: prev.output + (delta.output ?? 0),
-      cached: prev.cached + (delta.cached ?? 0),
+      cacheWrite: (prev.cacheWrite ?? 0) + (delta.cacheWrite ?? 0),
+      cacheRead: (prev.cacheRead ?? 0) + (delta.cacheRead ?? 0),
     };
     this.state.nodes = { ...this.state.nodes, [nodeId]: { ...node, tokens } };
     this.commit();
@@ -351,14 +352,17 @@ export class RunStateStore {
     this.commit();
   }
 
-  /** Tokens one node has consumed so far, across every attempt. */
+  /**
+   * Tokens one node has spent against its budget, across every attempt — see
+   * {@link budgetedTokens} for why that is not every token it moved.
+   */
   tokensFor(nodeId: string): number {
-    return sumTokens(this.node(nodeId).tokens);
+    return budgetedTokens(this.node(nodeId).tokens);
   }
 
-  /** Tokens the whole run has consumed so far. */
+  /** Tokens the whole run has spent against its budget. */
   totalTokens(): number {
-    return Object.values(this.state.nodes).reduce((sum, n) => sum + sumTokens(n.tokens), 0);
+    return Object.values(this.state.nodes).reduce((sum, n) => sum + budgetedTokens(n.tokens), 0);
   }
 
   markFinished(interrupted = false): void {

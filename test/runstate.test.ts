@@ -7,6 +7,8 @@ import {
   runFilePath,
 } from '../src/runstate/persist.js';
 import { RunStateStore } from '../src/runstate/store.js';
+import { budgetedTokens, promptTokens, sumTokens } from '../src/runstate/types.js';
+import type { TokenUsage } from '../src/runstate/types.js';
 import { makeTempGitRepo } from './helpers.js';
 
 describe('run-state persistence', () => {
@@ -184,14 +186,36 @@ describe('resuming a run', () => {
   });
 });
 
+describe('token accounting', () => {
+  const usage = { input: 100, output: 20, cacheRead: 900_000, cacheWrite: 5_000 };
+
+  it('reports every token moved, and budgets everything but cache reads', () => {
+    expect(sumTokens(usage)).toBe(905_120);
+    expect(budgetedTokens(usage)).toBe(5_120);
+    expect(promptTokens(usage)).toBe(905_100);
+  });
+
+  it('reads a pre-split run file as cache reads, so an old run is not retroactively over budget', () => {
+    // Written before the two cache terms were separated: one `cached` field.
+    const legacy = { input: 100, output: 20, cached: 900_000 } as unknown as TokenUsage;
+    expect(sumTokens(legacy)).toBe(900_120);
+    expect(budgetedTokens(legacy)).toBe(120);
+  });
+
+  it('counts nothing for a node that never ran a session', () => {
+    expect(sumTokens(undefined)).toBe(0);
+    expect(budgetedTokens(undefined)).toBe(0);
+  });
+});
+
 describe('token and timing tracking', () => {
   it('accumulates token deltas as a session reports them', () => {
     const repo = makeTempGitRepo();
     const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
     expect(store.node('n1').tokens).toBeUndefined();
-    store.addTokens('n1', { input: 100, output: 20, cached: 5 });
+    store.addTokens('n1', { input: 100, output: 20, cacheRead: 5, cacheWrite: 0 });
     store.addTokens('n1', { input: 50, output: 10 });
-    expect(store.node('n1').tokens).toEqual({ input: 150, output: 30, cached: 5 });
+    expect(store.node('n1').tokens).toEqual({ input: 150, output: 30, cacheRead: 5, cacheWrite: 0 });
   });
 
   it('stamps startedAt once and endedAt on the terminal status', () => {
@@ -212,7 +236,7 @@ describe('token and timing tracking', () => {
     const repo = makeTempGitRepo();
     const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
     store.setStatus('n1', 'running');
-    store.addTokens('n1', { input: 100, output: 20, cached: 0 });
+    store.addTokens('n1', { input: 100, output: 20, cacheRead: 0, cacheWrite: 0 });
     store.setStatus('n1', 'error', 'boom');
 
     store.resetNode('n1');
@@ -220,7 +244,7 @@ describe('token and timing tracking', () => {
     expect(store.node('n1').startedAt).toBeUndefined();
     expect(store.node('n1').endedAt).toBeUndefined();
     // Tokens are what the node has already cost — a retry adds to that bill.
-    expect(store.node('n1').tokens).toEqual({ input: 100, output: 20, cached: 0 });
+    expect(store.node('n1').tokens).toEqual({ input: 100, output: 20, cacheRead: 0, cacheWrite: 0 });
   });
 });
 

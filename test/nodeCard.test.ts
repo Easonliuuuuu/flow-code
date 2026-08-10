@@ -172,7 +172,7 @@ describe('nodeMetrics', () => {
 
   it('counts prompt tokens (cached included) against completion tokens, and ticks the clock live', () => {
     const metrics = nodeMetrics(
-      state({ status: 'running', startedAt: started, tokens: { input: 8_213, output: 934, cached: 41_200 } }),
+      state({ status: 'running', startedAt: started, tokens: { input: 8_213, output: 934, cacheRead: 41_200, cacheWrite: 0 } }),
       now,
     );
     expect(metrics).toBe('↑49k ↓934 · 1m04s');
@@ -201,8 +201,8 @@ describe('nodeMetrics', () => {
   it('totals the run for the header', () => {
     expect(
       totalTokens({
-        a: state({ tokens: { input: 100, output: 10, cached: 5 } }),
-        b: state({ tokens: { input: 1, output: 2, cached: 3 } }),
+        a: state({ tokens: { input: 100, output: 10, cacheRead: 5, cacheWrite: 0 } }),
+        b: state({ tokens: { input: 1, output: 2, cacheRead: 3, cacheWrite: 0 } }),
         c: state({}),
       }),
     ).toBe(121);

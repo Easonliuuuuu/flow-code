@@ -5,6 +5,7 @@ import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
+import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
 import type { RunState } from '../runstate/types.js';
 import { isAttached, isDriverAlive } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
@@ -2059,8 +2060,15 @@ export function App({
                     <Text dimColor wrap="truncate-end">
                       {state.tokens
                         ? `tokens: ${formatTokens(state.tokens.input)} in` +
-                          `${state.tokens.cached > 0 ? ` (+${formatTokens(state.tokens.cached)} cached)` : ''}` +
-                          ` · ${formatTokens(state.tokens.output)} out`
+                          ` · ${formatTokens(state.tokens.output)} out` +
+                          // Split out because the budget treats them differently:
+                          // writes count against it, reads never do.
+                          (cacheWriteTokens(state.tokens) > 0
+                            ? ` · ${formatTokens(cacheWriteTokens(state.tokens))} cache write`
+                            : '') +
+                          (cacheReadTokens(state.tokens) > 0
+                            ? ` · ${formatTokens(cacheReadTokens(state.tokens))} cached (unbudgeted)`
+                            : '')
                         : 'tokens: —'}
                       {state.startedAt
                         ? ` · elapsed ${formatDuration(

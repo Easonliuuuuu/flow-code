@@ -58,7 +58,8 @@ function reportUsage(message: SDKMessage, nodeId: string, store: RunStateStore):
   store.addTokens(nodeId, {
     input: usage.input_tokens ?? 0,
     output: usage.output_tokens ?? 0,
-    cached: (usage.cache_read_input_tokens ?? 0) + (usage.cache_creation_input_tokens ?? 0),
+    cacheRead: usage.cache_read_input_tokens ?? 0,
+    cacheWrite: usage.cache_creation_input_tokens ?? 0,
   });
 }
 

@@ -22,11 +22,17 @@ interface ChatCompletionResponse {
   };
 }
 
-/** Token usage for one response, in the shape the run-state store accumulates. */
+/**
+ * Token usage for one response, in the shape the run-state store accumulates.
+ *
+ * No `cacheWrite`: the OpenAI-compatible usage block reports cached prompt
+ * tokens as one number, and on these endpoints caching is automatic and
+ * unbilled as a separate write — so everything it reports is a read.
+ */
 export interface ChatUsage {
   input: number;
   output: number;
-  cached: number;
+  cacheRead: number;
 }
 
 /**
@@ -36,13 +42,13 @@ export interface ChatUsage {
  */
 function usageOf(data: ChatCompletionResponse): ChatUsage | undefined {
   if (!data.usage) return undefined;
-  const cached = data.usage.prompt_tokens_details?.cached_tokens ?? 0;
+  const cacheRead = data.usage.prompt_tokens_details?.cached_tokens ?? 0;
   return {
     // `prompt_tokens` is inclusive of cached tokens; split them so the two
     // never double-count in a total.
-    input: Math.max(0, (data.usage.prompt_tokens ?? 0) - cached),
+    input: Math.max(0, (data.usage.prompt_tokens ?? 0) - cacheRead),
     output: data.usage.completion_tokens ?? 0,
-    cached,
+    cacheRead,
   };
 }
 

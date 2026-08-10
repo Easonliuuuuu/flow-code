@@ -139,6 +139,19 @@ A run-wide per-node ceiling has to be set for the most expensive node in the gra
 which leaves every cheap node effectively unbounded. The per-node override is how one
 known-expensive step gets a limit that fits it.
 
+**Tokens served from cache do not count against a budget.** A session re-sends its
+cached prefix on every turn, so cache reads grow with how long a node has been
+running rather than with how much work it has done — and they are billed at a
+fraction of base input. Counting them made a ceiling a turn counter: a two-function
+change was observed spending 154 fresh input tokens, 403 output tokens, and 2,077,069
+cache reads, exhausting the scaffolded 2,000,000-token run budget before its tests
+ever ran. Fresh input, output, and cache *writes* all count — a write is context
+growing, which is the runaway a token ceiling should catch. For a node that spins
+without growing its context, `minutesPerRun` is the backstop that fits.
+
+Cards still show every token moved, cache included; only the budget draws the
+distinction.
+
 **A budget stop is final.** It never triggers a loop-back retry — retrying past a
 ceiling is exactly what the ceiling exists to prevent.
 
