@@ -13,6 +13,9 @@ A terminal-native node-graph interface for running and observing agentic coding 
 
 Instead of scrolling a chat log, a coding task runs as a graph you can watch: each step is a live card showing its status, token spend, model, and streaming output. Steps that fail route back upstream and try again, and nothing reaches git without your explicit approval.
 
+- **Every node is customizable** — provider, model, config, and attached skills can all be set per node, and edited mid-run with `e` (settings), `m` (model), or `s` (skills), no restart required.
+- **Methodology presets** — `flow-code init --preset openspec` scaffolds an explore → propose → apply → archive graph wired to the OpenSpec skills; `--preset spec-kit` scaffolds a specify → plan → implement graph after GitHub Spec Kit. Both are ordinary node graphs, so they're as editable as anything else.
+
 <p align="center">
   <img src="https://raw.githubusercontent.com/Easonliuuuuu/flow-code/main/docs/demo/flow-code.gif" width="900" alt="A flow-code run: eight nodes laid out as a graph, each card showing its status, model and token spend as the run moves through them, with a failing Test node routing back to Implement.">
 </p>
@@ -79,7 +82,7 @@ node dist/cli.js run
 
 Claude and Codex fall back to their own CLI login when no key is set, drawing on that subscription's usage rather than metered API billing. OpenAI and OpenRouter always bill against the key provided.
 
-Each node can override the provider and model, so an expensive step and a cheap one need not share either.
+Each node can override the provider and model, so an expensive step and a cheap one need not share either — set it in `workflow.yaml`, or change it live with `m` while a run is going.
 
 ## Configuration
 
