@@ -415,9 +415,13 @@ export function App({
   const undockedCanvasHeight = Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
   const measuredLayout = useMemo(() => computeLayout(workflow), [workflow]);
   const fullLayout = useMemo(() => computeLayout(workflow, overrides), [workflow, overrides]);
+  // Wrapping is scoped to compact for now — see layout.ts's `wrapWidth` doc
+  // comment. Extending it to full mode later is just passing `wrapWidth`
+  // here too; `computeLayout` itself doesn't know or care which density
+  // asked for it.
   const compactLayout = useMemo(
-    () => computeLayout(workflow, overrides, { density: 'compact' }),
-    [workflow, overrides],
+    () => computeLayout(workflow, overrides, { density: 'compact', wrapWidth: canvasWidth }),
+    [workflow, overrides, canvasWidth],
   );
   const miniLayout = useMemo(
     () => computeLayout(workflow, overrides, { density: 'mini' }),
