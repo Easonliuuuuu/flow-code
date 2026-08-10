@@ -42,6 +42,14 @@ edges:
   - { from: rev, to: verify }
   - { from: verify, to: polish }
   - { from: polish, to: ship }
+  # This chain is wider than COLUMNS below, which is the point (see the
+  # dragging tests) — but full density wraps a graph that wide into bands on
+  # its own now, and a skip-layer edge is one of the shapes that disqualifies
+  # it (layout.ts's bandsWrapCleanly), so this one keeps the graph flat and
+  # panning the way these tests are actually about. Not a loop-back: that
+  # draws its own return-path glyphs, which collide with zoomOf's below —
+  # a plain forward edge changes nothing else about the rendered frame.
+  - { from: impl, to: ship }
 `;
 
 const ROWS = 30;
