@@ -29,9 +29,20 @@ If `run.jsonl` is already what you want and only the GIF needs remaking:
 
 ```bash
 npm run build
-npm run demo:play       # look at it in your own terminal first
-npm run demo:duration    # how long the replay runs; retune the tape's Sleep
-npm run demo:record      # writes docs/demo/flow-code.gif
+npm run demo:play -- --speed 16 --max-gap 600   # look at it yourself first
+npm run demo:duration -- --speed 16 --max-gap 600 --hold 6000
+npm run demo:record                             # writes docs/demo/flow-code.gif
+```
+
+The committed recording is `run.jsonl.gz`. Full run-state documents repeated
+once per frame compress to about a sixth of their size (4.9 MB → 771 KB), and
+this blob is in git history permanently. `play` and `duration` read either form
+transparently. Captures are written plain: a capture is append-only so a ctrl+c
+keeps every frame it already had, which one gzip stream would not survive — so
+pack it by hand before committing:
+
+```bash
+gzip -9 -c .flow-code/demo-run.jsonl > docs/demo/run.jsonl.gz
 ```
 
 `demo:record` needs [VHS](https://github.com/charmbracelet/vhs) on `PATH`
