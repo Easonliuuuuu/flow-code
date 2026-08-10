@@ -16,6 +16,8 @@ export interface DiscussUiState {
   /** True while the executor is waiting for the user's next message. */
   awaitingUser: boolean;
   active: boolean;
+  /** Choices offered alongside the agent's last message; cleared once the user answers. */
+  options: string[] | null;
 }
 
 interface PendingApproval {
@@ -181,14 +183,16 @@ export class UiInteractionPorts implements InteractionPorts {
         transcript: [...seedTranscript],
         awaitingUser: false,
         active: true,
+        options: null,
       };
       this.notify();
     },
-    postAssistant: (nodeId: string, text: string): void => {
+    postAssistant: (nodeId: string, text: string, options: string[] | null = null): void => {
       if (this.discussState?.nodeId === nodeId) {
         this.discussState = {
           ...this.discussState,
           transcript: [...this.discussState.transcript, { role: 'assistant', text }],
+          options,
         };
         this.notify();
       }
@@ -221,6 +225,7 @@ export class UiInteractionPorts implements InteractionPorts {
       this.discussState = {
         ...this.discussState,
         awaitingUser: false,
+        options: null,
         transcript:
           text === null
             ? this.discussState.transcript

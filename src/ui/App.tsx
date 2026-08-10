@@ -13,7 +13,7 @@ import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { editRunningNode, WorkflowWriteError } from '../workflow/write.js';
 import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
-import { formatDuration, formatTokens, totalTokens } from './nodeCard.js';
+import { ellipsis, formatDuration, formatTokens, spinnerFrame, totalTokens } from './nodeCard.js';
 import { rateLimitSegments, type RateLimitTone } from './rateLimit.js';
 import { agentLabelsFor, formatActivityRow, needsAttribution } from './activityRow.js';
 import {
@@ -249,6 +249,9 @@ export function App({
   // null = following the live tail; a number pins the transcript to that
   // absolute row so new messages don't disturb a mid-scroll read.
   const [discussPin, setDiscussPin] = useState<number | null>(null);
+  // Cursor into `discussState.options`, when the agent's last message offered
+  // tappable choices; reset whenever a new set of options arrives.
+  const [discussOptionCursor, setDiscussOptionCursor] = useState(0);
   // Same follow/pin model as discussPin, but for the two halves of the
   // default node panel (agent output, activity log) — independent, since
   // one can be much longer than the other.
@@ -951,6 +954,12 @@ export function App({
     setDiscussPin(null);
   }, [discussState?.nodeId, discussActive]);
 
+  // A new set of options starts back at the top rather than carrying over a
+  // cursor position that may now point past the end of a shorter list.
+  useEffect(() => {
+    setDiscussOptionCursor(0);
+  }, [discussState?.options]);
+
   // Moving focus to a different node starts its panel following the live
   // tail too, rather than carrying over a scroll position from whatever was
   // focused before.
@@ -1206,6 +1215,20 @@ export function App({
         setFocusIdx((i) => (i + 1) % workflow.order.length);
         return;
       }
+      // Options offered alongside the agent's last message: arrow keys move
+      // the cursor, enter (below) picks the highlighted one unless the user
+      // has started typing a custom answer instead.
+      const options = discussState.options;
+      if (discussState.awaitingUser && options && options.length > 0) {
+        if (key.upArrow) {
+          setDiscussOptionCursor((c) => (c - 1 + options.length) % options.length);
+          return;
+        }
+        if (key.downArrow) {
+          setDiscussOptionCursor((c) => (c + 1) % options.length);
+          return;
+        }
+      }
       if (key.pageUp) {
         setDiscussPin(pinAfterScroll(discussWindow, Math.max(1, panelHeight - 6)));
         return;
@@ -1229,6 +1252,11 @@ export function App({
       }
       if (key.return) {
         const text = inputBuffer.trim();
+        if (text.length === 0 && options && options.length > 0) {
+          setDiscussPin(null);
+          ports.submitUserMessage(options[discussOptionCursor]!);
+          return;
+        }
         setInputBuffer('');
         setDiscussPin(null);
         if (text === '/done' || text === '/exit') ports.submitUserMessage(null);
@@ -1705,19 +1733,37 @@ export function App({
               </Text>
             ))}
           </Box>
-          <Text wrap="truncate-end">
-            {discussState.awaitingUser ? (
-              <>
+          {discussState.awaitingUser ? (
+            <Box flexDirection="column">
+              {discussState.options?.map((option, i) => (
+                <Text
+                  key={i}
+                  wrap="truncate-end"
+                  {...(i === discussOptionCursor ? { color: 'cyan', bold: true } : {})}
+                >
+                  {i === discussOptionCursor ? '❯ ' : '  '}
+                  {option}
+                </Text>
+              ))}
+              <Text wrap="truncate-end">
                 <Text color="cyan">{'> '}</Text>
                 {/* Show the tail of a long line so the caret stays on screen. */}
                 {inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth))}
                 <Text inverse> </Text>
-              </>
-            ) : (
-              <Text dimColor>… agent is thinking</Text>
-            )}
-          </Text>
-          <PanelFooter hint="enter: send · esc: end · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize" />
+              </Text>
+            </Box>
+          ) : (
+            <Text dimColor>
+              {spinnerFrame(frame)} agent is thinking{ellipsis(frame)}
+            </Text>
+          )}
+          <PanelFooter
+            hint={
+              discussState.awaitingUser && discussState.options && discussState.options.length > 0
+                ? '↑/↓: choose · enter: select · type: custom answer · esc: end'
+                : 'enter: send · esc: end · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+            }
+          />
         </Box>
       ) : pendingTestCommands ? (
         <Box {...panelBoxProps}>
