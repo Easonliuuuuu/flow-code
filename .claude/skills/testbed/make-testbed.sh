@@ -3,10 +3,13 @@
 # Generate a clean throwaway repo for driving the flow-code TUI by hand.
 #
 # The TUI can only be judged by looking at it, and `flow-code watch` renders a
-# whole graph from a workflow file without an API key, an agent call, or a
-# single cent — it just needs a git repo with a workflow in it. That is what
-# this makes, in `ui` and `splash` mode. `clean` mode skips the workflow
-# entirely, for exercising `init`/`run` themselves.
+# whole graph without an API key, an agent call, or a single cent — but only
+# once something has recorded that graph's shape into a run document (`watch`
+# never reads workflow.yaml itself, see src/cli/watch.ts). So this writes the
+# workflow *and* seeds a run file for it — the same all-idle, no-engine-ever-
+# attached document `flow-code run` writes before it starts anything — in
+# `ui` and `splash` mode. `clean` mode skips both, for exercising
+# `init`/`run` themselves.
 #
 # Usage: make-testbed.sh [--mode ui|splash|clean] [--dest PATH]
 #                         [--shape wide|tall|tiny] [--no-build]
@@ -301,6 +304,26 @@ EOF
 git init -q -b main
 git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
 git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+
+# `watch` never reads workflow.yaml itself (see its doc comment in
+# src/cli/watch.ts) — it only draws the graph recorded into a run document by
+# `.flow-code/runs/<id>.json`. Without one, it has nothing to attach to and
+# shows an empty canvas. Seed exactly what `flow-code run` writes before its
+# engine ever starts: an all-idle recorded graph, no agent involved.
+node --input-type=module -e "
+  import { loadWorkflow } from '$REPO_ROOT/dist/workflow/load.js';
+  import { recordGraph } from '$REPO_ROOT/dist/workflow/record.js';
+  import { RunStateStore } from '$REPO_ROOT/dist/runstate/store.js';
+  import { FileRunStatePersister } from '$REPO_ROOT/dist/runstate/persist.js';
+  import { ensureGitExclude } from '$REPO_ROOT/dist/git/exclude.js';
+
+  const repoRoot = process.cwd();
+  ensureGitExclude(repoRoot);
+  const workflow = loadWorkflow(repoRoot);
+  const store = new RunStateStore({ repoRoot, graph: recordGraph(workflow) });
+  store.attachPersister(new FileRunStatePersister(repoRoot));
+"
+
 git add -A
 git commit -qm "chore: scaffold flow-code testbed ($SHAPE)"
 
