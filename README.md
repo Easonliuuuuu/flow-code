@@ -13,6 +13,10 @@ A terminal-native node-graph interface for running and observing agentic coding 
 
 Instead of scrolling a chat log, a coding task runs as a graph you can watch: each step is a live card showing its status, token spend, model, and streaming output. Steps that fail route back upstream and try again, and nothing reaches git without your explicit approval.
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Easonliuuuuu/flow-code/main/docs/demo/flow-code.gif" width="900" alt="A flow-code run: eight nodes laid out as a graph, each card showing its status, model and token spend as the run moves through them, with a failing Test node routing back to Implement.">
+</p>
+
 ```
   Discuss ─→ Spec ─→ Implement ─→ Test ─→ Validate ─→ Review ─→ Gate ─→ Git-ops
                          ↑          │         │          │
