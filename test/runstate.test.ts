@@ -224,6 +224,50 @@ describe('token and timing tracking', () => {
   });
 });
 
+describe('status detail', () => {
+  it('drops a detail the previous status set, rather than carrying it into the next', () => {
+    // The Test node's shape exactly: it waits for a command it doesn't have,
+    // is given one, runs it, and passes. Reporting "no test command set yet"
+    // on a node that just ran the suite is worse than reporting nothing.
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['test'] });
+    store.setStatus('test', 'waiting', 'no test command set yet');
+    store.setStatus('test', 'running');
+    expect(store.node('test').statusDetail).toBeUndefined();
+    store.setStatus('test', 'done');
+    expect(store.node('test').statusDetail).toBeUndefined();
+  });
+
+  it('keeps a detail across an update that does not change the status', () => {
+    // running → running is an executor refining what it is doing; the line it
+    // wrote a moment ago is still the truth.
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'running', 'installing dependencies');
+    store.setStatus('n1', 'running');
+    expect(store.node('n1').statusDetail).toBe('installing dependencies');
+  });
+
+  it('replaces the detail when the new status brings one', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.setStatus('n1', 'running', 'working');
+    store.setStatus('n1', 'error', 'boom');
+    expect(store.node('n1').statusDetail).toBe('boom');
+  });
+
+  it('leaves no orphaned key behind on disk', () => {
+    const repo = makeTempGitRepo();
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: ['n1'] });
+    store.attachPersister(new FileRunStatePersister(repo));
+    store.setStatus('n1', 'waiting', 'waiting for you');
+    store.setStatus('n1', 'done');
+
+    const onDisk = readRunState(runFilePath(repo, store.runId));
+    expect('statusDetail' in onDisk.nodes['n1']!).toBe(false);
+  });
+});
+
 describe('attempt tracking', () => {
   it('reports a first attempt for a node that has never been reset', () => {
     const repo = makeTempGitRepo();
