@@ -965,6 +965,55 @@ edges:
     const cornerRow = grid.findIndex((row) => row.some((cell) => cell.style === 'wrap' && cell.ch === '╯'));
     expect(cornerRow).toBeGreaterThanOrEqual(fanOutBottom);
   });
+
+  it('marks a crossing instead of breaking the wrap lane where a loop-back runs through it', () => {
+    // b -> a loops back entirely inside band 0 — validCutPoints only forbids
+    // splitting *inside* that span, not the a,b | c,d boundary right after
+    // it — so this still wraps into three bands. But every loop-back's row
+    // lives below the *whole* graph (see renderGraph), which for a band-0
+    // loop-back means routing down past both band boundaries below it: the
+    // exact case the wrap and loop-back lane allocators don't coordinate on.
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+  - id: e
+    type: approval-gate
+  - id: f
+    type: git-ops
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+  - { from: d, to: e }
+  - { from: e, to: f }
+  - { from: b, to: a, loopback: true }
+`);
+    const layout = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
+    expect(layout.boxes.get('a')!.band).toBe(0);
+    expect(layout.boxes.get('b')!.band).toBe(0);
+    expect(layout.boxes.get('c')!.band).toBe(1);
+    expect(layout.boxes.get('e')!.band).toBe(2);
+
+    const store = storeFor(wf, '/tmp');
+    const grid = renderGraph(wf, layout, store.snapshot(), null);
+    const styles = new Set(grid.flat().map((cell) => cell.style));
+    // The wrap lanes still drew — a crossing doesn't erase them...
+    expect(styles.has('wrap')).toBe(true);
+    // ...and the loop-back's run through them left an explicit marker rather
+    // than silently overwriting the wrap lane's glyph with its own dash.
+    expect(styles.has('crossing')).toBe(true);
+    const text = grid.map((row) => row.map((c) => c.ch).join('')).join('\n');
+    expect(text).toContain('┼');
+  });
 });
 
 describe('mouse parsing (SGR)', () => {
