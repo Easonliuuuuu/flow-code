@@ -232,6 +232,10 @@ export function App({
   // 'center' hard-centers the focused node at the focus anchor; 'nudge' only
   // scrolls it into view. Independent of zoom.
   const [camera, setCamera] = useState<'center' | 'nudge'>('center');
+  // Band-wrap is opt-out rather than unconditional: a graph that wraps oddly
+  // (an edge routed through the wrong lane, say) still has a flat fallback
+  // one keypress away instead of being stuck with it until the next release.
+  const [wrapEnabled, setWrapEnabled] = useState(true);
   const [inputBuffer, setInputBuffer] = useState('');
   const [convCursor, setConvCursor] = useState(0);
   const [convSelected, setConvSelected] = useState<Set<string>>(new Set());
@@ -418,20 +422,23 @@ export function App({
   // compact for a graph that's wide rather than tall — canvasWidth doesn't
   // shift with a docked panel the way canvasHeight does, so no undocked/
   // docked split is needed for it the way there is for height.
+  // exactOptionalPropertyTypes rejects `wrapWidth: undefined` outright —
+  // omitting the key entirely is how LayoutOptions says "don't wrap".
+  const wrapWidthOpt = wrapEnabled ? { wrapWidth: canvasWidth } : {};
   const measuredLayout = useMemo(
-    () => computeLayout(workflow, undefined, { wrapWidth: canvasWidth }),
-    [workflow, canvasWidth],
+    () => computeLayout(workflow, undefined, { ...wrapWidthOpt }),
+    [workflow, wrapEnabled, canvasWidth],
   );
   const fullLayout = useMemo(
-    () => computeLayout(workflow, overrides, { wrapWidth: canvasWidth }),
-    [workflow, overrides, canvasWidth],
+    () => computeLayout(workflow, overrides, { ...wrapWidthOpt }),
+    [workflow, overrides, wrapEnabled, canvasWidth],
   );
   // Mini isn't wrapped (yet) — nothing technical stops it (the mechanism is
   // density-agnostic), it just hasn't been asked for: mini's cards are
   // already narrow enough that a graph needs it far less often.
   const compactLayout = useMemo(
-    () => computeLayout(workflow, overrides, { density: 'compact', wrapWidth: canvasWidth }),
-    [workflow, overrides, canvasWidth],
+    () => computeLayout(workflow, overrides, { density: 'compact', ...wrapWidthOpt }),
+    [workflow, overrides, wrapEnabled, canvasWidth],
   );
   const miniLayout = useMemo(
     () => computeLayout(workflow, overrides, { density: 'mini' }),
@@ -1542,6 +1549,8 @@ export function App({
       }
     } else if (input === 'c') {
       setCamera((m) => (m === 'center' ? 'nudge' : 'center'));
+    } else if (input === 'w') {
+      setWrapEnabled((w) => !w);
     } else if (key.leftArrow) {
       panBy(-PAN_STEP_X, 0);
     } else if (key.rightArrow) {
@@ -1654,6 +1663,7 @@ export function App({
           <Text dimColor> · {density === 'mini' ? 'overview' : 'compact'}</Text>
         ) : null}
         {camera === 'nudge' ? <Text dimColor> · free camera</Text> : null}
+        {!wrapEnabled ? <Text dimColor> · wrap off</Text> : null}
         {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
@@ -2185,7 +2195,8 @@ export function App({
         // in the header, which stays visible behind a docked panel.
         <Text dimColor wrap="truncate-end">
           q: quit · tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧
-          anywhere): pan · z/⌃wheel: zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera
+          anywhere): pan · z/⌃wheel: zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera · w:{' '}
+          {wrapEnabled ? 'unwrap' : 'wrap'}
         </Text>
       )}
     </Box>
