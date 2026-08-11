@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { cmdConnect } from './cli/connect.js';
 import { cmdDoctor } from './cli/doctor.js';
+import { cmdHook } from './cli/hook.js';
 import { cmdInit } from './cli/init.js';
 import { cmdMcp } from './cli/mcp.js';
 import { cmdNode } from './cli/node.js';
@@ -75,6 +76,8 @@ async function main(): Promise<void> {
       return cmdConnect(args);
     case 'mcp':
       return cmdMcp();
+    case 'hook':
+      return cmdHook(args);
     case 'validate':
       return cmdValidate();
     case 'node-types':

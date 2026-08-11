@@ -134,14 +134,15 @@ changes:
       Unparked: the M2 blocker was specifically that guest mode adds a second
       producer of run-state, and `add-run-state-ownership` closed that — a run
       document now records its owner and refuses a second writer, which is what
-      the guest writer needed to exist safely. Being delivered in three parts.
-      The reporting half is done (`guest-run-reporting`,
-      `guest-agent-instructions`): an outside agent walks the graph, every
-      transition is validated against it, and the run is labelled `reported`
-      everywhere it is shown. Held back deliberately — the enforcement layer
-      (`host-session-harness`), whose risk is a hook contract flow-code does not
-      own and which is downstream of the writer anyway, and reconciliation
-      (`run-state-reconciliation`). See the change's tasks.md header.
+      the guest writer needed to exist safely. Delivered in three parts, two of
+      them done. Reporting (`guest-run-reporting`, `guest-agent-instructions`):
+      an outside agent walks the graph and every transition is validated
+      against it. Enforcement (`host-session-harness`): a PreToolUse hook
+      applies the current node's capability set to the host session through the
+      same policy function the engine uses, fails closed, and a run claims the
+      `hooks` tier only while a heartbeat the hook wrote is fresh. Remaining:
+      reconciliation (`run-state-reconciliation`), which is independent of both
+      and unblocked now that reported runs record a baseline.
   add-mcp-driver-connector:
     br: BR-06
     status: parked
@@ -199,14 +200,14 @@ registered_gaps:
     kind: module
     subject: guest
     reason: >-
-      `src/guest/` ships the reporting surface an outside agent drives the graph
-      through — the writer, the transition validator, the generated
-      instructions, and the MCP server. It is specified, in
-      `add-guest-mode-reporter`'s `guest-run-reporting` and
-      `guest-agent-instructions` deltas, and every requirement in both is
-      delivered; those specs are simply not in `openspec/specs/` yet because the
-      change is mid-flight (its enforcement and reconciliation halves are
-      deliberately still to come). Exactly the shape GAP-02/05 had while
+      `src/guest/` ships the surface an outside agent drives the graph through —
+      the writer, the transition validator, the generated instructions, the MCP
+      server, and the host-session enforcement layer. It is specified, in
+      `add-guest-mode-reporter`'s `guest-run-reporting`,
+      `guest-agent-instructions` and `host-session-harness` deltas, and every
+      requirement in all three is delivered; those specs are simply not in
+      `openspec/specs/` yet because the change is mid-flight (its reconciliation
+      half is deliberately still to come). Exactly the shape GAP-02/05 had while
       `src/runstate/` waited for the `run-state` spec to land, and it closes the
       same way: when the change archives and its deltas sync.
     tracked_by: BR-06

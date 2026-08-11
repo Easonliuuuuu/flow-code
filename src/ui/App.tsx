@@ -5,7 +5,7 @@ import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
-import { TIER_LABELS, tierDisclosure } from '../runstate/tier.js';
+import { effectiveTier, TIER_LABELS, tierDisclosure } from '../runstate/tier.js';
 import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
 import type { RunState } from '../runstate/types.js';
 import { driverLiveness, isAttached } from '../runstate/watch.js';
@@ -399,7 +399,7 @@ export function App({
   // Absent for an engine-driven run, which is every run that existed before
   // tiers did — so that layout, and everything measured against it, is
   // untouched for them.
-  const tier = runState.enforcement?.tier ?? 'engine';
+  const tier = effectiveTier(runState.enforcement);
   const tierLine = tierDisclosure(tier);
   const headerRows = HEADER_ROWS + (tierLine ? 1 : 0);
   const docked = dockedLayout({ columns, rows }, headerRows);
@@ -1640,12 +1640,13 @@ export function App({
   // Three-valued deliberately: a run written on another machine cannot be
   // called gone, and saying so about a live run is the failure this header
   // exists to prevent.
-  // A reported run never has an identifiable driver — the session doing the
-  // work is one flow-code cannot see — so "driver unknown" would sit on every
-  // healthy one of them and mean nothing. Its own tier line already says what
-  // the run's contents rest on.
+  // A run driven from someone else's session never has an identifiable driver
+  // — the session doing the work is one flow-code cannot see — so "driver
+  // unknown" would sit on every healthy one of them and mean nothing. True at
+  // either non-engine tier, so it keys off that rather than off one of them.
+  // The run's own tier line already says what its contents rest on.
   const liveness =
-    watchAttached && !finished && tier !== 'reported' ? driverLiveness(runState) : 'live';
+    watchAttached && !finished && tier === 'engine' ? driverLiveness(runState) : 'live';
   const driverGone = liveness === 'dead';
   const driverUnknown = liveness === 'unknown';
   const runLabel = watch

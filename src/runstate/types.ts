@@ -61,6 +61,22 @@ export interface DiscussTranscriptEntry {
   text: string;
 }
 
+/**
+ * How an Approval-Gate was answered, and through what.
+ *
+ * The surface is recorded rather than assumed because it is the whole of the
+ * guarantee: under an engine-driven run the decision came from the UI's own
+ * prompt, and in a host session it came from a surface the host cannot answer
+ * on the user's behalf. An approval whose provenance is unknown is not one
+ * anybody can rely on after the fact.
+ */
+export interface GateDecision {
+  decision: 'approved' | 'rejected';
+  /** What collected it — `ui`, `permission-prompt`, `terminal`. */
+  surface: string;
+  at: string;
+}
+
 /** The terminal outcome of one attempt, kept when a loop-back resets a node. */
 export interface AttemptRecord {
   status: NodeStatus;
@@ -183,6 +199,8 @@ export interface NodeRunState {
   priorAttempts?: AttemptRecord[];
   /** Count of denied tool calls, for the blocked-action indicator. */
   denials: number;
+  /** Set on an Approval-Gate once answered — see {@link GateDecision}. */
+  gateDecision?: GateDecision;
   /**
    * Subagents this node has running right now — not a total. Drops back to 0
    * as they finish, so the card shows delegation while it is happening rather

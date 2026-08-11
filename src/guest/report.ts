@@ -25,6 +25,7 @@ import {
   unattributedOwner,
 } from '../runstate/persist.js';
 import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
+import { enforcementLive } from './enforce.js';
 import type { AttemptRecord, NodeRunState, RunState } from '../runstate/types.js';
 import { loadWorkflow, WorkflowValidationError, type Workflow } from '../workflow/load.js';
 import { recordGraph, RecordedGraphError, rehydrateGraph } from '../workflow/record.js';
@@ -158,7 +159,10 @@ export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Prom
     repoRoot,
     pid: 0,
     owner: unattributedOwner(),
-    enforcement: enforcementOf('reported', opts.surface),
+    // Verified, never assumed from an installed plugin: hooks can be turned
+    // off after installation, and a settings file states an intention rather
+    // than a fact. `enforcementLive` reads evidence the hook itself wrote.
+    enforcement: enforcementOf(enforcementLive(repoRoot) ? 'hooks' : 'reported', opts.surface),
     baseline,
     graph: recordGraph(workflow, opts.graph),
     nodes,
@@ -191,8 +195,41 @@ export function reportTransition(
   const result = validateTransition(workflow, state, reported);
   if (!result.ok) throw new GuestReportError(result.reason);
 
-  persist(repoRoot, applyTransition(state, result.accepted));
+  persist(repoRoot, withTierCheck(repoRoot, applyTransition(state, result.accepted)));
   return result.accepted;
+}
+
+/**
+ * Re-check, on every transition, that a run claiming enforcement still has it.
+ *
+ * Verifying once at open would leave the claim standing for the rest of a run
+ * in which the user disabled hooks, uninstalled the plugin, or moved to a
+ * session without it. Transitions are the natural place to look: they are the
+ * only moments flow-code is given control, they happen often enough to catch a
+ * change quickly, and they cost a stat that the write about to happen dwarfs.
+ *
+ * One-way, deliberately. A run never upgrades back: work already done under
+ * no enforcement is not retrospectively enforced by the layer coming back.
+ */
+function withTierCheck(repoRoot: string, state: RunState): RunState {
+  const enforcement = state.enforcement;
+  if (!enforcement || enforcement.tier !== 'hooks') return state;
+  if (enforcementLive(repoRoot)) return state;
+  return {
+    ...state,
+    enforcement: {
+      ...enforcement,
+      downgrades: [
+        ...(enforcement.downgrades ?? []),
+        {
+          from: 'hooks',
+          to: 'reported',
+          at: new Date().toISOString(),
+          reason: "flow-code's enforcement layer stopped running in this session",
+        },
+      ],
+    },
+  };
 }
 
 /**
@@ -226,6 +263,7 @@ function applyTransition(state: RunState, accepted: AcceptedTransition): RunStat
   if (accepted.detail !== undefined) next.statusDetail = accepted.detail;
   else delete next.statusDetail;
   if (accepted.output !== undefined) next.output = accepted.output;
+  if (accepted.gateDecision !== undefined) next.gateDecision = accepted.gateDecision;
 
   const nodes = { ...state.nodes, [accepted.nodeId]: next };
   for (const id of accepted.reset ?? []) nodes[id] = resetForAnotherAttempt(state.nodes[id]!, now);
@@ -288,6 +326,21 @@ export function closeGuestRun(repoRoot: string, runId: string, interrupted = fal
  */
 export function currentGuestRun(repoRoot: string, states: RunState[]): RunState | undefined {
   return states
-    .filter((s) => s.finishedAt === undefined && s.enforcement?.tier === 'reported')
+    .filter((s) => s.finishedAt === undefined && isReportedRun(s))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+}
+
+/**
+ * A run driven from outside flow-code's engine — whatever enforcement it
+ * turned out to have.
+ *
+ * Matching on "not engine" rather than on the `reported` tier specifically:
+ * the tier records how much was in force, and a run that opened with the
+ * enforcement layer live is still the same run this session is walking. An
+ * earlier version tested for `reported` and so lost track of every run the
+ * moment enforcement started working, which is the sort of bug that only
+ * appears once both halves exist.
+ */
+function isReportedRun(state: RunState): boolean {
+  return state.enforcement !== undefined && state.enforcement.tier !== 'engine';
 }

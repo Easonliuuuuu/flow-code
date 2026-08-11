@@ -16,16 +16,24 @@ export interface PermissionDecision {
   message?: string;
 }
 
-interface InternalDecision extends PermissionDecision {
+/** A decision plus the capability that was missing, when one was. */
+export interface CallDecision extends PermissionDecision {
   missingCapability?: string;
 }
 
-export interface InterceptorOptions {
-  nodeId: string;
-  instanceId?: string;
+/**
+ * Everything a decision depends on, and nothing about who is asking.
+ *
+ * Separated from {@link InterceptorOptions} so the policy can be applied by
+ * something that is not driving the run: the engine holds a live
+ * `RunStateStore` and an in-flight session, while a host-session hook holds a
+ * run document it just read off disk. Both have to reach the same verdict for
+ * the same node, and the only way to guarantee that is for both to call the
+ * same function — see {@link decideCall}.
+ */
+export interface PolicyContext {
   capabilities: CapabilitySet;
   workingDir: string;
-  store: RunStateStore;
   /**
    * Subagent types this node may spawn. Absent or empty refuses every spawn,
    * which is what `settings.subagents: false` compiles to — no special case.
@@ -36,6 +44,12 @@ export interface InterceptorOptions {
    * is spent. Never waits: see `SubagentScope`.
    */
   subagentSlots?: { tryAcquire(): boolean };
+}
+
+export interface InterceptorOptions extends PolicyContext {
+  nodeId: string;
+  instanceId?: string;
+  store: RunStateStore;
 }
 
 /** Per-call context the runner knows and the capability set does not. */
@@ -143,18 +157,31 @@ const DENIED_SET = new Set<string>(ALWAYS_DENIED_TOOLS);
 const ALLOWED_SET = new Set<string>(ALWAYS_ALLOWED_TOOLS);
 const SPAWN_SET = new Set<string>(SPAWN_TOOLS);
 
-export function createInterceptor(opts: InterceptorOptions): Interceptor {
-  const { nodeId, instanceId, capabilities: caps, workingDir, store } = opts;
-  const startTimes = new Map<string, number>();
+/**
+ * The policy itself: does this capability set permit this call?
+ *
+ * Pure, and the single definition of the answer. `createInterceptor` wraps it
+ * for the engine (adding the activity log and the timing bookkeeping a live
+ * run wants); the host-session hook wraps it for a session flow-code did not
+ * start. Neither restates a rule, which is what stops the two paths from
+ * drifting into disagreeing about what a node may do.
+ */
+export function decideCall(
+  ctx: PolicyContext,
+  toolName: string,
+  input: Record<string, unknown>,
+  callOpts?: { blockedPath?: string },
+): CallDecision {
+  const { capabilities: caps, workingDir } = ctx;
   const bashAvailable = caps.has('exec') || caps.has('git-read') || caps.has('git-write');
-  const subagentTypes = opts.subagentTypes ?? new Set<string>();
+  const subagentTypes = ctx.subagentTypes ?? new Set<string>();
 
   /**
    * A spawn is judged on *which* agent type it names, never on what that agent
    * will go on to do — every call the subagent makes comes back through this
    * same check, against this same capability set.
    */
-  function decideSpawn(input: Record<string, unknown>): InternalDecision {
+  function decideSpawn(): CallDecision {
     if (subagentTypes.size === 0) {
       return {
         behavior: 'deny',
@@ -174,7 +201,7 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
     }
     // Refused, never queued — a spawn made to wait would be waiting on a slot
     // its own parent is holding.
-    if (opts.subagentSlots && !opts.subagentSlots.tryAcquire()) {
+    if (ctx.subagentSlots && !ctx.subagentSlots.tryAcquire()) {
       return {
         behavior: 'deny',
         missingCapability: 'concurrency',
@@ -186,121 +213,123 @@ export function createInterceptor(opts: InterceptorOptions): Interceptor {
     return { behavior: 'allow' };
   }
 
-  function decide(
-    toolName: string,
-    input: Record<string, unknown>,
-    callOpts?: { blockedPath?: string },
-  ): InternalDecision {
-    if (ALLOWED_SET.has(toolName)) return { behavior: 'allow' };
+  if (ALLOWED_SET.has(toolName)) return { behavior: 'allow' };
 
-    if (DENIED_SET.has(toolName)) {
+  if (DENIED_SET.has(toolName)) {
+    return {
+      behavior: 'deny',
+      missingCapability: 'network',
+      message: `flow-code: ${toolName} is unavailable — no node type has network access.`,
+    };
+  }
+
+  if (SPAWN_SET.has(toolName)) return decideSpawn();
+
+  if (READ_SET.has(toolName) || EDIT_SET.has(toolName)) {
+    const needed = EDIT_SET.has(toolName) ? 'edit' : 'read';
+    if (!caps.has(needed)) {
       return {
         behavior: 'deny',
-        missingCapability: 'network',
-        message: `flow-code: ${toolName} is unavailable — no node type has network access.`,
+        missingCapability: needed,
+        message: `flow-code: this node type does not have the \`${needed}\` capability.`,
+      };
+    }
+    const target =
+      (typeof input['file_path'] === 'string' && input['file_path']) ||
+      (typeof input['notebook_path'] === 'string' && input['notebook_path']) ||
+      (typeof input['path'] === 'string' && input['path']) ||
+      undefined;
+    if (target !== undefined && outsideWorkingDir(workingDir, target)) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'working-directory',
+        message: `flow-code: ${target} resolves outside this node's working directory (${workingDir}).`,
+      };
+    }
+    // Reading the control directory is fine; writing to it is never.
+    if (needed === 'edit' && target !== undefined && insideControlDir(workingDir, target)) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'control-directory',
+        message: CONTROL_DIR_DENIAL,
+      };
+    }
+    return { behavior: 'allow' };
+  }
+
+  if (EXEC_SET.has(toolName)) {
+    if (!bashAvailable) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'exec',
+        message: 'flow-code: this node type cannot run shell commands.',
+      };
+    }
+    if (toolName !== 'Bash') return { behavior: 'allow' };
+
+    if (callOpts?.blockedPath !== undefined && outsideWorkingDir(workingDir, callOpts.blockedPath)) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'working-directory',
+        message: `flow-code: ${callOpts.blockedPath} is outside this node's working directory (${workingDir}).`,
       };
     }
 
-    if (SPAWN_SET.has(toolName)) return decideSpawn(input);
-
-    if (READ_SET.has(toolName) || EDIT_SET.has(toolName)) {
-      const needed = EDIT_SET.has(toolName) ? 'edit' : 'read';
-      if (!caps.has(needed)) {
-        return {
-          behavior: 'deny',
-          missingCapability: needed,
-          message: `flow-code: this node type does not have the \`${needed}\` capability.`,
-        };
-      }
-      const target =
-        (typeof input['file_path'] === 'string' && input['file_path']) ||
-        (typeof input['notebook_path'] === 'string' && input['notebook_path']) ||
-        (typeof input['path'] === 'string' && input['path']) ||
-        undefined;
-      if (target !== undefined && outsideWorkingDir(workingDir, target)) {
-        return {
-          behavior: 'deny',
-          missingCapability: 'working-directory',
-          message: `flow-code: ${target} resolves outside this node's working directory (${workingDir}).`,
-        };
-      }
-      // Reading the control directory is fine; writing to it is never.
-      if (needed === 'edit' && target !== undefined && insideControlDir(workingDir, target)) {
-        return {
-          behavior: 'deny',
-          missingCapability: 'control-directory',
-          message: CONTROL_DIR_DENIAL,
-        };
-      }
-      return { behavior: 'allow' };
+    const command = typeof input['command'] === 'string' ? input['command'] : '';
+    if (CONTROL_ARTIFACT_IN_COMMAND.test(command)) {
+      return {
+        behavior: 'deny',
+        missingCapability: 'control-directory',
+        message: CONTROL_DIR_DENIAL,
+      };
     }
-
-    if (EXEC_SET.has(toolName)) {
-      if (!bashAvailable) {
+    for (const segment of classifyCommand(command)) {
+      if (segment.kind === 'git-write' && !caps.has('git-write')) {
+        return {
+          behavior: 'deny',
+          missingCapability: 'git-write',
+          message: `flow-code: \`${segment.text}\` is a git-mutating command and this node type does not have the \`git-write\` capability.`,
+        };
+      }
+      if (segment.kind === 'git-read' && !caps.has('git-read') && !caps.has('exec')) {
+        return {
+          behavior: 'deny',
+          missingCapability: 'git-read',
+          message: `flow-code: \`${segment.text}\` requires the \`git-read\` capability.`,
+        };
+      }
+      if (segment.kind === 'non-git' && !caps.has('exec')) {
         return {
           behavior: 'deny',
           missingCapability: 'exec',
-          message: 'flow-code: this node type cannot run shell commands.',
+          message: `flow-code: \`${segment.text}\` is not a git command, and this node type only has git access.`,
         };
       }
-      if (toolName !== 'Bash') return { behavior: 'allow' };
-
-      if (
-        callOpts?.blockedPath !== undefined &&
-        outsideWorkingDir(workingDir, callOpts.blockedPath)
-      ) {
-        return {
-          behavior: 'deny',
-          missingCapability: 'working-directory',
-          message: `flow-code: ${callOpts.blockedPath} is outside this node's working directory (${workingDir}).`,
-        };
-      }
-
-      const command = typeof input['command'] === 'string' ? input['command'] : '';
-      if (CONTROL_ARTIFACT_IN_COMMAND.test(command)) {
-        return {
-          behavior: 'deny',
-          missingCapability: 'control-directory',
-          message: CONTROL_DIR_DENIAL,
-        };
-      }
-      for (const segment of classifyCommand(command)) {
-        if (segment.kind === 'git-write' && !caps.has('git-write')) {
-          return {
-            behavior: 'deny',
-            missingCapability: 'git-write',
-            message: `flow-code: \`${segment.text}\` is a git-mutating command and this node type does not have the \`git-write\` capability.`,
-          };
-        }
-        if (segment.kind === 'git-read' && !caps.has('git-read') && !caps.has('exec')) {
-          return {
-            behavior: 'deny',
-            missingCapability: 'git-read',
-            message: `flow-code: \`${segment.text}\` requires the \`git-read\` capability.`,
-          };
-        }
-        if (segment.kind === 'non-git' && !caps.has('exec')) {
-          return {
-            behavior: 'deny',
-            missingCapability: 'exec',
-            message: `flow-code: \`${segment.text}\` is not a git command, and this node type only has git access.`,
-          };
-        }
-      }
-      return { behavior: 'allow' };
     }
-
-    return {
-      behavior: 'deny',
-      missingCapability: 'unknown-tool',
-      message: `flow-code: tool ${toolName} is outside this node type's capability set.`,
-    };
+    return { behavior: 'allow' };
   }
+
+  return {
+    behavior: 'deny',
+    missingCapability: 'unknown-tool',
+    message: `flow-code: tool ${toolName} is outside this node type's capability set.`,
+  };
+}
+
+export function createInterceptor(opts: InterceptorOptions): Interceptor {
+  const { nodeId, instanceId, store } = opts;
+  const startTimes = new Map<string, number>();
+
+  const decide = (
+    toolName: string,
+    input: Record<string, unknown>,
+    callOpts?: { blockedPath?: string },
+  ): CallDecision => decideCall(opts, toolName, input, callOpts);
 
   function record(
     toolName: string,
     input: Record<string, unknown>,
-    decision: InternalDecision,
+    decision: CallDecision,
     callOpts: CallOptions | undefined,
   ): void {
     const toolUseId = callOpts?.toolUseID;
