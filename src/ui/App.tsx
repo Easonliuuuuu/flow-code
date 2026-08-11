@@ -5,6 +5,7 @@ import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
+import { TIER_LABELS, tierDisclosure } from '../runstate/tier.js';
 import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
 import type { RunState } from '../runstate/types.js';
 import { driverLiveness, isAttached } from '../runstate/watch.js';
@@ -387,7 +388,21 @@ export function App({
     skillPickerOpen ||
     editorOpen;
   const floating = panelRect !== null;
-  const docked = dockedLayout({ columns, rows }, HEADER_ROWS);
+
+  // A run that flow-code did not execute gets a permanent line of its own
+  // saying so, rather than a badge someone has to already know to look for.
+  // The requirement is that what a tier did *not* guarantee is discoverable
+  // without leaving the viewer, and a run whose graph looks identical to an
+  // enforced one is exactly the case where a discoverable-on-demand
+  // disclosure is discovered by nobody.
+  //
+  // Absent for an engine-driven run, which is every run that existed before
+  // tiers did — so that layout, and everything measured against it, is
+  // untouched for them.
+  const tier = runState.enforcement?.tier ?? 'engine';
+  const tierLine = tierDisclosure(tier);
+  const headerRows = HEADER_ROWS + (tierLine ? 1 : 0);
+  const docked = dockedLayout({ columns, rows }, headerRows);
   // A docked, open panel reserves flow space below the canvas; a floating one
   // overlays it instead, so the canvas reclaims that space (same as closed).
   // When docked the canvas height must come from dockedLayout, or the panel
@@ -395,7 +410,7 @@ export function App({
   const canvasHeight =
     panelOpen && !floating
       ? docked.canvasHeight
-      : Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
+      : Math.max(1, rows - headerRows - FOOTER_ROWS);
   const activeRect = floating ? panelRect! : docked.rect;
   const panelHeight = activeRect.h;
   const canvasWidth = columns - 2;
@@ -419,7 +434,7 @@ export function App({
   // un-compact the instant it closed. Every card would resize and shift
   // position on that swing, right as focus was moving on to the next click —
   // this is what silently changed the badge a click a moment later landed on.
-  const undockedCanvasHeight = Math.max(1, rows - HEADER_ROWS - FOOTER_ROWS);
+  const undockedCanvasHeight = Math.max(1, rows - headerRows - FOOTER_ROWS);
   // Wrapping folds excess width into height, so the "is this graph too tall"
   // measurement below has to see the *wrapped* height or it under-triggers
   // compact for a graph that's wide rather than tall — canvasWidth doesn't
@@ -1038,7 +1053,7 @@ export function App({
           }
           if (overPanel) continue; // clicks inside panel content (not its border) aren't a canvas drag
           const canvasX = event.x + offset.ox;
-          const canvasY = event.y - HEADER_ROWS + offset.oy;
+          const canvasY = event.y - headerRows + offset.oy;
           const id = hitTest(layout, canvasX, canvasY, drawOrder);
           if (id) {
             setFocusIdx(Math.max(0, workflow.order.indexOf(id)));
@@ -1625,7 +1640,12 @@ export function App({
   // Three-valued deliberately: a run written on another machine cannot be
   // called gone, and saying so about a live run is the failure this header
   // exists to prevent.
-  const liveness = watchAttached && !finished ? driverLiveness(runState) : 'live';
+  // A reported run never has an identifiable driver — the session doing the
+  // work is one flow-code cannot see — so "driver unknown" would sit on every
+  // healthy one of them and mean nothing. Its own tier line already says what
+  // the run's contents rest on.
+  const liveness =
+    watchAttached && !finished && tier !== 'reported' ? driverLiveness(runState) : 'live';
   const driverGone = liveness === 'dead';
   const driverUnknown = liveness === 'unknown';
   const runLabel = watch
@@ -1687,8 +1707,15 @@ export function App({
         {selectedGraph ? <Text dimColor> ({selectedGraph})</Text> : null}
         <Text dimColor> · </Text>
         <Text>{headerParts.join('  ')}</Text>
+        {tier !== 'engine' ? <Text color="yellow"> · {TIER_LABELS[tier]}</Text> : null}
+        {/* A tier with no token accounting did not spend nothing — nothing
+            counted. Blanking the segment would read as "cheap"; `n/a` reads as
+            what it is. Engine runs keep the old behaviour exactly: a real
+            count when there is one, and no segment before the first token. */}
         {runTokens > 0 ? (
           <Text color="cyan"> · {formatTokens(runTokens)} tok</Text>
+        ) : tier !== 'engine' ? (
+          <Text dimColor> · spend n/a</Text>
         ) : null}
         {/* Sits beside the token count because both answer "what is this run
             costing" — but this one is the provider's own accounting of the
@@ -1719,6 +1746,11 @@ export function App({
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
         {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
       </Text>
+      {tierLine ? (
+        <Text color="yellow" wrap="truncate-end">
+          {tierLine}
+        </Text>
+      ) : null}
       <Box flexDirection="column" height={canvasHeight}>
         {canvasLines.map((line, i) => (
           <Text key={i}>{line || ' '}</Text>

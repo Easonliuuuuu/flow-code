@@ -1,4 +1,5 @@
 import type { NodeBudget, RunSettings, WorkflowEdge } from '../workflow/schema.js';
+import type { RunEnforcement } from './tier.js';
 
 export const NODE_STATUSES = ['idle', 'running', 'waiting', 'done', 'error', 'skipped'] as const;
 
@@ -311,6 +312,13 @@ export interface RunState {
   owner?: RunOwner;
   /** Present once a run has changed hands, e.g. through `--resume`. */
   handovers?: OwnershipHandover[];
+  /**
+   * What was actually in force while this run executed — see {@link
+   * RunEnforcement}. Optional only so run documents written before tiers
+   * existed still parse; every one of those was engine-driven, since the
+   * engine was the only writer that existed.
+   */
+  enforcement?: RunEnforcement;
   baseline: RunBaseline | null;
   /**
    * The graph this run is executing. Optional only so run documents written

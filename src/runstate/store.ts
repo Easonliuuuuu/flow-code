@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { NodeBudget } from '../workflow/schema.js';
 import { driverLiveness, newOwner, RunOwnershipError } from './persist.js';
+import { engineEnforcement, type RunEnforcement } from './tier.js';
 import { budgetedTokens } from './types.js';
 import type {
   ActivityEntry,
@@ -52,6 +53,13 @@ export class RunStateStore {
      * picks the conversation back up instead of starting blank.
      */
     resumeFrom?: RunState;
+    /**
+     * What this run's writer can actually guarantee. Defaults to the engine's
+     * full set, because the engine is the only writer that constructs a store
+     * without saying — a guest writer has to name what it is, and naming it is
+     * the whole point of the field.
+     */
+    enforcement?: RunEnforcement;
   }) {
     // One source for which nodes exist, so the node map and the recorded graph
     // cannot be seeded from two lists that disagree.
@@ -102,6 +110,9 @@ export class RunStateStore {
       pid: process.pid,
       owner,
       ...(handovers.length > 0 ? { handovers } : {}),
+      // A resumed run keeps the enforcement it recorded: the tier belongs to
+      // how the run was executed, not to which process is writing it now.
+      enforcement: opts.enforcement ?? opts.resumeFrom?.enforcement ?? engineEnforcement(),
       baseline: opts.resumeFrom?.baseline ?? null,
       // Recorded at construction, which is before any node can leave `idle`:
       // a reader attaching to a run at its first instant still sees the shape.

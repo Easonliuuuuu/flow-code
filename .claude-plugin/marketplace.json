@@ -1,0 +1,14 @@
+{
+  "name": "flow-code",
+  "owner": {
+    "name": "Easonliuuuuu",
+    "url": "https://github.com/Easonliuuuuu"
+  },
+  "plugins": [
+    {
+      "name": "flow-code",
+      "source": "./plugin",
+      "description": "Walk your project's flow-code graph from your own Claude Code session, and watch the run fill in beside it."
+    }
+  ]
+}

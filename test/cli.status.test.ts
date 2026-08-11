@@ -13,6 +13,7 @@ import {
   summarize,
   type RunSummary,
 } from '../src/cli/status.js';
+import { enforcementOf } from '../src/runstate/tier.js';
 import type { NodeRunState, NodeStatus, RunState } from '../src/runstate/types.js';
 import { deadOwner, foreignOwner, liveOwner } from './helpers.js';
 
@@ -137,7 +138,7 @@ describe('summarize', () => {
 describe('summarize — guarantees the run did not carry', () => {
   it('reports spend as unavailable rather than zero for a self-reported run', () => {
     const s = summarize(
-      stateWith({ implement: node('done') }, { enforcement: { tier: 'reported' } } as Partial<RunState>),
+      stateWith({ implement: node('done') }, { enforcement: enforcementOf('reported', 'cli') }),
     );
     expect(s.tier).toBe('reported');
     expect(s.tokens).toBeUndefined();
@@ -147,12 +148,12 @@ describe('summarize — guarantees the run did not carry', () => {
   });
 
   it('reports spend as unavailable when a host-session run recorded none', () => {
-    const s = summarize(stateWith({ implement: node('done') }, { enforcement: { tier: 'hooks' } } as Partial<RunState>));
+    const s = summarize(stateWith({ implement: node('done') }, { enforcement: enforcementOf('hooks', 'mcp') }));
     expect(s.tokens).toBeUndefined();
   });
 
   it('treats an unrecognized tier as the weakest one rather than trusting it', () => {
-    const s = summarize(stateWith({ a: node('done') }, { enforcement: { tier: 'engine-ish' } } as Partial<RunState>));
+    const s = summarize(stateWith({ a: node('done') }, { enforcement: { tier: 'engine-ish' } } as unknown as Partial<RunState>));
     expect(s.tier).toBe('reported');
   });
 
@@ -161,7 +162,7 @@ describe('summarize — guarantees the run did not carry', () => {
   });
 
   it('names a tier in the rendered line only when it is not engine', () => {
-    const guest = summarize(stateWith({ a: node('done') }, { enforcement: { tier: 'hooks' } } as Partial<RunState>));
+    const guest = summarize(stateWith({ a: node('done') }, { enforcement: enforcementOf('hooks', 'mcp') }));
     expect(plain(guest, 120)).toContain('host session');
     expect(plain(summarize(stateWith({ a: node('done') })), 120)).not.toContain('host session');
   });
@@ -426,5 +427,25 @@ describe('cmdStatus', () => {
     const script = out.mock.calls.flat().join('');
     expect(script).toContain('command -v jq');
     expect(script).toContain('python3');
+  });
+});
+
+describe('a reported run is not warned about for having no identifiable driver', () => {
+  it('summarizes by where the run is, not as unverifiable', () => {
+    const s = summarize(
+      stateWith({ implement: node('running') }, { enforcement: enforcementOf('reported', 'cli') }),
+    );
+    // Every reported run has an unidentifiable driver by construction. Firing
+    // the liveness warning on all of them would train people to ignore it on
+    // the runs where it means something.
+    expect(s.kind).toBe('running');
+    expect(plain(s, 120)).not.toContain('driver');
+    // The tier is still named — the disclosure is the tier, not a fake alarm.
+    expect(plain(s, 120)).toContain('self-reported');
+  });
+
+  it('still reports a dead driver on an engine-driven run', () => {
+    const s = summarize(stateWith({ implement: node('running') }, { owner: deadOwner() }));
+    expect(s.kind).toBe('undriven');
   });
 });

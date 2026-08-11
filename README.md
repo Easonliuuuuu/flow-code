@@ -155,6 +155,9 @@ line; `--graph <name>` skips the question. See
 | `flow-code run --graph <name>` | Execute a named graph, for a file declaring more than one |
 | `flow-code watch` | Follow a run started elsewhere — same graph, read-only |
 | `flow-code status` | Summarize the current run in a row or two — for a status bar, not a window |
+| `flow-code node <sub>` | Report progress through the graph from an agent flow-code is not running |
+| `flow-code connect` | Install the reporting surface into this project's agent configuration |
+| `flow-code mcp` | Serve the reporting tools over MCP (launched by a host agent, not by hand) |
 | `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
 | `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
@@ -199,11 +202,45 @@ flow-code status --json           # the same summary as data, plus an attention 
 flow-code status --script         # a ready-made status-bar script, if you have none
 ```
 
-`--line` emits one row and nothing else, so it can be pasted into a status bar you already have — in Claude Code, call it from your existing `statusLine` script rather than replacing that script, since a custom status line replaces some of the built-in footer hints. `--script` prints a complete one for a host with none; register it yourself (flow-code never edits your host's configuration).
+`--line` emits one row and nothing else, so it can be pasted into a status bar you already have — in Claude Code, call it from your existing `statusLine` script rather than replacing that script, since a custom status line replaces some of the built-in footer hints. `--script` prints a complete one for a host with none; register it yourself (`status` never edits your host's configuration — `flow-code connect` is the one command that does, and it names every file it touches).
 
 The output narrows as the width does: labelled nodes, then status glyphs, then whichever node is blocking the run and why — that last part is the thing it never drops. It works against any run in the repo, whoever started it, and it reads the run file without writing, locking, or slowing the process driving it. A run whose driver died reads as *driver gone* rather than as work in progress.
 
 `--json` exists for scripting a notification: the payload carries an `attention` token that stays the same while the same node is blocked and changes when a different one is, so a hook can announce a waiting gate once instead of on every check. flow-code keeps no record of what it has announced — pass the last token back with `--since`.
+
+## Driving the graph from your own agent
+
+Everything above assumes `flow-code run` is executing the graph. It does not have to be. You can stay in the agent CLI you already use — `claude`, `codex`, whatever it is — walk the graph yourself, and have the run fill in beside you:
+
+```bash
+flow-code connect   # once per project: installs the tools and the instructions
+flow-code watch     # second window — the graph fills in as your session reports
+```
+
+`connect` writes three things and names each one: an MCP server entry in `.mcp.json`, a skill at `.claude/skills/flow-code-workflow/SKILL.md`, and a delimited section in your `CLAUDE.md`/`AGENTS.md` — only inside its own delimiters, leaving the rest of the file byte-identical. Run it again after changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it still matches.
+
+For Claude Code specifically there is a plugin, which needs no per-project step at all — it reads the graph through a tool rather than installing a copy of it:
+
+```
+/plugin marketplace add Easonliuuuuu/flow-code
+/plugin install flow-code
+```
+
+Either way your agent reports each transition (`flow-code node start <id>`, `… done <id> --output '{…}'`, `… fail <id> <reason>`), and every one is checked against the graph before it is recorded. A step cannot start before the steps above it are done, cannot complete without having started, and cannot complete with output that does not match its node type's shape. A rejected report changes nothing and says why.
+
+### What a reported run is, and is not
+
+flow-code validates the *order* of what an outside agent reports. It does not execute that agent, so it cannot enforce anything about what the agent actually did. Runs record which of three tiers they ran under, and every surface that displays a run says which:
+
+| Tier | What is in force |
+| --- | --- |
+| **engine** | `flow-code run`: capability enforcement, process guards, per-node models, token accounting, loop-back routing. |
+| **host session** | A session flow-code did not start, with its enforcement layer active: tool policy and git interception, and nothing that depends on having spawned the process. *Not in this build.* |
+| **reported** | Self-reported. Transitions are checked against the graph; the work behind them is not. |
+
+A reported run is labelled in the viewer on a line of its own, shows spend as `n/a` rather than as zero, and carries no activity log or denial counts — a run should not be able to display guarantees it never had. **A green graph from a reported run is a record of what your agent said it did, not evidence that anything was checked.**
+
+Loop-backs are the one place a reported run is structurally different rather than merely less enforced: the engine *routes* a failure back to its target, and nothing routes it here. The generated instructions say so explicitly, and tell the agent to walk the return path itself.
 
 ## Keyboard controls
 

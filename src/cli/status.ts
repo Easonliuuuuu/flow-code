@@ -19,25 +19,21 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { driverLiveness } from '../runstate/persist.js';
+import { ENFORCEMENT_TIERS, type EnforcementTier } from '../runstate/tier.js';
 import { liveRuns } from '../runstate/watch.js';
 import { budgetedTokens, sumTokens, type NodeStatus, type RunState } from '../runstate/types.js';
 import { STATUS_GLYPHS } from '../ui/canvas.js';
 import { columnWidth, fitText } from '../ui/textwrap.js';
 
 /**
- * How much of flow-code's enforcement was in force for a run.
- *
- * `engine` is a run flow-code executed itself — the only tier that exists in
- * the product today, and the default for any run document that does not say
- * otherwise. The other two are written by `add-guest-mode-reporter`, which owns
- * the field: `hooks` is a host session with flow-code's enforcement active,
- * `reported` is self-reporting with none. This module reads the field
- * defensively rather than waiting for it, because the alternative is a status
- * surface that quietly implies guarantees a run never carried.
+ * How much of flow-code's enforcement was in force for a run. Defined in
+ * `runstate/tier.ts` alongside the guarantees each tier does and does not
+ * provide; re-exported here because this module was reading the field before
+ * anything wrote it, and callers reach for the name through the status API.
  */
-export type EnforcementTier = 'engine' | 'hooks' | 'reported';
+export type { EnforcementTier };
 
-const TIERS = new Set<EnforcementTier>(['engine', 'hooks', 'reported']);
+const TIERS = new Set<EnforcementTier>(ENFORCEMENT_TIERS);
 
 export type SummaryKind =
   /** No run recorded for this directory at all. */
@@ -95,9 +91,12 @@ const SETTLED: ReadonlySet<NodeStatus> = new Set<NodeStatus>(['done', 'skipped']
  * this must never round.
  */
 function tierOf(state: RunState): EnforcementTier {
-  const claimed = (state as RunState & { enforcement?: { tier?: string } }).enforcement?.tier;
+  const claimed = state.enforcement?.tier;
   if (claimed === undefined) return 'engine';
-  return TIERS.has(claimed as EnforcementTier) ? (claimed as EnforcementTier) : 'reported';
+  // A tier this build does not recognize comes from a build that knew more
+  // than this one. Reading it as the weakest tier is the only safe direction:
+  // the alternative credits a run with guarantees nothing here can name.
+  return TIERS.has(claimed) ? claimed : 'reported';
 }
 
 /**
@@ -167,7 +166,13 @@ export function summarize(state: RunState | undefined, now: number = Date.now())
   // frozen, not current. Saying "running" here is the one lie that reliably
   // costs someone ten minutes — and saying it about a run this machine cannot
   // answer for is the same lie with less excuse, so that case says so instead.
-  const liveness = driverLiveness(state);
+  //
+  // A reported run is the exception, and it is not a lie there: nothing was
+  // ever going to be identifiable, because the session doing the work is one
+  // flow-code cannot see. Reporting every healthy reported run as
+  // `unverifiable` would fire the warning constantly and teach people to read
+  // past it — the tier label already says what this run's claims rest on.
+  const liveness = tier === 'reported' ? 'live' : driverLiveness(state);
   if (liveness !== 'live') {
     const stalled = focusNode(nodes);
     return {

@@ -1,0 +1,12 @@
+{
+  "name": "flow-code",
+  "description": "Walk your project's flow-code graph from your own Claude Code session, and watch the run fill in beside it.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/Easonliuuuuu/flow-code",
+  "mcpServers": {
+    "flow-code": {
+      "command": "flow-code",
+      "args": ["mcp"]
+    }
+  }
+}

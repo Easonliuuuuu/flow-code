@@ -130,14 +130,18 @@ changes:
 
   add-guest-mode-reporter:
     br: BR-06
-    status: parked
     note: >-
-      Blocked on M2 by the proposal's own argument — guest mode adds a second
-      producer of run-state and should not land while driver mode is still
-      settling. Retargeted to a host-agent plugin: the premise that a guest run
-      can carry no harness turned out to be false for a host that exposes a
-      tool-interception point, so enforcement is now recorded as a tier rather
-      than disclosed as absent.
+      Unparked: the M2 blocker was specifically that guest mode adds a second
+      producer of run-state, and `add-run-state-ownership` closed that — a run
+      document now records its owner and refuses a second writer, which is what
+      the guest writer needed to exist safely. Being delivered in three parts.
+      The reporting half is done (`guest-run-reporting`,
+      `guest-agent-instructions`): an outside agent walks the graph, every
+      transition is validated against it, and the run is labelled `reported`
+      everywhere it is shown. Held back deliberately — the enforcement layer
+      (`host-session-harness`), whose risk is a hook contract flow-code does not
+      own and which is downstream of the writer anyway, and reconciliation
+      (`run-state-reconciliation`). See the change's tasks.md header.
   add-mcp-driver-connector:
     br: BR-06
     status: parked
@@ -190,6 +194,31 @@ registered_gaps:
       left open on purpose: still nothing describes how `watch` attaches, pins
       to a run id, refuses writes, or reports liveness.
     tracked_by: BR-03
+
+  - id: GAP-13
+    kind: module
+    subject: guest
+    reason: >-
+      `src/guest/` ships the reporting surface an outside agent drives the graph
+      through — the writer, the transition validator, the generated
+      instructions, and the MCP server. It is specified, in
+      `add-guest-mode-reporter`'s `guest-run-reporting` and
+      `guest-agent-instructions` deltas, and every requirement in both is
+      delivered; those specs are simply not in `openspec/specs/` yet because the
+      change is mid-flight (its enforcement and reconciliation halves are
+      deliberately still to come). Exactly the shape GAP-02/05 had while
+      `src/runstate/` waited for the `run-state` spec to land, and it closes the
+      same way: when the change archives and its deltas sync.
+    tracked_by: BR-06
+
+  - id: GAP-14
+    kind: scope
+    subject: guest
+    reason: >-
+      The commit scope for the same code, open for the same reason and closing
+      at the same moment as GAP-13. Registered separately because the check
+      walks scopes and modules independently.
+    tracked_by: BR-06
 
   - id: GAP-06
     kind: scope

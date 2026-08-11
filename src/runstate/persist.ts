@@ -27,6 +27,25 @@ export function newOwner(): RunOwner {
 }
 
 /**
+ * Ownership for a run nothing in this process is driving.
+ *
+ * A reported run is walked by an agent session flow-code did not start and
+ * cannot see; the process that writes each transition is a short-lived
+ * reporter that exits immediately afterwards. Recording that reporter's pid
+ * would make the run read as abandoned between every pair of reports, and
+ * recording a long-lived server's pid would claim it was driving a run it is
+ * only relaying. Neither is true, so no pid is recorded at all — `pid: 0`
+ * reads back as {@link driverLiveness} `unknown`, which is exactly what a
+ * reader can honestly conclude about a session on the other side of a wall.
+ *
+ * The token is still real: it is what makes the *write* ownable even when the
+ * driver is not identifiable.
+ */
+export function unattributedOwner(): RunOwner {
+  return { pid: 0, host: hostname(), token: randomUUID(), claimedAt: new Date().toISOString() };
+}
+
+/**
  * What a reader can say about the process driving a run.
  *
  * `unknown` is not a failure to compute — it is the correct answer whenever a
