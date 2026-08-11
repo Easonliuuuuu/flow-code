@@ -72,8 +72,8 @@ _No OpenSpec change serves this yet._
 
 | Change | State | Tasks |
 | --- | --- | --- |
-| `add-run-state-ownership` | active | ██████████ 31/31 |
 | `2026-08-09-add-workflow-validation-and-recorded-graph` | archived | ██████████ 25/25 |
+| `2026-08-11-add-run-state-ownership` | archived | ██████████ 31/31 |
 
 ### BR-05 — A graph bigger than the default stays navigable
 
@@ -119,4 +119,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-10 archived change(s), 335 tasks. 16 modules under `src/`, 13 capability specs.
+11 archived change(s), 366 tasks. 16 modules under `src/`, 13 capability specs.
