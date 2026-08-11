@@ -19,7 +19,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { driverLiveness } from '../runstate/persist.js';
-import { ENFORCEMENT_TIERS, type EnforcementTier } from '../runstate/tier.js';
+import { effectiveTier, ENFORCEMENT_TIERS, type EnforcementTier } from '../runstate/tier.js';
 import { liveRuns } from '../runstate/watch.js';
 import { budgetedTokens, sumTokens, type NodeStatus, type RunState } from '../runstate/types.js';
 import { STATUS_GLYPHS } from '../ui/canvas.js';
@@ -91,7 +91,9 @@ const SETTLED: ReadonlySet<NodeStatus> = new Set<NodeStatus>(['done', 'skipped']
  * this must never round.
  */
 function tierOf(state: RunState): EnforcementTier {
-  const claimed = state.enforcement?.tier;
+  // The weakest tier anything in the run held, not the one it opened with: a
+  // run that lost enforcement half way through is not a run that had it.
+  const claimed = state.enforcement && effectiveTier(state.enforcement);
   if (claimed === undefined) return 'engine';
   // A tier this build does not recognize comes from a build that knew more
   // than this one. Reading it as the weakest tier is the only safe direction:
@@ -167,12 +169,14 @@ export function summarize(state: RunState | undefined, now: number = Date.now())
   // costs someone ten minutes — and saying it about a run this machine cannot
   // answer for is the same lie with less excuse, so that case says so instead.
   //
-  // A reported run is the exception, and it is not a lie there: nothing was
-  // ever going to be identifiable, because the session doing the work is one
-  // flow-code cannot see. Reporting every healthy reported run as
+  // A run driven from someone else's session is the exception, and it is not a
+  // lie there: nothing was ever going to be identifiable, because the session
+  // doing the work is one flow-code cannot see. That is true whether or not
+  // the enforcement layer is running, so it keys off "not engine-driven"
+  // rather than off one tier. Reporting every healthy one of them as
   // `unverifiable` would fire the warning constantly and teach people to read
   // past it — the tier label already says what this run's claims rest on.
-  const liveness = tier === 'reported' ? 'live' : driverLiveness(state);
+  const liveness = tier === 'engine' ? driverLiveness(state) : 'live';
   if (liveness !== 'live') {
     const stalled = focusNode(nodes);
     return {

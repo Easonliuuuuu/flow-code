@@ -41,6 +41,9 @@ Usage:
                               flag, JSON is read from stdin
   flow-code node fail <id> <reason…> [--run <runId>]
                               Report node <id> failed, with the reason as its status detail
+  flow-code node approve <id> | reject <id> [--run <runId>]
+                              Record what the *user* decided at an approval gate. Requires an
+                              interactive terminal: a gate answered by a script is not an approval
   flow-code node close [--run <runId>] [--interrupted]
                               Close the run. --interrupted marks it as stopped rather than done
   flow-code node current      Print the run later subcommands would target, and where it is
@@ -163,6 +166,9 @@ export async function cmdNode(args: string[]): Promise<void> {
       case 'done':
       case 'fail':
         return cmdTransition(repoRoot, sub, rest);
+      case 'approve':
+      case 'reject':
+        return cmdGate(repoRoot, sub === 'approve' ? 'approved' : 'rejected', rest);
       case 'close':
         return cmdClose(repoRoot, rest);
       case 'current':
@@ -209,6 +215,39 @@ function cmdTransition(repoRoot: string, kind: 'start' | 'done' | 'fail', args: 
   const accepted = reportTransition(repoRoot, run.runId, reported);
   const detail = accepted.detail !== undefined ? ` — ${accepted.detail}` : '';
   console.log(`flow-code: ${accepted.nodeId} → ${accepted.status}${detail}`);
+}
+
+/**
+ * Answer an approval gate from the terminal.
+ *
+ * The MCP surface gets its guarantee from a permission prompt the host cannot
+ * pre-approve. There is no equivalent here, so this leans on the nearest real
+ * thing: an interactive terminal. Refusing when stdin is not a TTY is what
+ * stops a gate being answered by a script, a CI job, or an agent piping input
+ * — the cases where "the user approved it" would be false.
+ *
+ * It is a weaker guarantee than the MCP one and is recorded as a different
+ * surface for exactly that reason: `terminal` and `permission-prompt` are not
+ * the same evidence, and flattening them would hide which one a given approval
+ * actually has behind it.
+ */
+function cmdGate(repoRoot: string, decision: 'approved' | 'rejected', args: string[]): void {
+  const [nodeId] = positionals(args, VALUE_FLAGS);
+  if (nodeId === undefined) fail('name the approval gate to answer.');
+  if (!process.stdin.isTTY) {
+    fail(
+      'an approval gate is answered by a person at a terminal — this is not one. ' +
+        'Run it yourself in an interactive shell, or use the `decide_gate` tool from a session that has it.',
+    );
+  }
+  const run = resolveRun(repoRoot, args);
+  const accepted = reportTransition(repoRoot, run.runId, {
+    nodeId,
+    kind: 'gate',
+    decision,
+    surface: 'terminal',
+  });
+  console.log(`flow-code: ${accepted.nodeId} → ${decision}`);
 }
 
 function cmdClose(repoRoot: string, args: string[]): void {

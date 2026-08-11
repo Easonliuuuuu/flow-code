@@ -90,7 +90,48 @@ function loopbackSection(workflow: Workflow): string {
  * The instructions themselves — the same body whether it is installed as a
  * skill, pasted into an agent instruction file, or printed to a terminal.
  */
-export function generateInstructions(workflow: Workflow): string {
+export interface InstructionOptions {
+  /**
+   * Whether flow-code's enforcement layer is in force for the session these
+   * instructions are for. Changes what the closing section can honestly claim,
+   * which is the one part of this document that must never be generic.
+   */
+  enforced?: boolean;
+}
+
+/**
+ * The closing section, which is the only part that depends on anything beyond
+ * the workflow file. An agent that is told nothing is enforced when calls are
+ * in fact being denied will read a denial as a bug and work around it; one
+ * told it is enforced when it is not will trust a boundary that is not there.
+ */
+function whatThisIsSection(enforced: boolean): string[] {
+  if (!enforced) {
+    return [
+      '### What this does not do',
+      '',
+      'flow-code is not executing you. It validates the order of what you report and records it;',
+      'it does not restrict which tools you use, choose your model, or count your tokens. The run',
+      'is recorded at the `reported` tier and is labelled that way wherever it is displayed, so do',
+      'not treat a green graph as evidence that anything was checked.',
+    ];
+  }
+  return [
+    '### What is enforced, and what is not',
+    '',
+    'While a step is in progress, your tool calls are checked against that step\'s capability set',
+    'and denied if they fall outside it — a review step cannot edit files, and no step can write',
+    'to the repository while an approval gate above it is unanswered. A denial is the boundary',
+    'working, not a bug: do not try to route around it, and do not report a step complete that you',
+    'were prevented from doing.',
+    '',
+    'What is *not* enforced, because flow-code did not start your session: which model you run on,',
+    'what your session costs, the directory and environment you run in, and routing you back along',
+    'a return path. Those remain yours to get right.',
+  ];
+}
+
+export function generateInstructions(workflow: Workflow, opts: InstructionOptions = {}): string {
   const order = workflow.order;
   const nodes = order
     .map((id, i) => nodeSection(workflow.nodes.find((n) => n.id === id)!, i, workflow))
@@ -127,17 +168,46 @@ export function generateInstructions(workflow: Workflow): string {
     nodes,
     ...(loopbacks ? ['', loopbacks] : []),
     '',
-    '### What this does not do',
+    ...whatThisIsSection(opts.enforced === true),
+  ].join('\n');
+}
+
+/**
+ * One node's work, phrased as a brief to hand to a fresh agent.
+ *
+ * This is what makes a host session able to keep the graph's most valuable
+ * property. Collapsing every step into one conversation puts Implement and
+ * Review in the same context window, which makes the reviewer the author —
+ * the specific failure the graph exists to prevent. An engine-driven run
+ * avoids it by spawning a session per node; a host session avoids it by
+ * delegating each node to a subagent, and a subagent needs the node's role
+ * prompt and config, not a pointer to them.
+ */
+export function nodeBrief(workflow: Workflow, nodeId: string): string | undefined {
+  const node = workflow.nodes.find((n) => n.id === nodeId);
+  if (!node) return undefined;
+  const config = node.config as Record<string, unknown> | undefined;
+  const instructions = typeof config?.['instructions'] === 'string' ? config['instructions'] : undefined;
+  const topic = typeof config?.['topic'] === 'string' ? config['topic'] : undefined;
+  const commands = Array.isArray(config?.['commands']) ? (config['commands'] as unknown[]) : undefined;
+
+  return [
+    `You are the \`${node.id}\` step (${node.type.displayName}) of this project's flow-code graph.`,
     '',
-    'flow-code is not executing you. It validates the order of what you report and records it;',
-    'it does not restrict which tools you use, choose your model, or count your tokens. The run',
-    'is recorded at the `reported` tier and is labelled that way wherever it is displayed, so do',
-    'not treat a green graph as evidence that anything was checked.',
+    node.type.rolePrompt.trim() || purposeOf(node) + '.',
+    ...(instructions ? ['', `This project's instructions for this step: ${instructions}`] : []),
+    ...(topic ? ['', `Topic: ${topic}`] : []),
+    ...(commands ? ['', `Commands to run: ${commands.map((c) => `\`${String(c)}\``).join(', ')}`] : []),
+    '',
+    `When you finish, report: \`${node.type.outputSummary}\`.`,
+    '',
+    'Your tool calls are checked against this step\'s capability set while it is the step in',
+    'progress. A denial is the boundary working — do not try to route around it.',
   ].join('\n');
 }
 
 /** The instructions as a Claude Code skill document. */
-export function skillDocument(workflow: Workflow): string {
+export function skillDocument(workflow: Workflow, opts: InstructionOptions = {}): string {
   const ids = workflow.order.slice(0, 4).join(', ');
   return [
     '---',
@@ -148,14 +218,14 @@ export function skillDocument(workflow: Workflow): string {
     '  task in this repository.',
     '---',
     '',
-    generateInstructions(workflow),
+    generateInstructions(workflow, opts),
     '',
   ].join('\n');
 }
 
 /** The instructions wrapped in the delimiters that make them replaceable in a shared file. */
-export function instructionsSection(workflow: Workflow): string {
-  return `${SECTION_BEGIN}\n\n${generateInstructions(workflow)}\n\n${SECTION_END}`;
+export function instructionsSection(workflow: Workflow, opts: InstructionOptions = {}): string {
+  return `${SECTION_BEGIN}\n\n${generateInstructions(workflow, opts)}\n\n${SECTION_END}`;
 }
 
 /** The body of an installed section, or undefined when the file has none. */
@@ -192,9 +262,13 @@ export type InstructionState = 'current' | 'stale' | 'absent';
  * agent being told to walk a graph that has since changed — the second is the
  * one that produces confidently wrong runs.
  */
-export function instructionState(installed: string | undefined, workflow: Workflow): InstructionState {
+export function instructionState(
+  installed: string | undefined,
+  workflow: Workflow,
+  opts: InstructionOptions = {},
+): InstructionState {
   if (installed === undefined) return 'absent';
-  return installed.trim() === instructionsSection(workflow).trim() ? 'current' : 'stale';
+  return installed.trim() === instructionsSection(workflow, opts).trim() ? 'current' : 'stale';
 }
 
 /**

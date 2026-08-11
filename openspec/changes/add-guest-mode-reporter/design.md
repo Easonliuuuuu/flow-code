@@ -52,6 +52,29 @@ What remains genuinely out of reach is everything that depends on having spawned
 
 **Ownership stays recorded in run-state and checked on every write.** `RunState` already carries `pid`, and `isDriverAlive` already interprets it. A guest report targeting a run owned by a live engine process is rejected. *Alternative considered:* file locking. Rejected as heavier than needed and poorly behaved across the network mounts this feature is likely to span.
 
+## Host contract, as implemented
+
+The enforcement layer was written against Claude Code's hook contract as of **August 2026**,
+and depends on exactly four things, each confined to one place:
+
+- `PreToolUse` receives `{session_id, cwd, tool_name, tool_input, tool_use_id}` on stdin and
+  reads `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+  "permissionDecisionReason": "…"}}` from stdout. Omitting `permissionDecision` leaves the
+  call to the host's own rules, which is what a *permitted* call returns — flow-code narrows
+  what a node may do and must never widen it past what the user already agreed to.
+- A hook that exits non-zero is reported to the user and the call proceeds, so failing
+  closed cannot be done by throwing. `src/cli/hook.ts` therefore always prints a decision
+  and always exits 0, including from its outermost catch.
+- A tool annotated `requiresUserInteraction` always shows its full permission prompt: no
+  allow-rule bypass, and refused rather than passed in a non-interactive mode. This is what
+  the gate rests on. Elicitation alone would not do — an `Elicitation` hook can auto-answer
+  a dialog.
+- A plugin bundles hooks, an MCP server, skills and commands behind one install.
+
+Everything above `reported` degrades safely if any of this changes: an unparseable payload
+leaves the session alone, and a run only claims the `hooks` tier while a heartbeat the hook
+itself wrote is fresh.
+
 ## Risks / Trade-offs
 
 - **The hook contract is a host's implementation detail, not a stability promise** → Confine every assumption to one script plus a capability check at install time, and downgrade the recorded tier to `reported` when the check fails. A silently-changed hook schema must cost enforcement *and* the claim of enforcement, never just the enforcement.

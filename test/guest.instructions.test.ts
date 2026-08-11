@@ -65,9 +65,20 @@ describe('generated instructions describe this project and no other', () => {
     expect(text).toMatch(/Nothing routes you back/);
   });
 
-  it('says plainly that nothing is enforced', () => {
+  it('says plainly that nothing is enforced, when nothing is', () => {
     expect(text).toContain('`reported` tier');
     expect(text).toMatch(/does not restrict which tools you use/);
+  });
+
+  it('says what is enforced instead, when the enforcement layer is in force', () => {
+    // Telling an agent nothing is checked while calls are in fact being denied
+    // is what makes it read a denial as a bug and route around it.
+    const enforced = generateInstructions(workflow, { enforced: true });
+    expect(enforced).toMatch(/denied if they fall outside it/);
+    expect(enforced).toContain('A denial is the boundary');
+    expect(enforced).not.toContain('`reported` tier');
+    // The half that is still not in force is named just as plainly.
+    expect(enforced).toMatch(/What is \*not\* enforced/);
   });
 });
 
@@ -173,9 +184,12 @@ describe('flow-code connect', () => {
     expect(out).toContain('.claude/skills/flow-code-workflow/SKILL.md');
     expect(out).toContain('AGENTS.md');
     expect(out).toContain('.mcp.json');
-    // The enforcement layer is not in this build, and an install that stays
-    // quiet about it leaves the user believing they have one.
-    expect(out).toContain('Not installed: the enforcement layer');
+    expect(out).toContain('.claude/settings.json');
+    // What is enforced and what is not are both stated on every install: the
+    // failure this guards against is reading a green graph as a stronger
+    // claim than it is.
+    expect(out).toContain('Installed: the reporting tools');
+    expect(out).toContain('Still not in force');
   });
 
   it('changes nothing on a second run', async () => {

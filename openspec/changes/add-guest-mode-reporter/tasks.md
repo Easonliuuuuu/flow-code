@@ -1,26 +1,26 @@
-> **Sequenced in three parts.** The reporting half (this change's `guest-run-reporting`
-> and `guest-agent-instructions` capabilities) is delivered: an outside agent can walk the
-> graph, every transition is validated, and the run is labelled `reported` wherever it is
-> shown. What remains is deliberately held back rather than forgotten:
+> **Sequenced in three parts, two of them delivered.**
 >
-> - **The enforcement layer** (`host-session-harness`, sections 3–5, plus 1.2/6.3/10.3) —
->   its risk is a hook contract flow-code does not own, and bundling it here would have held
->   the adoption path hostage to a schema that can change between writing and merging. It is
->   also strictly downstream: a `PreToolUse` hook compiles a policy from the run's *current
->   node*, which only the writer delivered here advances.
-> - **Reconciliation** (`run-state-reconciliation`, section 9 and 10.4) — independent of the
->   enforcement layer; it can land any time now that runs record a baseline.
+> - **Reporting** (`guest-run-reporting`, `guest-agent-instructions`) — an outside agent
+>   walks the graph, every transition is validated against it, and the run is labelled
+>   wherever it is shown.
+> - **Enforcement** (`host-session-harness`) — a `PreToolUse` hook applies the run's current
+>   node's capability set to the host session, using the same policy function the engine
+>   uses. It was held back from the first part deliberately: its risk is a hook contract
+>   flow-code does not own, and it is strictly downstream of the writer, since a policy is
+>   compiled from the run's *current node* and only a writer advances that.
+> - **Reconciliation** (`run-state-reconciliation`, section 9 and 10.4) — still to come.
+>   Independent of the other two, and unblocked now that reported runs record a baseline.
 
 ## 0. Prerequisites
 
 - [x] 0.1 Close the spec gap for `flow-code watch` — write its `terminal-canvas-ui` requirements (read-only viewer, run attachment, driver liveness), since this change's UI delta builds on them *(residual written as `terminal-canvas-ui` requirements in this change's delta — the run-document half (attach with no id, liveness, read-only readers) was closed by `add-run-state-ownership`; what is left is the command's own surface)*
-- [ ] 0.2 Settle the open questions in `design.md`: how enforcement is verified before a run claims a tier, run identity per guest session, which node types reconciliation expects to touch the tree, and the CLI verb shape *(partly settled: the CLI verb shape is `flow-code node <id> start|done|fail`, and a guest run opens fresh each time (surfaces target the newest open reported run). Enforcement verification and reconciliation's node types are open, and belong to the changes that need them)*
-- [ ] 0.3 Re-confirm the host's hook contract against the version being targeted — the deny decision, its reason field, the turn-end hook, and the delegation hook — and record which host version the enforcement layer was written against *(deferred with the enforcement layer)*
+- [ ] 0.2 Settle the open questions in `design.md`: how enforcement is verified before a run claims a tier, run identity per guest session, which node types reconciliation expects to touch the tree, and the CLI verb shape *(all settled but one: the CLI verb shape is `flow-code node <id> start|done|fail`; a guest run opens fresh each time and surfaces target the newest open non-engine run; enforcement is verified by a heartbeat the hook itself writes, re-checked on every transition, because `open_run` is a tool call the hook fires for first. Still open: which node types reconciliation expects to touch the tree — it belongs to the change that needs it)*
+- [x] 0.3 Re-confirm the host's hook contract against the version being targeted — the deny decision, its reason field, the turn-end hook, and the delegation hook — and record which host version the enforcement layer was written against *(the hook contract was re-confirmed against Claude Code as of August 2026 and recorded in design.md)*
 
 ## 1. Enforcement tiers and run-state ownership
 
 - [x] 1.1 Add tier and provenance fields to `RunState`: which tier the run ran under, the reporting surface used, and the guarantees that tier does not provide
-- [ ] 1.2 Record a tier downgrade with the point it happened, so a run that lost enforcement mid-way is not presented at its opening tier *(deferred with the enforcement layer — nothing downgrades from a single tier)*
+- [x] 1.2 Record a tier downgrade with the point it happened, so a run that lost enforcement mid-way is not presented at its opening tier
 - [x] 1.3 Make ownership explicit in `RunStateStore` — a run records its owner, and a writer that does not own it is refused rather than silently accepted *(delivered by `add-run-state-ownership`: "One writer owns a run document" in the `run-state` spec now requires the writer to verify ownership before each write, and "Ownership transfers explicitly" covers the resume handover this change's guest writer inherits)*
 - [x] 1.4 Add a guest-side writer that opens a run, applies one validated transition, and persists, without assuming it is the only process alive
 - [x] 1.5 Test that a guest write against a run owned by a live engine process is refused and leaves the document byte-identical
@@ -35,34 +35,34 @@
 
 ## 3. Host-session harness
 
-- [ ] 3.1 Add the enforcement entry point that resolves the run's current node from run-state and compiles its policy through `harness/compile.ts`, with no second policy definition *(deferred with the enforcement layer)*
-- [ ] 3.2 Deny tool calls outside the current node's capability set, returning the same reason an engine-driven denial returns *(deferred with the enforcement layer)*
-- [ ] 3.3 Run Bash invocations through `harness/gitCommands.ts` and refuse repository-mutating git while an upstream gate is undecided or rejected *(deferred with the enforcement layer)*
-- [ ] 3.4 Record host-session denials in run-state's activity log in the same shape engine-driven denials use *(deferred with the enforcement layer)*
-- [ ] 3.5 Fail closed: an enforcement layer that errors, times out, or cannot read run-state denies the call, and reports the failure distinctly from a capability denial *(deferred with the enforcement layer)*
-- [ ] 3.6 Test the envelope moves with the run — a call permitted under one node is denied after the run advances to a node without that capability, with no session restart *(deferred with the enforcement layer)*
-- [ ] 3.7 Test the same workflow under `flow-code run` and under an instrumented host session compiles an identical policy per node *(deferred with the enforcement layer)*
-- [ ] 3.8 Test read-only git is unaffected while a gate is `waiting` *(deferred with the enforcement layer)*
+- [x] 3.1 Add the enforcement entry point that resolves the run's current node from run-state and compiles its policy through `harness/compile.ts`, with no second policy definition *(decideCall extracted from the engine's interceptor; both callers share it)*
+- [x] 3.2 Deny tool calls outside the current node's capability set, returning the same reason an engine-driven denial returns
+- [x] 3.3 Run Bash invocations through `harness/gitCommands.ts` and refuse repository-mutating git while an upstream gate is undecided or rejected
+- [x] 3.4 Record host-session denials in run-state's activity log in the same shape engine-driven denials use *(denials only — the cost of logging every allowed call is recorded in enforce.ts)*
+- [x] 3.5 Fail closed: an enforcement layer that errors, times out, or cannot read run-state denies the call, and reports the failure distinctly from a capability denial
+- [x] 3.6 Test the envelope moves with the run — a call permitted under one node is denied after the run advances to a node without that capability, with no session restart
+- [x] 3.7 Test the same workflow under `flow-code run` and under an instrumented host session compiles an identical policy per node
+- [x] 3.8 Test read-only git is unaffected while a gate is `waiting`
 
 ## 4. Node delegation
 
-- [ ] 4.1 Deliver each node's role prompt to the host session as a delegated unit of work, so a node runs with fresh context rather than sharing the session's *(deferred with the enforcement layer)*
-- [ ] 4.2 Apply the delegating node's capability set to delegated tool calls *(deferred with the enforcement layer)*
-- [ ] 4.3 Attribute delegated activity to the delegating node in run-state *(deferred with the enforcement layer)*
-- [ ] 4.4 Test a delegated tool call outside the node's capability set is denied identically to the same call made directly *(deferred with the enforcement layer)*
+- [x] 4.1 Deliver each node's role prompt to the host session as a delegated unit of work, so a node runs with fresh context rather than sharing the session's *(start_node returns the node's brief, and node_brief re-reads it)*
+- [x] 4.2 Apply the delegating node's capability set to delegated tool calls
+- [x] 4.3 Attribute delegated activity to the delegating node in run-state
+- [x] 4.4 Test a delegated tool call outside the node's capability set is denied identically to the same call made directly
 
 ## 5. Gate decisions in a host session
 
-- [ ] 5.1 Request gate decisions through a surface that requires the user to answer directly and that a host-side auto-responder cannot satisfy silently *(deferred with the enforcement layer)*
-- [ ] 5.2 Refuse to record an approval produced by an automated response, reporting why *(deferred with the enforcement layer)*
-- [ ] 5.3 Record which surface produced every gate decision *(deferred with the enforcement layer)*
-- [ ] 5.4 Test that a gate left undecided keeps git writes denied, and that approving it releases them *(deferred with the enforcement layer)*
+- [x] 5.1 Request gate decisions through a surface that requires the user to answer directly and that a host-side auto-responder cannot satisfy silently
+- [x] 5.2 Refuse to record an approval produced by an automated response, reporting why
+- [x] 5.3 Record which surface produced every gate decision
+- [x] 5.4 Test that a gate left undecided keeps git writes denied, and that approving it releases them
 
 ## 6. Packaging and installation
 
 - [x] 6.1 Package the reporting tools, the instructions, and the enforcement layer as one installable unit for hosts that support packaged extensions *(`flow-code connect` for any host, plus a Claude Code plugin that needs no per-project step)*
-- [x] 6.2 On hosts that support only part of the surface, install what is supported and report what is not, stating the enforcement consequence *(`connect` names every file it wrote and states that the enforcement layer is not in this build)*
-- [ ] 6.3 Verify enforcement is actually active before a run records a tier claiming it, and record the lower tier when verification fails *(deferred with the enforcement layer)*
+- [x] 6.2 On hosts that support only part of the surface, install what is supported and report what is not, stating the enforcement consequence
+- [x] 6.3 Verify enforcement is actually active before a run records a tier claiming it, and record the lower tier when verification fails
 - [x] 6.4 Test that installation names every file it changed and leaves unrelated configuration byte-identical
 - [x] 6.5 Test that a run opened with the enforcement layer disabled records the self-reported tier and says so
 
@@ -91,7 +91,7 @@
 
 - [x] 10.1 Indicate the run's enforcement tier in the viewer, driven by run-state rather than inferred from the data's shape
 - [x] 10.2 Present unavailable token totals and capability indicators as unavailable rather than as zero
-- [ ] 10.3 Report a run whose tier changed mid-run at its weakest recorded tier *(deferred with the enforcement layer)*
+- [x] 10.3 Report a run whose tier changed mid-run at its weakest recorded tier
 - [ ] 10.4 Surface reconciliation findings in the viewer, naming the affected nodes *(deferred with reconciliation)*
 - [x] 10.5 Test that an engine-driven run renders exactly as it did before this change
 

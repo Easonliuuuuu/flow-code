@@ -20,7 +20,9 @@ import { z } from 'zod';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { loadWorkflow, WorkflowValidationError } from '../workflow/load.js';
-import { generateInstructions } from './instructions.js';
+import { rehydrateGraph } from '../workflow/record.js';
+import { enforcementLive } from './enforce.js';
+import { generateInstructions, nodeBrief } from './instructions.js';
 import {
   closeGuestRun,
   currentGuestRun,
@@ -91,12 +93,49 @@ function describe(state: RunState): string {
   return `run ${state.runId}\n${rows.join('\n')}`;
 }
 
+/**
+ * The load-bearing part of "a gate decision comes from a person".
+ *
+ * A tool annotated `requiresUserInteraction` always shows its full permission
+ * prompt: it cannot be satisfied by a pre-approved allow rule, and in a
+ * non-interactive mode it is refused rather than passed. That is what makes
+ * the person's presence something the host cannot quietly supply on their
+ * behalf. An elicitation dialog alone would not — a host-side auto-responder
+ * can answer a dialog, which is precisely the hole this closes.
+ *
+ * Cast because the SDK's `ToolAnnotations` type is closed and predates the
+ * field. Annotations are an open map on the wire, so this reaches the host
+ * intact; the cast is the type system being behind, not a claim being
+ * smuggled past it. If a host does not recognize the field it ignores it —
+ * and the run is then relying on the tool description alone, which is why the
+ * recorded surface is a fact about the decision rather than a formality.
+ */
+const GATE_ANNOTATIONS = {
+  title: 'Approval gate',
+  requiresUserInteraction: true,
+  destructiveHint: false,
+  readOnlyHint: false,
+} as Record<string, unknown>;
+
 const runArg = {
   run: z
     .string()
     .optional()
     .describe('Run id. Omit to use the run this session opened most recently.'),
 };
+
+/** A node's brief, resolved against the graph the run recorded. */
+function briefFor(repoRoot: string, run: string | undefined, nodeId: string): string | undefined {
+  try {
+    const state = resolveRun(repoRoot, run);
+    if (!state.graph) return undefined;
+    return nodeBrief(rehydrateGraph(state.graph, { repoRoot }), nodeId);
+  } catch {
+    // A brief is an aid, never a precondition: failing to build one must not
+    // turn a successful transition into an error.
+    return undefined;
+  }
+}
 
 /**
  * Build the server. Exported separately from {@link runMcpServer} so a test can
@@ -134,7 +173,9 @@ export function buildMcpServer(repoRoot: string): McpServer {
       // no copy to go out of date with the workflow file.
       try {
         return ok(
-          generateInstructions(loadWorkflow(repoRoot, graph !== undefined ? { graph } : {})),
+          generateInstructions(loadWorkflow(repoRoot, graph !== undefined ? { graph } : {}), {
+            enforced: enforcementLive(repoRoot),
+          }),
         );
       } catch (err) {
         if (err instanceof WorkflowValidationError) {
@@ -187,7 +228,21 @@ export function buildMcpServer(repoRoot: string): McpServer {
         'finished — read the reason and report those first.',
       inputSchema: { node: z.string().describe('Node id from the workflow graph.'), ...runArg },
     },
-    async ({ node, run }) => transition('start', run, { nodeId: node }),
+    async ({ node, run }) => {
+      const result = transition('start', run, { nodeId: node });
+      if (result.isError === true) return result;
+      // The brief comes back with the transition rather than needing a second
+      // call: an agent that has to remember to fetch it is an agent that
+      // sometimes does not, and then runs the step from its own context.
+      const brief = briefFor(repoRoot, run, node);
+      return brief === undefined
+        ? result
+        : ok(
+            `${result.content[0]!.text}\n\n--- brief for \`${node}\` ---\n${brief}\n\n` +
+              'Run this step in a fresh subagent with the brief above, so it does not inherit this ' +
+              "conversation's context. Report it complete when the subagent returns.",
+          );
+    },
   );
 
   server.registerTool(
@@ -222,6 +277,39 @@ export function buildMcpServer(repoRoot: string): McpServer {
       },
     },
     async ({ node, reason, run }) => transition('fail', run, { nodeId: node, reason }),
+  );
+
+  server.registerTool(
+    'node_brief',
+    {
+      title: 'What a step is for',
+      description:
+        "Return one step's role prompt and output contract, phrased as a brief to hand to a " +
+        'subagent. `start_node` already returns this; use it to re-read one.',
+      inputSchema: { node: z.string().describe('Node id from the workflow graph.'), ...runArg },
+    },
+    async ({ node, run }) => {
+      const brief = briefFor(repoRoot, run, node);
+      return brief === undefined ? refuse(`no step \`${node}\` in this run`) : ok(brief);
+    },
+  );
+
+  server.registerTool(
+    'decide_gate',
+    {
+      title: 'Record the user\'s decision at an approval gate',
+      description:
+        'Record what the USER decided at an approval gate. Ask them first, in your own words, and ' +
+        'call this only with the answer they actually gave. Do not call it to move the run along.',
+      inputSchema: {
+        node: z.string().describe('The approval-gate node id.'),
+        decision: z.enum(['approved', 'rejected']).describe('What the user decided.'),
+        ...runArg,
+      },
+      annotations: GATE_ANNOTATIONS,
+    },
+    async ({ node, decision, run }) =>
+      transition('gate', run, { nodeId: node, decision, surface: 'permission-prompt' }),
   );
 
   server.registerTool(

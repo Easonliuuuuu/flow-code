@@ -88,6 +88,40 @@ export interface RunEnforcement {
   surface: ReportingSurface;
   /** Enumerated, never implied — see {@link absentGuarantees}. */
   absent: Guarantee[];
+  /** Present once a run has lost enforcement it opened with. */
+  downgrades?: TierDowngrade[];
+}
+
+/**
+ * A run losing enforcement part-way through.
+ *
+ * Recorded with its point rather than applied by rewriting `tier`, because the
+ * two facts are different: the earlier part of the run really did have the
+ * stronger guarantees, and erasing that would misreport it in the other
+ * direction. What a consumer wants is the weakest tier anything in the run ran
+ * under — see {@link effectiveTier} — plus the ability to say when it changed.
+ */
+export interface TierDowngrade {
+  from: EnforcementTier;
+  to: EnforcementTier;
+  at: string;
+  reason: string;
+}
+
+/**
+ * The tier a run should be *reported* at: the weakest it ever held.
+ *
+ * A run is only as trustworthy as its weakest moment, because nothing in the
+ * document says which node's work happened under which tier. Presenting it at
+ * the tier it opened with would credit the whole run with guarantees that
+ * stopped part-way through.
+ */
+export function effectiveTier(enforcement: RunEnforcement | undefined): EnforcementTier {
+  if (!enforcement) return 'engine';
+  return (enforcement.downgrades ?? []).reduce(
+    (weakest, d) => weakestTier(weakest, d.to),
+    enforcement.tier,
+  );
 }
 
 export function enforcementOf(tier: EnforcementTier, surface: ReportingSurface): RunEnforcement {

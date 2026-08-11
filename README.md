@@ -158,6 +158,7 @@ line; `--graph <name>` skips the question. See
 | `flow-code node <sub>` | Report progress through the graph from an agent flow-code is not running |
 | `flow-code connect` | Install the reporting surface into this project's agent configuration |
 | `flow-code mcp` | Serve the reporting tools over MCP (launched by a host agent, not by hand) |
+| `flow-code hook <event>` | Apply the current step's capability set to a host session's tool call |
 | `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
 | `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
@@ -217,7 +218,7 @@ flow-code connect   # once per project: installs the tools and the instructions
 flow-code watch     # second window — the graph fills in as your session reports
 ```
 
-`connect` writes three things and names each one: an MCP server entry in `.mcp.json`, a skill at `.claude/skills/flow-code-workflow/SKILL.md`, and a delimited section in your `CLAUDE.md`/`AGENTS.md` — only inside its own delimiters, leaving the rest of the file byte-identical. Run it again after changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it still matches.
+`connect` writes four things and names each one: an MCP server entry in `.mcp.json`, a skill at `.claude/skills/flow-code-workflow/SKILL.md`, a delimited section in your `CLAUDE.md`/`AGENTS.md`, and a `PreToolUse` hook in `.claude/settings.json`. It only ever edits inside its own delimiters or its own entries, leaving the rest of each file byte-identical. Run it again after changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it still matches.
 
 For Claude Code specifically there is a plugin, which needs no per-project step at all — it reads the graph through a tool rather than installing a copy of it:
 
@@ -235,12 +236,24 @@ flow-code validates the *order* of what an outside agent reports. It does not ex
 | Tier | What is in force |
 | --- | --- |
 | **engine** | `flow-code run`: capability enforcement, process guards, per-node models, token accounting, loop-back routing. |
-| **host session** | A session flow-code did not start, with its enforcement layer active: tool policy and git interception, and nothing that depends on having spawned the process. *Not in this build.* |
+| **host session** | A session flow-code did not start, with its enforcement layer active: the same tool policy and git interception, and nothing that depends on having spawned the process. |
 | **reported** | Self-reported. Transitions are checked against the graph; the work behind them is not. |
 
-A reported run is labelled in the viewer on a line of its own, shows spend as `n/a` rather than as zero, and carries no activity log or denial counts — a run should not be able to display guarantees it never had. **A green graph from a reported run is a record of what your agent said it did, not evidence that anything was checked.**
+Both non-engine tiers are labelled in the viewer on a line of its own and show spend as `n/a` rather than as zero — a run should not be able to display guarantees it never had. **A green graph from a `reported` run is a record of what your agent said it did, not evidence that anything was checked.**
 
-Loop-backs are the one place a reported run is structurally different rather than merely less enforced: the engine *routes* a failure back to its target, and nothing routes it here. The generated instructions say so explicitly, and tell the agent to walk the return path itself.
+### What the enforcement layer actually does
+
+While a step is in progress, the hook applies *that step's* capability set to your session's tool calls, using the same policy function `flow-code run` compiles — a review step cannot edit files, and nothing can write to the repository while an approval gate above it is unanswered. The envelope moves as the run advances, with no session restart. Denials are recorded on the run, so the viewer's blocked-action indicator means the same thing either way.
+
+Three things make the claim honest rather than decorative:
+
+- **It fails closed.** If the layer errors, or cannot work out which step is in progress, the call is denied — and the reason says "could not determine", distinctly from "this step may not do that", because an agent that cannot tell those apart routes around the wrong one.
+- **It is verified, not assumed.** A run records the `hooks` tier only while a heartbeat the hook itself just wrote is fresh. An installed plugin proves nothing: hooks can be turned off afterwards. If enforcement stops mid-run the downgrade is recorded with its point, and the run is reported at its weakest tier from then on.
+- **A gate decision comes from a person.** `complete_node` refuses approval gates outright, so an agent has no path to approving its own work. The MCP tool that records one is annotated `requiresUserInteraction`, which forces its full permission prompt — no allow-rule bypass, and refused rather than passed in a non-interactive mode. On the CLI, `flow-code node approve <id>` requires an interactive terminal. Which surface collected a decision is recorded on the run, because `terminal` and `permission-prompt` are not the same evidence.
+
+What stays out of reach, because flow-code did not start the process: per-node model selection, exact token accounting, and the process-level guards (working directory, environment, the push-url block). Loop-backs are the one place a host-session run is structurally different rather than merely less enforced — the engine *routes* a failure back to its target, and a hook can only decline to end a turn. The generated instructions say so, and tell the agent to walk the return path itself.
+
+Enforcement is evadable through indirection — a script that shells out to git from inside another program — exactly as it is under `flow-code run`, which intercepts the same calls with the same parser. It is a boundary against accident, not against an adversary.
 
 ## Keyboard controls
 

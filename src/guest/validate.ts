@@ -16,17 +16,21 @@
  * is reconciliation's job, against the tree.
  */
 
-import type { NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
+import type { GateDecision, NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 
 /** A transition an external agent claims to have made. */
 export interface ReportedTransition {
   nodeId: string;
-  kind: 'start' | 'done' | 'fail';
+  kind: 'start' | 'done' | 'fail' | 'gate';
   /** Required by `done`: the node's output, checked against its type's shape. */
   output?: unknown;
   /** Required by `fail`: why it failed, recorded as the node's status detail. */
   reason?: string;
+  /** Required by `gate`: what the person decided. */
+  decision?: 'approved' | 'rejected';
+  /** Required by `gate`: the surface that collected the decision from them. */
+  surface?: string;
 }
 
 /** What run-state should become if the report is accepted. */
@@ -41,6 +45,8 @@ export interface AcceptedTransition {
    * loop-back re-runs. Empty for every ordinary transition.
    */
   reset?: string[];
+  /** Present for `gate`: how the decision was reached, recorded on the node. */
+  gateDecision?: GateDecision;
 }
 
 export type TransitionResult =
@@ -103,7 +109,52 @@ export function validateTransition(
       return validateDone(node, current, reported.output);
     case 'fail':
       return validateFail(node, current, reported.reason);
+    case 'gate':
+      return validateGate(node, current, reported.decision, reported.surface);
   }
+}
+
+/**
+ * An Approval-Gate answered by a person.
+ *
+ * Kept off the ordinary completion path deliberately. `complete_node` is a
+ * tool an agent calls whenever it decides a step is finished, and a gate whose
+ * approval an agent can produce by deciding it is finished is not a gate. So
+ * the only route to a decision is a surface that puts the question in front of
+ * a human, and this refuses anything that arrives without one naming itself.
+ */
+function validateGate(
+  node: WorkflowNode,
+  current: NodeRunState,
+  decision: 'approved' | 'rejected' | undefined,
+  surface: string | undefined,
+): TransitionResult {
+  if (node.type.id !== 'approval-gate') {
+    return reject(`node \`${node.id}\` is not an approval gate`);
+  }
+  if (current.status !== 'running' && current.status !== 'waiting') {
+    return reject(`gate \`${node.id}\` cannot be answered from \`${current.status}\``);
+  }
+  if (decision !== 'approved' && decision !== 'rejected') {
+    return reject(`a gate decision must be \`approved\` or \`rejected\``);
+  }
+  if (surface === undefined || surface.trim() === '') {
+    return reject(`a gate decision must record the surface that collected it`);
+  }
+  const at = new Date().toISOString();
+  return {
+    ok: true,
+    accepted: {
+      nodeId: node.id,
+      // A rejected gate stops the run below it, which is what `error` means to
+      // every downstream check — the same place an engine-driven rejection
+      // leaves it.
+      status: decision === 'approved' ? 'done' : 'error',
+      ...(decision === 'rejected' ? { detail: 'rejected at the approval gate' } : {}),
+      output: { decision, decidedAt: at },
+      gateDecision: { decision, surface: surface.trim(), at },
+    },
+  };
 }
 
 function validateStart(
@@ -172,6 +223,15 @@ function validateLoopbackReentry(
 }
 
 function validateDone(node: WorkflowNode, current: NodeRunState, output: unknown): TransitionResult {
+  // An agent completing a gate is an agent approving its own work. The gate
+  // surfaces exist precisely so that the decision cannot be produced by the
+  // thing the decision is about.
+  if (node.type.id === 'approval-gate') {
+    return reject(
+      `\`${node.id}\` is an approval gate — it is answered by the person, not reported complete. ` +
+        'Ask them, and record their answer with the gate decision tool (`flow-code node approve` on the CLI).',
+    );
+  }
   if (current.status !== 'running' && current.status !== 'waiting') {
     return reject(
       `node \`${node.id}\` cannot complete from \`${current.status}\` — report it started first`,

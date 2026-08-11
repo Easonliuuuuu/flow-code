@@ -35,6 +35,7 @@ const INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
 
 const SKILL_PATH = join('.claude', 'skills', 'flow-code-workflow', 'SKILL.md');
 const MCP_CONFIG = '.mcp.json';
+const HOST_SETTINGS = join('.claude', 'settings.json');
 const SERVER_NAME = 'flow-code';
 
 /**
@@ -46,12 +47,12 @@ const SERVER_NAME = 'flow-code';
  * path is the only thing that will actually start, and the install says so
  * rather than writing a command that silently fails at session start.
  */
-export function serverCommand(): { command: string; args: string[]; portable: boolean } {
+export function serverCommand(): Launcher {
   try {
     // Invoked as an argument to `sh` rather than through `shell: true`, which
     // concatenates instead of escaping and is deprecated for that reason.
     execFileSync('/bin/sh', ['-c', 'command -v flow-code'], { stdio: 'ignore' });
-    return { command: 'flow-code', args: ['mcp'], portable: true };
+    return { command: 'flow-code', prefixArgs: [], portable: true };
   } catch {
     // Fall back to the entry point that is actually running, rather than to a
     // path derived from where this module expects to have been built. The
@@ -62,7 +63,7 @@ export function serverCommand(): { command: string; args: string[]; portable: bo
     const entry = process.argv[1];
     if (entry !== undefined) {
       try {
-        return { command: process.execPath, args: [realpathSync(entry), 'mcp'], portable: false };
+        return { command: process.execPath, prefixArgs: [realpathSync(entry)], portable: false };
       } catch {
         // Unreadable entry (a virtual path under some runners): fall through.
       }
@@ -70,13 +71,80 @@ export function serverCommand(): { command: string; args: string[]; portable: bo
     // Nothing resolvable to point at. Write the portable form anyway — it is
     // the command the user will eventually have — and let the caller say that
     // it will not start until `flow-code` is on PATH.
-    return { command: 'flow-code', args: ['mcp'], portable: false };
+    return { command: 'flow-code', prefixArgs: [], portable: false };
   }
+}
+
+/** `flow-code <subcommand>`, as a host must spell it to reach this build. */
+export function launch(entry: Launcher, ...subcommand: string[]): { command: string; args: string[] } {
+  return { command: entry.command, args: [...entry.prefixArgs, ...subcommand] };
+}
+
+/** The same thing as one shell string, which is how a hook is registered. */
+export function hookCommand(entry: Launcher): string {
+  const { command, args } = launch(entry, 'hook', 'pretooluse');
+  return [command, ...args].map((part) => (part.includes(' ') ? JSON.stringify(part) : part)).join(' ');
+}
+
+/**
+ * How to invoke this build of flow-code, split so any subcommand can be built
+ * from it. Kept as a prefix rather than a finished command line because the
+ * install needs two different ones — the MCP server and the hook — and
+ * deriving the second by editing the first is how they drift apart.
+ */
+export interface Launcher {
+  command: string;
+  /** Empty when `flow-code` is itself executable; the script path otherwise. */
+  prefixArgs: string[];
+  portable: boolean;
 }
 
 interface McpConfig {
   mcpServers?: Record<string, unknown>;
   [key: string]: unknown;
+}
+
+interface HookEntry {
+  matcher?: string;
+  hooks?: { type?: string; command?: string; timeout?: number }[];
+}
+
+interface HostSettings {
+  hooks?: Record<string, HookEntry[]>;
+  [key: string]: unknown;
+}
+
+/** Whether a settings object already registers our PreToolUse hook. */
+function hasHook(settings: HostSettings, command: string): boolean {
+  return (settings.hooks?.['PreToolUse'] ?? []).some((entry) =>
+    (entry.hooks ?? []).some((h) => h.command === command),
+  );
+}
+
+/**
+ * Register the enforcement hook without disturbing anyone else's.
+ *
+ * Appended as its own entry rather than merged into an existing matcher block:
+ * hooks on the same event compose (every one runs, and any single deny wins),
+ * so adding ours alongside is both correct and the only edit that cannot break
+ * a hook the user already depended on.
+ *
+ * Returns undefined when it is already registered, so re-running changes
+ * nothing.
+ */
+export function mergeHookSettings(existing: string | undefined, command: string): string | undefined {
+  let settings: HostSettings = {};
+  if (existing !== undefined && existing.trim() !== '') {
+    try {
+      settings = JSON.parse(existing) as HostSettings;
+    } catch {
+      throw new Error(`${HOST_SETTINGS} is not valid JSON — fix it before connecting.`);
+    }
+  }
+  if (hasHook(settings, command)) return undefined;
+  const preToolUse = [...(settings.hooks?.['PreToolUse'] ?? [])];
+  preToolUse.push({ matcher: '*', hooks: [{ type: 'command', command, timeout: 10 }] });
+  return `${JSON.stringify({ ...settings, hooks: { ...settings.hooks, PreToolUse: preToolUse } }, null, 2)}\n`;
 }
 
 /**
@@ -133,18 +201,19 @@ export interface SurfaceReport {
 export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
   const reports: SurfaceReport[] = [];
 
+  const enforced = { enforced: true };
   const skill = read(join(repoRoot, SKILL_PATH));
   reports.push({
     path: SKILL_PATH,
     state:
-      skill === undefined ? 'absent' : skill === skillDocument(workflow) ? 'current' : 'stale',
+      skill === undefined ? 'absent' : skill === skillDocument(workflow, enforced) ? 'current' : 'stale',
   });
 
   for (const file of INSTRUCTION_FILES) {
     const text = read(join(repoRoot, file));
     if (text === undefined) continue;
     const section = installedSection(text);
-    const state = instructionState(section, workflow);
+    const state = instructionState(section, workflow, enforced);
     reports.push({
       path: file,
       state,
@@ -157,13 +226,34 @@ export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
     mcp !== undefined && (JSON.parse(mcp) as McpConfig).mcpServers?.[SERVER_NAME] !== undefined;
   reports.push({ path: MCP_CONFIG, state: registered ? 'current' : 'absent' });
 
+  const settings = read(join(repoRoot, HOST_SETTINGS));
+  let hooked = false;
+  try {
+    hooked =
+      settings !== undefined && hasHook(JSON.parse(settings) as HostSettings, hookCommand(serverCommand()));
+  } catch {
+    hooked = false;
+  }
+  reports.push({ path: HOST_SETTINGS, state: hooked ? 'current' : 'absent' });
+
   return reports;
 }
 
-const NOT_INSTALLED =
-  'Not installed: the enforcement layer. This build reports and validates; it does not restrict\n' +
-  '  what your agent may do, choose per-node models, or count tokens. Runs opened from your own\n' +
-  '  session are recorded at the `reported` tier and labelled that way wherever they are shown.';
+/**
+ * What the user gets, and — just as important — what they do not.
+ *
+ * Stated on every run of this command rather than buried in documentation,
+ * because the failure this whole surface guards against is someone reading a
+ * green graph as a stronger claim than it is.
+ */
+const WHAT_YOU_GET =
+  'Installed: the reporting tools, this project\'s instructions, and the enforcement hook.\n' +
+  '  While a step is in progress, tool calls outside that step\'s capability set are denied, and\n' +
+  '  git writes stay blocked behind an unapproved approval gate.\n\n' +
+  '  Still not in force, because flow-code did not start your session: process-level guards\n' +
+  '  (working directory, environment, push url), per-node model selection, token accounting, and\n' +
+  '  automatic loop-back routing. A run records the `hooks` tier only when the hook is verified\n' +
+  '  to be running; otherwise it records `reported` and says so.';
 
 export async function cmdConnect(args: string[]): Promise<void> {
   const repoRoot = await repoRootFromCwd();
@@ -176,28 +266,32 @@ export async function cmdConnect(args: string[]): Promise<void> {
       console.log(`  ${label} ${report.path}`);
       for (const line of report.drift ?? []) console.log(`          ${line}`);
     }
-    console.log(`\n  ${NOT_INSTALLED}`);
+    console.log(`\n  ${WHAT_YOU_GET}`);
     return;
   }
 
   const written: string[] = [];
   const entry = serverCommand();
 
-  if (writeIfChanged(join(repoRoot, SKILL_PATH), skillDocument(workflow))) written.push(SKILL_PATH);
+  // `connect` installs the enforcement hook, so the instructions it writes
+  // describe a session in which calls really are checked.
+  if (writeIfChanged(join(repoRoot, SKILL_PATH), skillDocument(workflow, { enforced: true })))
+    written.push(SKILL_PATH);
 
-  const section = instructionsSection(workflow);
+  const section = instructionsSection(workflow, { enforced: true });
   for (const file of instructionTargets(repoRoot)) {
     const path = join(repoRoot, file);
     if (writeIfChanged(path, spliceSection(read(path) ?? '', section))) written.push(file);
   }
 
   try {
-    const merged = mergeMcpConfig(read(join(repoRoot, MCP_CONFIG)), {
-      command: entry.command,
-      args: entry.args,
-    });
+    const merged = mergeMcpConfig(read(join(repoRoot, MCP_CONFIG)), launch(entry, 'mcp'));
     if (merged !== undefined && writeIfChanged(join(repoRoot, MCP_CONFIG), merged)) {
       written.push(MCP_CONFIG);
+    }
+    const settings = mergeHookSettings(read(join(repoRoot, HOST_SETTINGS)), hookCommand(entry));
+    if (settings !== undefined && writeIfChanged(join(repoRoot, HOST_SETTINGS), settings)) {
+      written.push(HOST_SETTINGS);
     }
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
@@ -215,6 +309,6 @@ export async function cmdConnect(args: string[]): Promise<void> {
         '  Install it globally and re-run `flow-code connect` if you intend to commit that file.',
     );
   }
-  console.log(`\n  ${NOT_INSTALLED}`);
+  console.log(`\n  ${WHAT_YOU_GET}`);
   console.log('\n  Start a new agent session to pick up the change, then watch with `flow-code watch`.');
 }
