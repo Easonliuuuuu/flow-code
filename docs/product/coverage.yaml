@@ -110,6 +110,10 @@ capabilities:
   ci-pipeline: BR-02
   project-documentation: BR-02
   mcp-driver-connector: BR-06
+  # Reading a live run from a process that is not driving it — BR-03's outcome,
+  # not BR-09's. terminal-canvas-ui keeps "legible on one screen"; this owns
+  # "visible from somewhere flow-code does not own."
+  session-status-line: BR-03
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
@@ -130,16 +134,19 @@ changes:
     note: >-
       Blocked on M2 by the proposal's own argument — guest mode adds a second
       producer of run-state and should not land while driver mode is still
-      settling.
+      settling. Retargeted to a host-agent plugin: the premise that a guest run
+      can carry no harness turned out to be false for a host that exposes a
+      tool-interception point, so enforcement is now recorded as a tier rather
+      than disclosed as absent.
   add-mcp-driver-connector:
     br: BR-06
     status: parked
     note: >-
       Blocked on M2, same reasoning as add-guest-mode-reporter — a second entry
       point into the engine before driver mode is proven under real conditions.
-      Complements rather than replaces guest mode: this change keeps the
-      harness (flow-code still executes) where guest mode deliberately drops it
-      (a foreign agent self-reports instead).
+      No longer the adoption path: a host-session user driving it pays for a
+      nested agent session inheriting none of their configuration. It keeps
+      what only it can do — per-node models, worktree fan-out, unattended runs.
 
 # Archived changes, mapped to the BR they closed. Used for the milestone rollup.
 # Unmapped archives are reported, not failed — the ledger postdates them.
@@ -164,6 +171,7 @@ archived:
   2026-08-06-node-subagents: BR-07
   2026-08-08-wire-up-cicd-and-readme: BR-02
   2026-08-09-add-workflow-validation-and-recorded-graph: BR-04
+  2026-08-11-add-session-status-line: BR-03
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.

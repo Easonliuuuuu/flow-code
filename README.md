@@ -154,6 +154,7 @@ line; `--graph <name>` skips the question. See
 | `flow-code run` | Execute the workflow graph |
 | `flow-code run --graph <name>` | Execute a named graph, for a file declaring more than one |
 | `flow-code watch` | Follow a run started elsewhere — same graph, read-only |
+| `flow-code status` | Summarize the current run in a row or two — for a status bar, not a window |
 | `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
 | `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
@@ -170,6 +171,29 @@ flow-code watch    # window 2 — same graph, read-only
 ```
 
 `watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened, so it can be left open on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run. It never writes: the keys that edit `workflow.yaml` are disabled, and the header reports whether the process driving the run is still alive.
+
+## Keeping a run in view without a window
+
+When there is no window to spare — you are in an agent CLI, an editor terminal, or a tmux pane doing something else — `flow-code status` compresses the same run into a row or two:
+
+```
+●discuss ●spec ●implement ●test ●validate ●review ◆gate ○git-ops  ◆ gate needs your approval  6/8 · 2.1M tok · 12% budget
+```
+
+It answers the three questions a graph answers — where the run is, what it has cost, what it needs from you — and nothing else. It shows sequence and status, not shape: no edges, no loop-back arcs, no layout. It is a pointer to the canvas, not a replacement for it.
+
+```bash
+flow-code status                  # a row or two, sized to your terminal
+flow-code status --line           # exactly one row, for embedding in a status bar
+flow-code status --json           # the same summary as data, plus an attention token
+flow-code status --script         # a ready-made status-bar script, if you have none
+```
+
+`--line` emits one row and nothing else, so it can be pasted into a status bar you already have — in Claude Code, call it from your existing `statusLine` script rather than replacing that script, since a custom status line replaces some of the built-in footer hints. `--script` prints a complete one for a host with none; register it yourself (flow-code never edits your host's configuration).
+
+The output narrows as the width does: labelled nodes, then status glyphs, then whichever node is blocking the run and why — that last part is the thing it never drops. It works against any run in the repo, whoever started it, and it reads the run file without writing, locking, or slowing the process driving it. A run whose driver died reads as *driver gone* rather than as work in progress.
+
+`--json` exists for scripting a notification: the payload carries an `attention` token that stays the same while the same node is blocked and changes when a different one is, so a hook can announce a waiting gate once instead of on every check. flow-code keeps no record of what it has announced — pass the last token back with `--since`.
 
 ## Keyboard controls
 

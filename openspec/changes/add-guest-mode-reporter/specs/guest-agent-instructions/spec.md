@@ -26,6 +26,21 @@ The system SHALL install the generated instructions into the locations a host ag
 - **WHEN** installation is run twice with no workflow change in between
 - **THEN** the second run SHALL leave every written file unchanged
 
+### Requirement: One installation delivers every surface the host supports
+For a host that supports packaged extensions, the system SHALL deliver its instructions, its reporting tools, and its enforcement layer as a single installable unit, so a user cannot end up with some of them active and the rest merely intended. Where a host supports only some of those surfaces, the installation SHALL report which were installed and which the host does not support.
+
+#### Scenario: Installing on a host with packaged extensions
+- **WHEN** the user installs flow-code's extension into a host that supports packaged extensions
+- **THEN** the instructions, the reporting tools, and the enforcement layer SHALL all become active without a further manual registration step
+
+#### Scenario: A host that supports only part of the surface
+- **WHEN** the extension is installed into a host that cannot run flow-code's enforcement layer
+- **THEN** the system SHALL install the surfaces the host does support, SHALL report which were not installed, and SHALL state that runs from that host carry no capability enforcement
+
+#### Scenario: The installation does not silently edit unrelated configuration
+- **WHEN** the extension is installed
+- **THEN** it SHALL NOT modify the user's existing agent configuration beyond its own delimited or self-owned entries, and SHALL name every file it changed
+
 ### Requirement: Stale instructions are detected
 The system SHALL detect when installed instructions no longer match the current `.flow-code/workflow.yaml` and SHALL report the mismatch. A host agent walking a graph that no longer exists is a source of silently wrong runs, so the disagreement SHALL be surfaced rather than tolerated.
 

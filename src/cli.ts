@@ -7,6 +7,7 @@ import { cmdNodeTypes } from './cli/nodeTypes.js';
 import { cmdRun } from './cli/run.js';
 import { cmdRuns } from './cli/runs.js';
 import { cmdSkills } from './cli/skills.js';
+import { cmdStatus } from './cli/status.js';
 import { cmdValidate } from './cli/validate.js';
 import { cmdWatch } from './cli/watch.js';
 import { fail } from './cli/context.js';
@@ -32,6 +33,12 @@ Usage:
                               Follow a run started elsewhere — same graph, read-only, fed by the
                               run's state file. Defaults to whichever run is currently being
                               written, and picks up a run started after the viewer was opened
+  flow-code status [--line] [--json] [--script] [--width N] [--dir <path>]
+                              Summarize the current run in one or two rows — what it needs, how
+                              far it is, what it has spent. Read-only, and cheap enough to run on
+                              every event of whatever displays it. --line emits a single row for
+                              embedding in a status bar you already have; --script prints a
+                              ready-made one for a host that has none
   flow-code validate          Check .flow-code/workflow.yaml without running it — reports every
                               problem it can find, and which checks a failure stopped it reaching
   flow-code node-types        List built-in node types, capabilities, config and output shapes
@@ -50,6 +57,8 @@ async function main(): Promise<void> {
       return cmdRuns();
     case 'watch':
       return cmdWatch(args);
+    case 'status':
+      return cmdStatus(args);
     case 'validate':
       return cmdValidate();
     case 'node-types':
