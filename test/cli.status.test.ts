@@ -214,6 +214,10 @@ describe('renderLine — the width ladder', () => {
     expect(plain(blocked, 0)).toBe('');
   });
 
+  it('says only that there is no run, with no figures to be unavailable about', () => {
+    expect(plain(summarize(undefined), 80)).toBe('no run');
+  });
+
   it('colours only when asked', () => {
     expect(renderLine(blocked, { width: 120, color: false })).not.toContain('\x1b[');
     expect(renderLine(blocked, { width: 120, color: true })).toContain('\x1b[');
@@ -370,5 +374,13 @@ describe('cmdStatus', () => {
     await cmdStatus(['--script']);
     expect(log).not.toHaveBeenCalled();
     expect(out.mock.calls.flat().join('')).toContain('flow-code status --line');
+  });
+
+  it('prints a script that still works on a machine without jq', async () => {
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    await cmdStatus(['--script']);
+    const script = out.mock.calls.flat().join('');
+    expect(script).toContain('command -v jq');
+    expect(script).toContain('python3');
   });
 });

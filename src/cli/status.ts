@@ -320,6 +320,9 @@ function chainSpans(s: RunSummary, labels: boolean): Span[] {
 }
 
 function metaSpans(s: RunSummary): Span[] {
+  // Nothing to be quantitative about. "no run · spend n/a" reads as a broken
+  // meter rather than as an absent one, which is the opposite of the point.
+  if (s.kind === 'none') return [];
   const parts: Span[] = [];
   const push = (text: string, style: Style = 'dim') => {
     if (parts.length > 0) parts.push({ text: ' · ', style: 'dim' });
@@ -497,7 +500,16 @@ const SCRIPT = `#!/usr/bin/env bash
 # a status line, don't replace it — call \`flow-code status --line --dir "$DIR"\`
 # from inside the script you have and paste the output into your own row.
 input=$(cat)
-DIR=$(printf '%s' "$input" | jq -r '.workspace.current_dir // "."')
+
+# jq is not guaranteed to be installed; python3 effectively is. Prefer jq when
+# it is there, fall back rather than printing nothing on a machine without it.
+if command -v jq >/dev/null 2>&1; then
+  DIR=$(printf '%s' "$input" | jq -r '.workspace.current_dir // "."')
+else
+  PY='import json,sys; print(json.load(sys.stdin).get("workspace",{}).get("current_dir","."))'
+  DIR=$(printf '%s' "$input" | python3 -c "$PY" 2>/dev/null || echo .)
+fi
+
 exec flow-code status --line --dir "$DIR" --width "\${COLUMNS:-100}"
 `;
 
