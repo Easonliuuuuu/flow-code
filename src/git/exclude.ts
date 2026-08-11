@@ -4,7 +4,13 @@ import { dirname, join } from 'node:path';
 /** Keep run-state and worktrees out of untracked-change detection and diffs. */
 export function ensureGitExclude(repoRoot: string): void {
   const excludePath = join(repoRoot, '.git', 'info', 'exclude');
-  const wanted = ['.flow-code/runs/', '.flow-code/worktrees/', '.flow-code/credentials.json'];
+  const wanted = [
+    '.flow-code/runs/',
+    '.flow-code/worktrees/',
+    '.flow-code/reconcile/',
+    '.flow-code/enforcement.json',
+    '.flow-code/credentials.json',
+  ];
   let current = '';
   try {
     current = readFileSync(excludePath, 'utf8');

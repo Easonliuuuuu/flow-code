@@ -140,9 +140,11 @@ changes:
       against it. Enforcement (`host-session-harness`): a PreToolUse hook
       applies the current node's capability set to the host session through the
       same policy function the engine uses, fails closed, and a run claims the
-      `hooks` tier only while a heartbeat the hook wrote is fresh. Remaining:
-      reconciliation (`run-state-reconciliation`), which is independent of both
-      and unblocked now that reported runs record a baseline.
+      `hooks` tier only while a heartbeat the hook wrote is fresh.
+      Reconciliation (`run-state-reconciliation`): `flow-code reconcile` asks
+      the tree whether a run's claims are true, read-only and advisory, with
+      findings beside the run document rather than in it. All 54 tasks are
+      complete; ready to archive once the last PR merges.
   add-mcp-driver-connector:
     br: BR-06
     status: parked
@@ -202,12 +204,14 @@ registered_gaps:
     reason: >-
       `src/guest/` ships the surface an outside agent drives the graph through —
       the writer, the transition validator, the generated instructions, the MCP
-      server, and the host-session enforcement layer. It is specified, in
+      server, the host-session enforcement layer, and the reconciliation check.
+      It is specified, in
       `add-guest-mode-reporter`'s `guest-run-reporting`,
-      `guest-agent-instructions` and `host-session-harness` deltas, and every
-      requirement in all three is delivered; those specs are simply not in
-      `openspec/specs/` yet because the change is mid-flight (its reconciliation
-      half is deliberately still to come). Exactly the shape GAP-02/05 had while
+      `guest-agent-instructions`, `host-session-harness` and
+      `run-state-reconciliation` deltas, and every
+      requirement in all four is delivered; those specs are simply not in
+      `openspec/specs/` yet because the change has not been archived. Exactly
+      the shape GAP-02/05 had while
       `src/runstate/` waited for the `run-state` spec to land, and it closes the
       same way: when the change archives and its deltas sync.
     tracked_by: BR-06

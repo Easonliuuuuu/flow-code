@@ -43,10 +43,22 @@ export async function captureTree(dir: string): Promise<string> {
     await git(['read-tree', 'HEAD'], dir, env);
     await git(['add', '-A'], dir, env);
     // flow-code's own run bookkeeping must never appear as agent output —
-    // but only these two dirs are transient; a checked-in workflow.yaml
-    // must still be diffed like any other tracked file.
+    // but only these are transient; a checked-in workflow.yaml must still be
+    // diffed like any other tracked file.
+    //
+    // `reconcile` and `enforcement.json` matter for a subtler reason than
+    // tidiness: reconciliation asks whether the tree has changed since the
+    // baseline, and both are written *by* flow-code while a run is going. Left
+    // in, the first reconciliation would make the tree look changed and every
+    // one after it would answer its own question.
     await git(
-      ['rm', '-r', '--cached', '--ignore-unmatch', '-q', '.flow-code/runs', '.flow-code/worktrees'],
+      [
+        'rm', '-r', '--cached', '--ignore-unmatch', '-q',
+        '.flow-code/runs',
+        '.flow-code/worktrees',
+        '.flow-code/reconcile',
+        '.flow-code/enforcement.json',
+      ],
       dir,
       env,
     );

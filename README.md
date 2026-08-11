@@ -159,6 +159,7 @@ line; `--graph <name>` skips the question. See
 | `flow-code connect` | Install the reporting surface into this project's agent configuration |
 | `flow-code mcp` | Serve the reporting tools over MCP (launched by a host agent, not by hand) |
 | `flow-code hook <event>` | Apply the current step's capability set to a host session's tool call |
+| `flow-code reconcile` | Check a run's claims against the repository — read-only and advisory |
 | `flow-code validate` | Check `.flow-code/workflow.yaml` without running it |
 | `flow-code node-types` | List every node type and its configuration |
 | `flow-code skills` | List skills attachable from `.claude/skills` or plugins |
@@ -254,6 +255,25 @@ Three things make the claim honest rather than decorative:
 What stays out of reach, because flow-code did not start the process: per-node model selection, exact token accounting, and the process-level guards (working directory, environment, the push-url block). Loop-backs are the one place a host-session run is structurally different rather than merely less enforced — the engine *routes* a failure back to its target, and a hook can only decline to end a turn. The generated instructions say so, and tell the agent to walk the return path itself.
 
 Enforcement is evadable through indirection — a script that shells out to git from inside another program — exactly as it is under `flow-code run`, which intercepts the same calls with the same parser. It is a boundary against accident, not against an adversary.
+
+### Asking the repository whether the run is true
+
+Enforcement narrows what an agent may *do*. It says nothing about what an agent *says* it did — and a graph that confidently shows work nobody performed is worse than a graph showing nothing. The tree is the one witness that does not depend on the agent's honesty:
+
+```bash
+flow-code reconcile            # the latest run; `reconcile <runId>` for a specific one
+```
+
+```
+run 9bdf1d06 — checked against the repository
+  1 claim(s) the repository does not support:
+    implement: reported changing `src/a.ts`, but it is unchanged from the run's baseline
+  skipped check — Test does not modify the repository
+```
+
+It compares each completed node's own recorded output against the run's baseline — the files it said it changed, the spec it said it wrote, the commit it said it made — so a finding is something you can check in one command rather than a vague "the tree looks wrong". Nodes whose type cannot modify the repository are skipped rather than flagged for doing their job, and a run with no baseline is reported as *unreconcilable* rather than as agreement: the absence of a check is not a clean bill of health.
+
+It exits non-zero when the repository contradicts the run, so it works as a check and not only as something to read. It never writes the run document — findings go to `.flow-code/reconcile/<runId>.json`, and `flow-code watch` picks them up from there and names the affected nodes in its header. And it never corrects anything: the tree cannot say *why* a claim is unsupported (a node may legitimately have been a no-op, or you may have reverted something by hand), so resolving the disagreement is yours.
 
 ## Keyboard controls
 

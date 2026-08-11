@@ -8,6 +8,7 @@ import { cmdInit } from './cli/init.js';
 import { cmdMcp } from './cli/mcp.js';
 import { cmdNode } from './cli/node.js';
 import { cmdNodeTypes } from './cli/nodeTypes.js';
+import { cmdReconcile } from './cli/reconcile.js';
 import { cmdRun } from './cli/run.js';
 import { cmdRuns } from './cli/runs.js';
 import { cmdSkills } from './cli/skills.js';
@@ -50,6 +51,10 @@ Usage:
   flow-code connect [--check] Install flow-code's reporting surface into this project's agent
                               configuration (MCP server, workflow skill, instructions section).
                               --check reports what is installed and whether it is still current
+  flow-code reconcile [runId] [--json]
+                              Check a run's claims against the repository — which completed nodes
+                              reported work the tree does not show. Read-only and advisory; exits
+                              non-zero when the repository contradicts the run
   flow-code validate          Check .flow-code/workflow.yaml without running it — reports every
                               problem it can find, and which checks a failure stopped it reaching
   flow-code node-types        List built-in node types, capabilities, config and output shapes
@@ -78,6 +83,8 @@ async function main(): Promise<void> {
       return cmdMcp();
     case 'hook':
       return cmdHook(args);
+    case 'reconcile':
+      return cmdReconcile(args);
     case 'validate':
       return cmdValidate();
     case 'node-types':

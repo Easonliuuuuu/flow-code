@@ -154,6 +154,20 @@ export function readRunState(path: string): RunState {
 }
 
 /**
+ * Whether a parsed document is actually a run.
+ *
+ * Every reader here globs `*.json` under `runs/`, which quietly assumed that
+ * nothing else would ever be written there. That assumption broke the moment
+ * something was: a file with no `nodes` was picked up as a run with no nodes,
+ * and the viewer attached to it in preference to the real one. Cheap to check,
+ * and it makes the readers robust against the next thing that lands nearby.
+ */
+export function isRunDocument(value: unknown): value is RunState {
+  const doc = value as RunState | undefined;
+  return typeof doc?.runId === 'string' && typeof doc.nodes === 'object' && doc.nodes !== null;
+}
+
+/**
  * Whether `pid` still belongs to a live process on *this* machine.
  *
  * Signal 0 checks for existence without delivering anything; EPERM means the
@@ -179,7 +193,8 @@ export function listRunStates(repoRoot: string): RunState[] {
   const states: RunState[] = [];
   for (const f of files) {
     try {
-      states.push(readRunState(join(runsDir(repoRoot), f)));
+      const state = readRunState(join(runsDir(repoRoot), f));
+      if (isRunDocument(state)) states.push(state);
     } catch {
       // Unreadable run file: skip rather than fail the whole listing.
     }
