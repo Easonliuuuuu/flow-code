@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { NodeBudget } from '../workflow/schema.js';
+import { driverLiveness, newOwner, RunOwnershipError } from './persist.js';
 import { budgetedTokens } from './types.js';
 import type {
   ActivityEntry,
@@ -71,11 +72,36 @@ export class RunStateStore {
         };
       }
     }
+    // Resuming is an ownership handover, not a fresh claim: the run keeps its
+    // id and its recorded work, and this process takes over writing it. Taking
+    // over a run something else is still driving would give the document two
+    // writers, so it is refused here — early, where the user can act on it —
+    // as well as at the persistence boundary, which is what actually enforces
+    // it. An `unknown` liveness is allowed through: every run document written
+    // before ownership existed reports `unknown`, and refusing those would
+    // break `--resume` for every run that predates this.
+    // A run that recorded an ending is not being driven, whatever its pid says
+    // — and `--resume` targets exactly those, so the check must not fire on
+    // the case it exists to serve.
+    if (opts.resumeFrom && opts.resumeFrom.finishedAt === undefined && driverLiveness(opts.resumeFrom) === 'live') {
+      throw new RunOwnershipError(
+        `run ${opts.resumeFrom.runId} is already being driven by pid ${opts.resumeFrom.owner?.pid} — resume it after that process exits`,
+      );
+    }
+    const owner = newOwner();
+    const priorOwner = opts.resumeFrom?.owner;
+    const handovers = [
+      ...(opts.resumeFrom?.handovers ?? []),
+      ...(priorOwner ? [{ from: { pid: priorOwner.pid, host: priorOwner.host }, at: owner.claimedAt }] : []),
+    ];
+
     this.state = {
       runId: opts.resumeFrom?.runId ?? opts.runId ?? randomUUID(),
       createdAt: opts.resumeFrom?.createdAt ?? new Date().toISOString(),
       repoRoot: opts.repoRoot,
       pid: process.pid,
+      owner,
+      ...(handovers.length > 0 ? { handovers } : {}),
       baseline: opts.resumeFrom?.baseline ?? null,
       // Recorded at construction, which is before any node can leave `idle`:
       // a reader attaching to a run at its first instant still sees the shape.

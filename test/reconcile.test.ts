@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { FileRunStatePersister } from '../src/runstate/persist.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../src/worktrees/reconcile.js';
-import { makeTempGitRepo } from './helpers.js';
+import { makeTempGitRepo, markDriverDead } from './helpers.js';
 
 function createWorktree(repo: string, name: string): { dir: string; branch: string } {
   const dir = join(repo, '.flow-code', 'worktrees', name);
@@ -31,10 +31,10 @@ describe('orphaned-worktree reconciliation', () => {
       removed: false,
       converged: false,
     });
-    // Force a dead pid into the persisted state.
-    const snapshot = crashed.snapshot();
-    (snapshot as { pid: number }).pid = 999999999;
-    new FileRunStatePersister(repo).persist(snapshot);
+    // Force a dead pid into the persisted state. Moving the owner's pid keeps
+    // the ownership token intact — the fixture wants a dead driver, not a
+    // second writer, which the persister would refuse.
+    new FileRunStatePersister(repo).persist(markDriverDead(crashed.snapshot()));
 
     // A live run (this process's pid): its worktree must not be flagged.
     const live = new RunStateStore({ repoRoot: repo, nodeIds: ['fan'] });
@@ -61,5 +61,29 @@ describe('orphaned-worktree reconciliation', () => {
     // The branch (and its work) is kept.
     const branches = execFileSync('git', ['branch', '--list', wt.branch], { cwd: repo }).toString();
     expect(branches).toContain(wt.branch);
+  });
+
+  it('leaves a run this machine cannot answer for alone, rather than treating unknown as abandoned', async () => {
+    const repo = makeTempGitRepo();
+
+    const foreign = new RunStateStore({ repoRoot: repo, nodeIds: ['fan'] });
+    foreign.attachPersister(new FileRunStatePersister(repo));
+    const wt = createWorktree(repo, 'foreign-one');
+    foreign.addWorktree({
+      nodeId: 'fan',
+      instanceId: 'one',
+      branch: wt.branch,
+      dir: wt.dir,
+      removed: false,
+      converged: false,
+    });
+
+    // Written from another machine over a shared checkout: its pid means
+    // nothing here, so its worktree is not ours to reclaim.
+    const snapshot = foreign.snapshot();
+    (snapshot.owner as { host: string }).host = `${snapshot.owner!.host}-elsewhere`;
+    new FileRunStatePersister(repo).persist(snapshot);
+
+    expect(findOrphanedWorktrees(repo)).toEqual([]);
   });
 });

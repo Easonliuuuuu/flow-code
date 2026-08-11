@@ -1,18 +1,25 @@
-import { listRunStates, pidAlive } from '../runstate/persist.js';
+import { driverLiveness, listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { repoRootFromCwd } from './context.js';
 import { tallyNodeStatuses } from './run.js';
 
 /**
- * A run with no `finishedAt` is either still going (its pid is alive) or died
- * without a clean exit (ctrl+c handling never ran — `kill -9`, a crashed
- * terminal). Distinguishing the two mirrors `findOrphanedWorktrees`, which
- * uses the same liveness check to decide whether a run's worktrees are safe
- * to reclaim.
+ * A run with no `finishedAt` is still going, died without a clean exit (ctrl+c
+ * handling never ran — `kill -9`, a crashed terminal), or belongs to a machine
+ * this one cannot answer for. The third is reported as itself rather than
+ * folded into either neighbour, which mirrors `findOrphanedWorktrees`: an
+ * unanswerable run is not one whose worktrees are safe to reclaim.
  */
 export function runStatusLabel(state: RunState): string {
-  if (state.finishedAt === undefined) return pidAlive(state.pid) ? 'running' : 'crashed';
-  return state.interrupted ? 'interrupted' : 'finished';
+  if (state.finishedAt !== undefined) return state.interrupted ? 'interrupted' : 'finished';
+  switch (driverLiveness(state)) {
+    case 'live':
+      return 'running';
+    case 'dead':
+      return 'crashed';
+    case 'unknown':
+      return 'unknown';
+  }
 }
 
 /** `2026-08-09T12:34:56.789Z` -> `2026-08-09 12:34:56`, dropping sub-second precision this listing has no use for. */

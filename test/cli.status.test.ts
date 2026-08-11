@@ -14,8 +14,7 @@ import {
   type RunSummary,
 } from '../src/cli/status.js';
 import type { NodeRunState, NodeStatus, RunState } from '../src/runstate/types.js';
-
-const DEAD_PID = 999_999_999;
+import { deadOwner, foreignOwner, liveOwner } from './helpers.js';
 
 function node(status: NodeStatus, extra: Partial<NodeRunState> = {}): NodeRunState {
   return { status, denials: 0, ...extra };
@@ -27,6 +26,7 @@ function stateWith(nodes: Record<string, NodeRunState>, overrides: Partial<RunSt
     createdAt: '2026-08-11T12:00:00.000Z',
     repoRoot: '/repo',
     pid: process.pid,
+    owner: liveOwner(),
     baseline: null,
     graph: {
       nodes: Object.keys(nodes).map((id) => ({ id, type: id, config: {} })),
@@ -79,9 +79,22 @@ describe('summarize', () => {
   });
 
   it('reports an unfinished run whose driver is gone as no longer driven, not as running', () => {
-    const s = summarize(stateWith({ implement: node('running') }, { pid: DEAD_PID }));
+    const s = summarize(stateWith({ implement: node('running') }, { owner: deadOwner() }));
     expect(s.kind).toBe('undriven');
     expect(s.node).toBe('implement');
+  });
+
+  it('says the driver status is unknown for a run written on another machine, not that it died', () => {
+    const s = summarize(stateWith({ implement: node('running') }, { owner: foreignOwner() }));
+    expect(s.kind).toBe('unverifiable');
+    expect(plain(s, 120)).toContain('driver unknown');
+    expect(plain(s, 120)).not.toContain('driver gone');
+  });
+
+  it('says unknown for a document that predates ownership rather than calling it abandoned', () => {
+    const legacy = stateWith({ implement: node('running') });
+    delete (legacy as { owner?: unknown }).owner;
+    expect(summarize(legacy).kind).toBe('unverifiable');
   });
 
   it('is idle when attached to a live run with nothing started', () => {
@@ -251,7 +264,7 @@ describe('attention', () => {
   });
 
   it('announces a run whose driver died', () => {
-    expect(attention(summarize(stateWith({ implement: node('running') }, { pid: DEAD_PID })))).toBeDefined();
+    expect(attention(summarize(stateWith({ implement: node('running') }, { owner: deadOwner() })))).toBeDefined();
   });
 
   it('keeps the same token across repeated checks of the same block', () => {
@@ -313,6 +326,37 @@ describe('statusFor', () => {
     writeFileSync(join(runs, 'old.json'), JSON.stringify(stateWith({ a: node('done') }, { runId: 'old' })));
     writeFileSync(join(runs, 'new.json'), JSON.stringify(stateWith({ a: node('waiting') }, { runId: 'new' })));
     expect(statusFor(dir).runId).toBe('new');
+  });
+
+  it('says how many runs are live, so one row is not read as the only run', () => {
+    const dir = project();
+    const runs = join(dir, '.flow-code', 'runs');
+    writeFileSync(join(runs, 'one.json'), JSON.stringify(stateWith({ a: node('running') }, { runId: 'one' })));
+    writeFileSync(join(runs, 'two.json'), JSON.stringify(stateWith({ a: node('running') }, { runId: 'two' })));
+
+    const summary = statusFor(dir);
+    expect(summary.liveRuns).toBe(2);
+    expect(plain(summary, 120)).toContain('2 live runs');
+  });
+
+  it('says nothing about other runs when only one is live', () => {
+    const dir = project();
+    writeFileSync(
+      join(dir, '.flow-code', 'runs', 'one.json'),
+      JSON.stringify(stateWith({ a: node('running') }, { runId: 'one' })),
+    );
+    expect(statusFor(dir).liveRuns).toBeUndefined();
+  });
+
+  it('does not go looking for other runs once the one it found has stopped', () => {
+    const dir = project();
+    const runs = join(dir, '.flow-code', 'runs');
+    writeFileSync(join(runs, 'one.json'), JSON.stringify(stateWith({ a: node('running') }, { owner: deadOwner() })));
+    writeFileSync(join(runs, 'two.json'), JSON.stringify(stateWith({ a: node('running') }, { runId: 'two' })));
+
+    // The newest document is an abandoned run; the row is about that, and a
+    // count of what else is live would not change how it reads.
+    expect(statusFor(dir).liveRuns).toBeUndefined();
   });
 
   it('never writes: the run directory is byte-identical after repeated reads', () => {

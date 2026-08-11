@@ -56,7 +56,7 @@ _No OpenSpec change serves this yet._
 
 ## M2 — Driver mode is trustworthy
 
-`██████████ 47/47` tasks across 2 change(s)
+`██████████ 78/78` tasks across 3 change(s)
 
 ### BR-03 — A second window can watch a live run without disturbing it
 
@@ -72,6 +72,7 @@ _No OpenSpec change serves this yet._
 
 | Change | State | Tasks |
 | --- | --- | --- |
+| `add-run-state-ownership` | active | ██████████ 31/31 |
 | `2026-08-09-add-workflow-validation-and-recorded-graph` | archived | ██████████ 25/25 |
 
 ### BR-05 — A graph bigger than the default stays navigable
@@ -80,7 +81,7 @@ _No OpenSpec change serves this yet._
 
 ## M3 — Meet users in the CLI they already use
 
-`░░░░░░░░░░ 0/78` tasks across 2 change(s)
+`░░░░░░░░░░ 1/78` tasks across 2 change(s)
 
 ### BR-06 — An external agent can drive the graph
 
@@ -88,7 +89,7 @@ _No OpenSpec change serves this yet._
 
 | Change | State | Tasks |
 | --- | --- | --- |
-| `add-guest-mode-reporter` | parked | ░░░░░░░░░░ 0/54 |
+| `add-guest-mode-reporter` | parked | ░░░░░░░░░░ 1/54 |
 | `add-mcp-driver-connector` | parked | ░░░░░░░░░░ 0/24 |
 
 ## Parked

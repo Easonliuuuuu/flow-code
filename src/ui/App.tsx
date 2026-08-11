@@ -7,7 +7,7 @@ import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
 import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
 import type { RunState } from '../runstate/types.js';
-import { isAttached, isDriverAlive } from '../runstate/watch.js';
+import { driverLiveness, isAttached } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
@@ -1622,7 +1622,12 @@ export function App({
   // between the watcher and this component.
   const watchAttached = watch && isAttached(runState);
   // A run that ended is not "stale" — it has no driver because it's over.
-  const driverGone = watchAttached && !finished && !isDriverAlive(runState);
+  // Three-valued deliberately: a run written on another machine cannot be
+  // called gone, and saying so about a live run is the failure this header
+  // exists to prevent.
+  const liveness = watchAttached && !finished ? driverLiveness(runState) : 'live';
+  const driverGone = liveness === 'dead';
+  const driverUnknown = liveness === 'unknown';
   const runLabel = watch
     ? watchAttached
       ? `watching ${runState.runId.slice(0, 8)}`
@@ -1695,6 +1700,7 @@ export function App({
           </Text>
         ))}
         {driverGone ? <Text color="yellow"> · driver gone</Text> : null}
+        {driverUnknown ? <Text color="yellow"> · driver unknown</Text> : null}
         {graphIssue ? <Text color="yellow"> · {graphIssue}</Text> : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {/* Lives in the header rather than the bottom hint line because the

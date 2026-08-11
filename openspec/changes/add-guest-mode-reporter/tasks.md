@@ -8,7 +8,7 @@
 
 - [ ] 1.1 Add tier and provenance fields to `RunState`: which tier the run ran under, the reporting surface used, and the guarantees that tier does not provide
 - [ ] 1.2 Record a tier downgrade with the point it happened, so a run that lost enforcement mid-way is not presented at its opening tier
-- [ ] 1.3 Make ownership explicit in `RunStateStore` — a run records its owner, and a writer that does not own it is refused rather than silently accepted
+- [x] 1.3 Make ownership explicit in `RunStateStore` — a run records its owner, and a writer that does not own it is refused rather than silently accepted *(delivered by `add-run-state-ownership`: "One writer owns a run document" in the `run-state` spec now requires the writer to verify ownership before each write, and "Ownership transfers explicitly" covers the resume handover this change's guest writer inherits)*
 - [ ] 1.4 Add a guest-side writer that opens a run, applies one validated transition, and persists, without assuming it is the only process alive
 - [ ] 1.5 Test that a guest write against a run owned by a live engine process is refused and leaves the document byte-identical
 - [ ] 1.6 Test that an engine-driven run records the engine tier with no absent guarantees, and is otherwise byte-identical to what it was before this change

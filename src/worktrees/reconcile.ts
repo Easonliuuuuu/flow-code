@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { git, removeWorktree } from '../git/ops.js';
-import { listRunStates, pidAlive } from '../runstate/persist.js';
+import { driverLiveness, listRunStates } from '../runstate/persist.js';
 
 export interface OrphanedWorktree {
   runId: string;
@@ -13,12 +13,17 @@ export interface OrphanedWorktree {
 /**
  * Worktrees recorded in run-state whose run is no longer alive (crashed or
  * killed mid-run) and whose directory still exists on disk.
+ *
+ * Only a run whose driver is *known* dead qualifies. A run this machine cannot
+ * answer for — written on another host over a shared checkout, or predating
+ * ownership — is left alone: "I cannot tell" must never authorize deleting
+ * someone else's working tree, and the cost of being wrong in that direction
+ * is debris rather than lost work.
  */
 export function findOrphanedWorktrees(repoRoot: string): OrphanedWorktree[] {
   const orphans: OrphanedWorktree[] = [];
   for (const state of listRunStates(repoRoot)) {
-    const runActive = state.finishedAt === undefined && pidAlive(state.pid);
-    if (runActive) continue;
+    if (state.finishedAt === undefined && driverLiveness(state) !== 'dead') continue;
     for (const wt of state.worktrees) {
       if (!wt.removed && existsSync(wt.dir)) {
         orphans.push({
