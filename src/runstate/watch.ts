@@ -12,7 +12,7 @@
 
 import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import { driverLiveness, runFilePath, runsDir } from './persist.js';
+import { driverLiveness, isRunDocument, runFilePath, runsDir } from './persist.js';
 import type { NodeRunState, RunState } from './types.js';
 
 /**
@@ -88,7 +88,8 @@ export function latestRunState(repoRoot: string): RunState | undefined {
   const path = newestRunFile(repoRoot);
   if (!path) return undefined;
   try {
-    return JSON.parse(readFileSync(path, 'utf8')) as RunState;
+    const state = JSON.parse(readFileSync(path, 'utf8')) as RunState;
+    return isRunDocument(state) ? state : undefined;
   } catch {
     return undefined;
   }
@@ -134,7 +135,7 @@ export function liveRuns(repoRoot: string, limit = 8): RunState[] {
   for (const { path } of byRecency.slice(0, limit)) {
     try {
       const state = JSON.parse(readFileSync(path, 'utf8')) as RunState;
-      if (state?.nodes && state.finishedAt === undefined && driverLiveness(state) === 'live') live.push(state);
+      if (isRunDocument(state) && state.finishedAt === undefined && driverLiveness(state) === 'live') live.push(state);
     } catch {
       // Unreadable or mid-write: not something to report as live.
     }

@@ -5,6 +5,7 @@ import { providerInfo, type ProviderId } from '../engine/providers.js';
 import { windowFor } from '../init/SelectList.js';
 import { nodeTypeAcceptsAgentStep } from '../registry/index.js';
 import type { RunStateStore } from '../runstate/store.js';
+import { readReport } from '../guest/reconcile.js';
 import { effectiveTier, TIER_LABELS, tierDisclosure } from '../runstate/tier.js';
 import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
 import type { RunState } from '../runstate/types.js';
@@ -71,6 +72,9 @@ interface PanelDrag {
 /** The header line above the canvas, and the hint line below it when no panel is docked. */
 const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
+
+/** How often the viewer re-reads a run's reconciliation report, if one exists. */
+const RECONCILE_POLL_MS = 2000;
 
 /**
  * Prose (chat transcript, agent output, critique summaries) wraps to this at
@@ -321,6 +325,27 @@ export function App({
   );
 
   useEffect(() => store.subscribe(setRunState), [store]);
+
+  // Reconciliation findings come from a file beside the run document rather
+  // than from run-state, because the check is required to leave the run
+  // byte-identical — its opinion of a run is not part of that run's own record
+  // of what was reported. Polled rather than watched: the file only changes
+  // when someone runs `flow-code reconcile`, and it is a few hundred bytes.
+  const [reconcileFindings, setReconcileFindings] = useState<string[]>([]);
+  useEffect(() => {
+    if (!runState.runId) return;
+    const read = (): void => {
+      const report = readReport(runState.repoRoot, runState.runId);
+      const nodes = [...new Set((report?.findings ?? []).map((f) => f.nodeId))];
+      // Compared before setting so an unchanged report does not re-render the
+      // whole canvas every tick.
+      setReconcileFindings((prev) => (prev.join() === nodes.join() ? prev : nodes));
+    };
+    read();
+    const timer = setInterval(read, RECONCILE_POLL_MS);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }, [runState.repoRoot, runState.runId]);
   useEffect(() => ports.subscribe(() => setPortsTick((t) => t + 1)), [ports]);
 
   // Animation clock for in-flight node cards (spinner, ticking elapsed time).
@@ -1729,6 +1754,12 @@ export function App({
         ))}
         {driverGone ? <Text color="yellow"> · driver gone</Text> : null}
         {driverUnknown ? <Text color="yellow"> · driver unknown</Text> : null}
+        {/* Named rather than counted: "2 nodes disagree" sends someone hunting
+            through the graph for which, and the whole value of the finding is
+            knowing where to look. */}
+        {reconcileFindings.length > 0 ? (
+          <Text color="red"> · tree disagrees: {reconcileFindings.join(', ')}</Text>
+        ) : null}
         {graphIssue ? <Text color="yellow"> · {graphIssue}</Text> : null}
         {finished ? <Text color="green"> · finished — press q to exit</Text> : null}
         {/* Lives in the header rather than the bottom hint line because the

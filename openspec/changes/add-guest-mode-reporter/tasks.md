@@ -1,4 +1,4 @@
-> **Sequenced in three parts, two of them delivered.**
+> **Sequenced in three parts, all delivered.**
 >
 > - **Reporting** (`guest-run-reporting`, `guest-agent-instructions`) — an outside agent
 >   walks the graph, every transition is validated against it, and the run is labelled
@@ -8,13 +8,16 @@
 >   uses. It was held back from the first part deliberately: its risk is a hook contract
 >   flow-code does not own, and it is strictly downstream of the writer, since a policy is
 >   compiled from the run's *current node* and only a writer advances that.
-> - **Reconciliation** (`run-state-reconciliation`, section 9 and 10.4) — still to come.
->   Independent of the other two, and unblocked now that reported runs record a baseline.
+> - **Reconciliation** (`run-state-reconciliation`) — the tree is asked whether a run's
+>   claims are true, since neither validation nor enforcement can answer that: one checks
+>   that a transition was *legal*, the other narrows what a session may *do*, and neither
+>   touches what it *says* it did. Advisory and read-only; findings live beside the run
+>   document, never in it.
 
 ## 0. Prerequisites
 
 - [x] 0.1 Close the spec gap for `flow-code watch` — write its `terminal-canvas-ui` requirements (read-only viewer, run attachment, driver liveness), since this change's UI delta builds on them *(residual written as `terminal-canvas-ui` requirements in this change's delta — the run-document half (attach with no id, liveness, read-only readers) was closed by `add-run-state-ownership`; what is left is the command's own surface)*
-- [ ] 0.2 Settle the open questions in `design.md`: how enforcement is verified before a run claims a tier, run identity per guest session, which node types reconciliation expects to touch the tree, and the CLI verb shape *(all settled but one: the CLI verb shape is `flow-code node <id> start|done|fail`; a guest run opens fresh each time and surfaces target the newest open non-engine run; enforcement is verified by a heartbeat the hook itself writes, re-checked on every transition, because `open_run` is a tool call the hook fires for first. Still open: which node types reconciliation expects to touch the tree — it belongs to the change that needs it)*
+- [x] 0.2 Settle the open questions in `design.md`: how enforcement is verified before a run claims a tier, run identity per guest session, which node types reconciliation expects to touch the tree, and the CLI verb shape *(all settled. The last one — which node types reconciliation expects to touch the tree — is answered from the capability set (`edit` or `git-write`), with Worktree-Agent exempted by name because its work reaches this tree only on convergence)*
 - [x] 0.3 Re-confirm the host's hook contract against the version being targeted — the deny decision, its reason field, the turn-end hook, and the delegation hook — and record which host version the enforcement layer was written against *(the hook contract was re-confirmed against Claude Code as of August 2026 and recorded in design.md)*
 
 ## 1. Enforcement tiers and run-state ownership
@@ -83,16 +86,16 @@
 
 ## 9. Reconciliation
 
-- [ ] 9.1 Compare claimed node state against the tree using the run's recorded baseline, reporting nodes whose claims are unsupported *(deferred with reconciliation)*
-- [ ] 9.2 Exempt node types not expected to modify the repository, and report a missing baseline as unreconcilable rather than returning a false result *(deferred with reconciliation)*
-- [ ] 9.3 Test that reconciliation leaves the run-state document byte-identical *(deferred with reconciliation)*
+- [x] 9.1 Compare claimed node state against the tree using the run's recorded baseline, reporting nodes whose claims are unsupported
+- [x] 9.2 Exempt node types not expected to modify the repository, and report a missing baseline as unreconcilable rather than returning a false result *(exemption is derived from the capability set, so a new node type is classified the day it is added)*
+- [x] 9.3 Test that reconciliation leaves the run-state document byte-identical
 
 ## 10. Viewer disclosure
 
 - [x] 10.1 Indicate the run's enforcement tier in the viewer, driven by run-state rather than inferred from the data's shape
 - [x] 10.2 Present unavailable token totals and capability indicators as unavailable rather than as zero
 - [x] 10.3 Report a run whose tier changed mid-run at its weakest recorded tier
-- [ ] 10.4 Surface reconciliation findings in the viewer, naming the affected nodes *(deferred with reconciliation)*
+- [x] 10.4 Surface reconciliation findings in the viewer, naming the affected nodes
 - [x] 10.5 Test that an engine-driven run renders exactly as it did before this change
 
 ## 11. Documentation
