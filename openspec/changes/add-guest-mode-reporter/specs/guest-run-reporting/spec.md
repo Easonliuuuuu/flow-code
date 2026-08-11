@@ -60,16 +60,24 @@ The system SHALL refuse guest reports directed at a run that flow-code's own eng
 - **WHEN** a guest opens a run while an engine-driven run is already active in the same repository
 - **THEN** the system SHALL either refuse or create a separate run document, and SHALL NOT merge the guest's reports into the engine's run
 
-### Requirement: Guest runs record their provenance and absent guarantees
-Run-state SHALL record that a run was guest-driven, and SHALL record which of flow-code's guarantees did not apply to it — at minimum that capability enforcement, token accounting, and engine-driven loop-backs were not in effect. Consumers of run-state SHALL be able to tell a guest run from an engine run without inspecting its contents heuristically.
+### Requirement: Every run records its enforcement tier and absent guarantees
+Run-state SHALL record which enforcement tier a run ran under — flow-code's engine executing it, a host session with flow-code's enforcement active, or self-reporting with no enforcement — together with the guarantees that tier does not provide. Consumers of run-state SHALL be able to tell the three apart without inspecting a run's contents heuristically.
 
-#### Scenario: Provenance is readable from the run document
-- **WHEN** a guest run's state document is read by any consumer
-- **THEN** it SHALL identify the run as guest-driven and name the reporting surface used
+#### Scenario: The tier is readable from the run document
+- **WHEN** a run's state document is read by any consumer
+- **THEN** it SHALL name the run's enforcement tier and the reporting surface used
 
-#### Scenario: A guest run does not claim enforcement it never had
-- **WHEN** a guest run completes
+#### Scenario: Absent guarantees are enumerated, not implied
+- **WHEN** a run's tier does not provide a guarantee an engine-driven run provides — capability enforcement, per-node model selection, exact token accounting, or engine-driven loop-back routing
+- **THEN** run-state SHALL name that guarantee as absent for the run, rather than leaving it to a consumer to infer from the tier
+
+#### Scenario: A run does not claim enforcement it never had
+- **WHEN** a run completes at the self-reported tier
 - **THEN** its run-state SHALL NOT contain capability-denial records or token totals presented as if a harness had produced them
+
+#### Scenario: An engine-driven run is unchanged
+- **WHEN** a run is driven by `flow-code run`
+- **THEN** it SHALL record the engine tier with no absent guarantees, and every other field SHALL be exactly what it was before this change
 
 ### Requirement: The MCP and CLI surfaces are equivalent
 The system SHALL expose the same reporting operations over an MCP server and over `flow-code node …` CLI subcommands, with identical validation and identical effects on run-state. A workflow driven entirely through one surface SHALL produce the same run-state as the same workflow driven through the other.

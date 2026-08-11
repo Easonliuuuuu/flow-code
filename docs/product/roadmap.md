@@ -181,8 +181,13 @@ it is tracked so it stays distinguishable from forgotten.
 
 - **`add-guest-mode-reporter`** (BR-06) — design captured while the reasoning
   was fresh. Blocked on M2 by the author's own argument, not by capacity.
+  Retargeted to a host-agent plugin once it turned out that a host exposing a
+  tool-interception point can carry most of the harness: enforcement is
+  recorded as a tier now, not disclosed as absent.
 - **`add-mcp-driver-connector`** (BR-06) — design captured while the reasoning
   was fresh, same M2 blocker. A different bet on the same BR: keeps the
   harness (flow-code still executes the graph) where guest mode drops it in
-  exchange for supporting any foreign agent. Complements guest mode rather
-  than competing with it.
+  exchange for supporting any foreign agent. No longer the adoption path —
+  driving it from a host session means paying for a nested agent session that
+  inherits none of the user's configuration — but it keeps what only it can
+  do: per-node models, worktree fan-out, unattended runs.

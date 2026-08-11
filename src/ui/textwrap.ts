@@ -20,7 +20,7 @@ function graphemes(text: string): string[] {
 }
 
 /** On-screen column width of `text` (wide CJK/emoji count as 2, not 1). */
-function columnWidth(text: string): number {
+export function columnWidth(text: string): number {
   return stringWidth(text);
 }
 
