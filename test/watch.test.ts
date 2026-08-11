@@ -5,14 +5,16 @@ import { FileRunStatePersister, runFilePath, runsDir } from '../src/runstate/per
 import { RunStateStore } from '../src/runstate/store.js';
 import type { RunState } from '../src/runstate/types.js';
 import {
+  driverLiveness,
   emptyRunState,
   isAttached,
-  isDriverAlive,
   latestRunState,
+  liveRuns,
   newestRunFile,
   RunStateWatcher,
 } from '../src/runstate/watch.js';
-import { makeTempGitRepo } from './helpers.js';
+import { ambiguousRunsMessage } from '../src/cli/watch.js';
+import { deadOwner, foreignOwner, liveOwner, makeTempGitRepo, markDriverDead } from './helpers.js';
 
 function stateFixture(patch: Partial<RunState> = {}): RunState {
   return {
@@ -20,6 +22,7 @@ function stateFixture(patch: Partial<RunState> = {}): RunState {
     createdAt: '2026-01-01T00:00:00.000Z',
     repoRoot: '/repo',
     pid: 1234,
+    owner: liveOwner(),
     baseline: null,
     nodes: {},
     worktrees: [],
@@ -52,18 +55,69 @@ describe('emptyRunState', () => {
   });
 });
 
-describe('isDriverAlive', () => {
-  it('reports this process as alive', () => {
-    expect(isDriverAlive(stateFixture({ pid: process.pid }))).toBe(true);
+describe('driverLiveness', () => {
+  it('reports this process as live', () => {
+    expect(driverLiveness(stateFixture({ owner: liveOwner() }))).toBe('live');
   });
 
-  it('reports a pid that no longer exists as gone', () => {
-    // Max pid on Linux is well under this; nothing can be running here.
-    expect(isDriverAlive(stateFixture({ pid: 0x7ffffffe }))).toBe(false);
+  it('reports an owner pid that no longer exists as dead', () => {
+    expect(driverLiveness(stateFixture({ owner: deadOwner() }))).toBe('dead');
   });
 
-  it('treats the placeholder state (pid 0) as having no driver', () => {
-    expect(isDriverAlive(emptyRunState('/repo', []))).toBe(false);
+  it('reports an owner on another machine as unknown, since its pid means nothing here', () => {
+    expect(driverLiveness(stateFixture({ owner: foreignOwner() }))).toBe('unknown');
+  });
+
+  it('reports a document written before ownership as unknown rather than inferring from its pid', () => {
+    const legacy = stateFixture();
+    delete (legacy as { owner?: unknown }).owner;
+    expect(driverLiveness(legacy)).toBe('unknown');
+  });
+
+  it('reports the placeholder state as unknown — it is attached to nothing to be alive', () => {
+    expect(driverLiveness(emptyRunState('/repo', []))).toBe('unknown');
+  });
+});
+
+describe('liveRuns', () => {
+  it('is empty in a repo with no runs', () => {
+    expect(liveRuns(makeTempGitRepo())).toEqual([]);
+  });
+
+  it('counts only runs that are unfinished and driven by a live process', () => {
+    const repo = makeTempGitRepo();
+
+    const live = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+    live.attachPersister(new FileRunStatePersister(repo));
+
+    const finished = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+    finished.attachPersister(new FileRunStatePersister(repo));
+    finished.markFinished(false);
+
+    const crashed = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+    crashed.attachPersister(new FileRunStatePersister(repo));
+    new FileRunStatePersister(repo).persist(markDriverDead(crashed.snapshot()));
+
+    expect(liveRuns(repo).map((s) => s.runId)).toEqual([live.runId]);
+  });
+
+  it('sees several live runs at once, so a reader can refuse to pick between them', () => {
+    const repo = makeTempGitRepo();
+    const one = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+    one.attachPersister(new FileRunStatePersister(repo));
+    const two = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+    two.attachPersister(new FileRunStatePersister(repo));
+
+    expect(liveRuns(repo).map((s) => s.runId).sort()).toEqual([one.runId, two.runId].sort());
+  });
+
+  it('reads no more than the cap, whatever the repo has accumulated', () => {
+    const repo = makeTempGitRepo();
+    for (let i = 0; i < 5; i++) {
+      const store = new RunStateStore({ repoRoot: repo, nodeIds: ['a'] });
+      store.attachPersister(new FileRunStatePersister(repo));
+    }
+    expect(liveRuns(repo, 2)).toHaveLength(2);
   });
 });
 
@@ -260,5 +314,24 @@ describe('RunStateWatcher', () => {
     } finally {
       watcher.close();
     }
+  });
+});
+
+describe('ambiguousRunsMessage', () => {
+  it('says nothing when there is one live run to attach to', () => {
+    expect(ambiguousRunsMessage([])).toBeUndefined();
+    expect(ambiguousRunsMessage([stateFixture({ runId: 'only-one' })])).toBeUndefined();
+  });
+
+  it('names every candidate when several are live, rather than picking one', () => {
+    const message = ambiguousRunsMessage([
+      stateFixture({ runId: 'aaaaaaaa-1111', createdAt: '2026-08-11T09:00:00.000Z' }),
+      stateFixture({ runId: 'bbbbbbbb-2222', createdAt: '2026-08-11T10:30:00.000Z' }),
+    ]);
+
+    expect(message).toContain('2 runs are live');
+    expect(message).toContain('aaaaaaaa');
+    expect(message).toContain('bbbbbbbb');
+    expect(message).toContain('flow-code watch <runId>');
   });
 });

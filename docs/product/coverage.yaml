@@ -128,6 +128,15 @@ changes:
       serves BR-03. Blocked on one open decision recorded in its proposal: how
       the UI receives a workflow it only learns on attaching to a run.
 
+  add-run-state-ownership:
+    br: BR-04
+    note: >-
+      Makes single-writer a checked precondition rather than a property of
+      there being one writer, and splits liveness into live/dead/unknowable so
+      no reader states what it cannot know. Not general hardening — it is the
+      specific prerequisite (task 1.2) that parks add-guest-mode-reporter, and
+      therefore the critical path to the host-agent plugin.
+
   add-guest-mode-reporter:
     br: BR-06
     status: parked

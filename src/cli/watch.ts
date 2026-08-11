@@ -2,7 +2,8 @@ import { existsSync } from 'node:fs';
 import { loadCredentials } from '../engine/credentials.js';
 import { runFilePath } from '../runstate/persist.js';
 import { RunStateStore } from '../runstate/store.js';
-import { emptyRunState, RunStateWatcher } from '../runstate/watch.js';
+import type { RunState } from '../runstate/types.js';
+import { emptyRunState, liveRuns, RunStateWatcher } from '../runstate/watch.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
 import { emptyWorkflow } from '../workflow/load.js';
 import { splashEnabled } from './args.js';
@@ -18,6 +19,20 @@ import { fail, repoRootFromCwd } from './context.js';
  * rehydrates it from `RunState.graph`), so a viewer needs no node ids of its
  * own up front — just the placeholder shape to draw before anything attaches.
  */
+/**
+ * What to say when a viewer is asked to attach to "the" run and there is more
+ * than one. Returns undefined when there is nothing ambiguous to report, so a
+ * caller can treat it as "attach normally".
+ */
+export function ambiguousRunsMessage(live: RunState[]): string | undefined {
+  if (live.length <= 1) return undefined;
+  const lines = live.map((s) => `  ${s.runId.slice(0, 8)}  started ${s.createdAt.slice(0, 19).replace('T', ' ')}`);
+  return (
+    `${live.length} runs are live in this repo — name the one to watch:\n${lines.join('\n')}\n\n` +
+    `  flow-code watch <runId>`
+  );
+}
+
 export async function cmdWatch(args: string[]): Promise<void> {
   const runId = args.find((a) => !a.startsWith('-'));
   const splash = splashEnabled(args, process.env);
@@ -25,6 +40,15 @@ export async function cmdWatch(args: string[]): Promise<void> {
 
   if (runId !== undefined && !existsSync(runFilePath(repoRoot, runId))) {
     fail(`no run \`${runId}\` found in this repo — \`flow-code watch\` with no id follows the newest one.`);
+  }
+
+  // With no id, the watcher follows whichever run is being written — right
+  // when one run is going, arbitrary when two are. Rather than attach to a
+  // run picked by whichever file happened to be touched last, and then appear
+  // to flip between them, name the candidates and let the user say which.
+  if (runId === undefined) {
+    const ambiguous = ambiguousRunsMessage(liveRuns(repoRoot));
+    if (ambiguous) fail(ambiguous);
   }
 
   // No persister is ever attached: this store is a sink for what the watcher

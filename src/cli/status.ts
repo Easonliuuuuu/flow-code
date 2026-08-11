@@ -18,7 +18,8 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { pidAlive } from '../runstate/persist.js';
+import { driverLiveness } from '../runstate/persist.js';
+import { liveRuns } from '../runstate/watch.js';
 import { budgetedTokens, sumTokens, type NodeStatus, type RunState } from '../runstate/types.js';
 import { STATUS_GLYPHS } from '../ui/canvas.js';
 import { columnWidth, fitText } from '../ui/textwrap.js';
@@ -50,7 +51,9 @@ export type SummaryKind =
   | 'finished'
   | 'interrupted'
   /** Unfinished, but the process that was driving it is gone. */
-  | 'undriven';
+  | 'undriven'
+  /** Unfinished, and this machine cannot say whether anything is still driving it. */
+  | 'unverifiable';
 
 export interface SummaryNode {
   id: string;
@@ -78,6 +81,8 @@ export interface RunSummary {
   denials: number;
   tier: EnforcementTier;
   nodes: SummaryNode[];
+  /** Set only when more than one run in the repository is live, so one row is not read as the only run. */
+  liveRuns?: number;
 }
 
 /** Terminal statuses: counted as progress rather than as work outstanding. */
@@ -160,10 +165,16 @@ export function summarize(state: RunState | undefined, now: number = Date.now())
   }
   // Unfinished and nobody is driving it: the last status the file recorded is
   // frozen, not current. Saying "running" here is the one lie that reliably
-  // costs someone ten minutes.
-  if (!pidAlive(state.pid)) {
+  // costs someone ten minutes — and saying it about a run this machine cannot
+  // answer for is the same lie with less excuse, so that case says so instead.
+  const liveness = driverLiveness(state);
+  if (liveness !== 'live') {
     const stalled = focusNode(nodes);
-    return { ...base, kind: 'undriven', ...(stalled ? { node: stalled.id } : {}) };
+    return {
+      ...base,
+      kind: liveness === 'dead' ? 'undriven' : 'unverifiable',
+      ...(stalled ? { node: stalled.id } : {}),
+    };
   }
 
   const focus = focusNode(nodes);
@@ -221,6 +232,7 @@ const KIND_STYLE: Record<SummaryKind, Style> = {
   finished: 'green',
   interrupted: 'yellow',
   undriven: 'red',
+  unverifiable: 'yellow',
 };
 
 function paint(spans: Span[], color: boolean): string {
@@ -263,6 +275,8 @@ export function headlineText(s: RunSummary): string {
       return 'interrupted';
     case 'undriven':
       return s.node ? `${s.node} — driver gone` : 'driver gone';
+    case 'unverifiable':
+      return s.node ? `${s.node} — driver unknown` : 'driver unknown';
     case 'waiting':
       return `${s.node} ${s.detail ?? 'waiting for you'}`;
     case 'error':
@@ -296,6 +310,8 @@ function statusForKind(kind: SummaryKind): NodeStatus {
     case 'error':
     case 'undriven':
       return 'error';
+    case 'unverifiable':
+      return 'waiting';
     case 'finished':
       return 'done';
     case 'interrupted':
@@ -332,6 +348,9 @@ function metaSpans(s: RunSummary): Span[] {
   push(s.tokens === undefined ? 'spend n/a' : `${formatCount(s.tokens)} tok`);
   if (s.budgetPct !== undefined) push(`${s.budgetPct}% budget`, s.budgetPct >= 80 ? 'red' : 'dim');
   if (s.denials > 0) push(`${s.denials} blocked`, 'yellow');
+  // One row cannot name several runs; it can at least refuse to imply it is
+  // describing the only one. `flow-code runs` is where they get named.
+  if (s.liveRuns && s.liveRuns > 1) push(`${s.liveRuns} live runs`, 'yellow');
   // Only worth columns when it is not the tier every run used to have.
   if (s.tier !== 'engine') push(s.tier === 'hooks' ? 'host session' : 'self-reported', 'yellow');
   return parts;
@@ -488,8 +507,18 @@ function readNewestRun(projectRoot: string): RunState | undefined {
 /** Reads the current run for `dir` and summarizes it. Never throws, never writes. */
 export function statusFor(dir: string, now: number = Date.now()): RunSummary {
   const root = findProjectRoot(dir);
-  return summarize(root ? readNewestRun(root) : undefined, now);
+  const summary = summarize(root ? readNewestRun(root) : undefined, now);
+  // Only worth a second look when the run we found is actually moving: that is
+  // the case where reading one row as "the run" would mislead. Everything else
+  // stays at one file read, which is what makes this cheap enough to re-run on
+  // every event of whatever is displaying it.
+  if (!root || !MOVING.has(summary.kind)) return summary;
+  const live = liveRuns(root).length;
+  return live > 1 ? { ...summary, liveRuns: live } : summary;
 }
+
+/** Kinds where another live run in the same repository would change how this row reads. */
+const MOVING: ReadonlySet<SummaryKind> = new Set<SummaryKind>(['waiting', 'running', 'idle']);
 
 const SCRIPT = `#!/usr/bin/env bash
 # flow-code status line. Prints one row describing this repo's current run.

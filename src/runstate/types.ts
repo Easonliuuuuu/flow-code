@@ -267,11 +267,50 @@ export interface RecordedGraph {
   selected?: string;
 }
 
+/**
+ * Who owns a run document — the one process permitted to write it.
+ *
+ * Two identities, because a writer and a reader can establish different
+ * things. `token` is random per store instance and held in memory by the
+ * writer, so comparing it against the document on disk answers "is this still
+ * mine?" exactly. A reader has nothing to compare a token against, so it is
+ * left with `pid` and `host`, which can only ever support an estimate — see
+ * {@link driverLiveness}. Keeping both here is what lets each side claim
+ * precisely as much as it can actually know.
+ */
+export interface RunOwner {
+  /** Owning process on {@link host}. Recyclable, and meaningless without it. */
+  pid: number;
+  /** Machine the owner runs on. A document from elsewhere cannot have its pid checked here. */
+  host: string;
+  /** Random per-writer token. Proves ownership; proves nothing about liveness. */
+  token: string;
+  claimedAt: string;
+}
+
+/** One ownership transfer, recorded so a resumed run is distinguishable from one driven throughout. */
+export interface OwnershipHandover {
+  from: { pid: number; host: string };
+  at: string;
+}
+
 export interface RunState {
   runId: string;
   createdAt: string;
   repoRoot: string;
+  /**
+   * The owning process's pid, kept for run documents written before {@link
+   * RunState.owner} existed and for readers that only ever wanted this. New
+   * code should read `owner`, which says which machine the pid belongs to.
+   */
   pid: number;
+  /**
+   * Optional only so documents written before ownership was recorded still
+   * parse. Their liveness is unknowable, which is the honest answer for them.
+   */
+  owner?: RunOwner;
+  /** Present once a run has changed hands, e.g. through `--resume`. */
+  handovers?: OwnershipHandover[];
   baseline: RunBaseline | null;
   /**
    * The graph this run is executing. Optional only so run documents written

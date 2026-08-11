@@ -170,7 +170,17 @@ flow-code run      # window 1 — drives the workflow
 flow-code watch    # window 2 — same graph, read-only
 ```
 
-`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened, so it can be left open on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run. It never writes: the keys that edit `workflow.yaml` are disabled, and the header reports whether the process driving the run is still alive.
+`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened, so it can be left open on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run. It never writes: the keys that edit `workflow.yaml` are disabled, and the header reports whether the process driving the run is still alive. If two runs are live at once, `watch` names them and asks which — it will not pick one and appear to flip between them.
+
+A run document records which process on which machine owns it, and only that process may write it: a second writer is refused rather than allowed to interleave. That makes the driver's state one of three things, and every reader — `watch`, `runs`, `status`, `doctor` — reports them apart:
+
+| | What it means |
+| --- | --- |
+| **live** | The owning process is running on this machine. |
+| **gone** | The owning process was on this machine and has exited — a crash, or a `kill -9` that skipped the shutdown path. Distinct from a run you interrupted with ctrl+c, which records that it ended and stays resumable. |
+| **unknown** | This machine cannot answer: the run was driven from another machine over a shared checkout, or its document predates ownership being recorded. |
+
+`unknown` is deliberately never rounded to either neighbour. It is why `flow-code doctor` leaves worktrees belonging to an unanswerable run alone rather than reclaiming them — "I can't tell" must not authorize deleting someone else's working tree.
 
 ## Keeping a run in view without a window
 

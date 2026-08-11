@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
   AgentSessionRequest,
@@ -11,10 +11,40 @@ import type {
   SessionRunner,
   TestCommandsRequest,
 } from '../src/engine/types.js';
-import type { DiscussTranscriptEntry } from '../src/runstate/types.js';
+import type { DiscussTranscriptEntry, RunOwner, RunState } from '../src/runstate/types.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { loadWorkflowFromString, type Workflow } from '../src/workflow/load.js';
 import { recordGraph } from '../src/workflow/record.js';
+
+/**
+ * A pid no process can hold — well above every platform's maximum, so a run
+ * stamped with it reads as driven by something that is gone.
+ */
+export const DEAD_PID = 0x7ffffffe;
+
+export function liveOwner(): RunOwner {
+  return { pid: process.pid, host: hostname(), token: 'test-owner', claimedAt: '2026-08-11T12:00:00.000Z' };
+}
+
+export function deadOwner(): RunOwner {
+  return { ...liveOwner(), pid: DEAD_PID };
+}
+
+/** An owner on some other machine: its pid is unanswerable from here. */
+export function foreignOwner(): RunOwner {
+  return { ...liveOwner(), host: `${hostname()}-elsewhere` };
+}
+
+/**
+ * Make an existing run read as abandoned by moving its owner's pid, rather
+ * than by replacing the owner. Replacing it would change the ownership token
+ * too, which is what the persister refuses — the fixture wants a dead driver,
+ * not a second writer.
+ */
+export function markDriverDead<T extends RunState>(state: T): T {
+  if (state.owner) (state.owner as { pid: number }).pid = DEAD_PID;
+  return state;
+}
 
 export function makeTempGitRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'flow-code-test-'));

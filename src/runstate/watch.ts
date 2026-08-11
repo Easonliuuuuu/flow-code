@@ -12,7 +12,7 @@
 
 import { readdirSync, readFileSync, statSync, watch, type FSWatcher } from 'node:fs';
 import { join } from 'node:path';
-import { runFilePath, runsDir } from './persist.js';
+import { driverLiveness, runFilePath, runsDir } from './persist.js';
 import type { NodeRunState, RunState } from './types.js';
 
 /**
@@ -95,24 +95,51 @@ export function latestRunState(repoRoot: string): RunState | undefined {
 }
 
 /**
- * Whether the process that owns this run is still around — the difference
- * between a run that is quietly thinking and one whose driver died.
- *
- * Signal 0 checks for existence without delivering anything; EPERM means the
- * pid exists under another user, which still counts. Two caveats worth
- * knowing: pids get recycled, and a run watched over a shared checkout from
- * another machine has a pid that means nothing locally. It is an indicator,
- * never a guarantee — which is why nothing branches on it beyond what the
- * header says.
+ * Whether the process driving this run is still around — the difference
+ * between a run that is quietly thinking, one whose driver died, and one this
+ * machine cannot answer for at all. Defined in `persist.ts` alongside the
+ * ownership it reads; re-exported here because every viewer reaches for it
+ * through the watch module.
  */
-export function isDriverAlive(state: RunState): boolean {
-  if (state.pid <= 0) return false;
+export { driverLiveness, type DriverLiveness } from './persist.js';
+
+/**
+ * Runs that look live right now, newest-written first.
+ *
+ * Only the `limit` most recently written documents are parsed. A run that is
+ * live but has not been written more recently than `limit` others is possible
+ * in principle and vanishingly rare in practice, and the alternative — parsing
+ * every run a repository has ever recorded — is a cost paid on every refresh
+ * of a status line for an answer that changes about once a day.
+ */
+export function liveRuns(repoRoot: string, limit = 8): RunState[] {
+  let files: string[];
   try {
-    process.kill(state.pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
+    files = readdirSync(runsDir(repoRoot)).filter((f) => f.endsWith('.json'));
+  } catch {
+    return [];
   }
+  const byRecency: Array<{ path: string; mtimeMs: number }> = [];
+  for (const file of files) {
+    const path = join(runsDir(repoRoot), file);
+    try {
+      byRecency.push({ path, mtimeMs: statSync(path).mtimeMs });
+    } catch {
+      // Vanished between readdir and stat: skip it.
+    }
+  }
+  byRecency.sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const live: RunState[] = [];
+  for (const { path } of byRecency.slice(0, limit)) {
+    try {
+      const state = JSON.parse(readFileSync(path, 'utf8')) as RunState;
+      if (state?.nodes && state.finishedAt === undefined && driverLiveness(state) === 'live') live.push(state);
+    } catch {
+      // Unreadable or mid-write: not something to report as live.
+    }
+  }
+  return live;
 }
 
 export interface RunStateWatcherOptions {

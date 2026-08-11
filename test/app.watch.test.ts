@@ -6,7 +6,7 @@ import { App, WATCH_READ_ONLY_MESSAGE, type ModelContext } from '../src/ui/App.j
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { emptyRunState } from '../src/runstate/watch.js';
-import { makeTempGitRepo, workflowFromYaml } from './helpers.js';
+import { makeTempGitRepo, markDriverDead, workflowFromYaml } from './helpers.js';
 
 /**
  * Render tests for spectator mode. What matters here is what the header
@@ -121,7 +121,7 @@ describe('App watch mode', () => {
     const driver = new RunStateStore({ repoRoot: repo, nodeIds: ['impl'] });
     driver.setStatus('impl', 'running');
     // Max pid on Linux is well under this: nothing owns this run any more.
-    store.applySnapshot({ ...driver.snapshot(), pid: 0x7ffffffe });
+    store.applySnapshot(markDriverDead({ ...driver.snapshot() }));
     const { stdout, unmount } = mountWatcher(store);
     await settle();
 
