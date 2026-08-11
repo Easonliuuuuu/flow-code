@@ -81,7 +81,7 @@ _No OpenSpec change serves this yet._
 
 ## M3 — Meet users in the CLI they already use
 
-`░░░░░░░░░░ 1/78` tasks across 2 change(s)
+`████░░░░░░ 29/78` tasks across 2 change(s)
 
 ### BR-06 — An external agent can drive the graph
 
@@ -89,21 +89,19 @@ _No OpenSpec change serves this yet._
 
 | Change | State | Tasks |
 | --- | --- | --- |
-| `add-guest-mode-reporter` | parked | ░░░░░░░░░░ 1/54 |
+| `add-guest-mode-reporter` | active | █████░░░░░ 29/54 |
 | `add-mcp-driver-connector` | parked | ░░░░░░░░░░ 0/24 |
 
 ## Parked
 
 Designed, deliberately not scheduled — recorded so it stays distinguishable from forgotten.
 
-- **`add-guest-mode-reporter`** (BR-06), opened 2026-08-04
-  Blocked on M2 by the proposal's own argument — guest mode adds a second producer of run-state and should not land while driver mode is still settling. Retargeted to a host-agent plugin: the premise that a guest run can carry no harness turned out to be false for a host that exposes a tool-interception point, so enforcement is now recorded as a tier rather than disclosed as absent.
 - **`add-mcp-driver-connector`** (BR-06), opened 2026-08-09
   Blocked on M2, same reasoning as add-guest-mode-reporter — a second entry point into the engine before driver mode is proven under real conditions. No longer the adoption path: a host-session user driving it pays for a nested agent session inheriting none of their configuration. It keeps what only it can do — per-node models, worktree fan-out, unattended runs.
 
 ## Drift
 
-No unregistered drift. 5 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -112,6 +110,8 @@ Known debt, already decided about. Green on purpose — but still debt.
 | Gap | Subject | Tracked by |
 | --- | --- | --- |
 | GAP-01 | scope `watch` | BR-03 |
+| GAP-13 | module `guest` | BR-06 |
+| GAP-14 | scope `guest` | BR-06 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
 | GAP-12 | scope `testbed` | closed — non-issue |
 | GAP-10 | br `BR-01` | inbox |
@@ -119,4 +119,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-11 archived change(s), 366 tasks. 16 modules under `src/`, 13 capability specs.
+11 archived change(s), 366 tasks. 17 modules under `src/`, 13 capability specs.

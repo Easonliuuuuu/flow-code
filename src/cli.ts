@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { cmdConnect } from './cli/connect.js';
 import { cmdDoctor } from './cli/doctor.js';
 import { cmdInit } from './cli/init.js';
+import { cmdMcp } from './cli/mcp.js';
+import { cmdNode } from './cli/node.js';
 import { cmdNodeTypes } from './cli/nodeTypes.js';
 import { cmdRun } from './cli/run.js';
 import { cmdRuns } from './cli/runs.js';
@@ -39,6 +42,13 @@ Usage:
                               every event of whatever displays it. --line emits a single row for
                               embedding in a status bar you already have; --script prints a
                               ready-made one for a host that has none
+  flow-code node <sub> …      Report progress through the graph from an agent flow-code is not
+                              running — open a run, then report each node started/done/failed,
+                              and the graph fills in beside your own session. \`flow-code node\`
+                              on its own lists the subcommands
+  flow-code connect [--check] Install flow-code's reporting surface into this project's agent
+                              configuration (MCP server, workflow skill, instructions section).
+                              --check reports what is installed and whether it is still current
   flow-code validate          Check .flow-code/workflow.yaml without running it — reports every
                               problem it can find, and which checks a failure stopped it reaching
   flow-code node-types        List built-in node types, capabilities, config and output shapes
@@ -59,6 +69,12 @@ async function main(): Promise<void> {
       return cmdWatch(args);
     case 'status':
       return cmdStatus(args);
+    case 'node':
+      return cmdNode(args);
+    case 'connect':
+      return cmdConnect(args);
+    case 'mcp':
+      return cmdMcp();
     case 'validate':
       return cmdValidate();
     case 'node-types':
