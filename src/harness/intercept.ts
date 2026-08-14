@@ -302,6 +302,10 @@ export function decideCall(
       };
     }
     for (const segment of classifyCommand(command)) {
+      // Produces text, touches nothing — see INERT_COMMANDS. Needs no
+      // capability, so a git-only node can still separate its output with
+      // `echo` and write a heredoc commit message.
+      if (segment.kind === 'inert') continue;
       if (segment.kind === 'git-write' && !caps.has('git-write')) {
         return {
           behavior: 'deny',

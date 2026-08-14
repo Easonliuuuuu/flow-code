@@ -12,8 +12,19 @@ export const ALWAYS_DENIED_TOOLS = [...NETWORK_TOOLS] as const;
  * stay recognized rather than trusting whichever is current.
  */
 export const SPAWN_TOOLS = ['Agent', 'Task'] as const;
-/** Harmless bookkeeping the SDK may use regardless of capabilities. */
-export const ALWAYS_ALLOWED_TOOLS = ['TodoWrite'] as const;
+/**
+ * Harmless bookkeeping the SDK may use regardless of capabilities, plus the
+ * host's way of putting a question to the user.
+ *
+ * Asking a person something changes nothing in the repository, so no capability
+ * covers it — and withholding it broke the one node type whose entire job is to
+ * ask. An Approval-Gate has an empty capability set, so a guest agent reaching
+ * a gate had its question tool denied and fell back to asking in prose. That is
+ * the worst available outcome: the gate exists so a person decides, and the
+ * enforcement layer was making the structured ask the one thing an agent
+ * couldn't do.
+ */
+export const ALWAYS_ALLOWED_TOOLS = ['TodoWrite', 'AskUserQuestion'] as const;
 
 export interface CompiledToolPolicy {
   disallowedTools: string[];

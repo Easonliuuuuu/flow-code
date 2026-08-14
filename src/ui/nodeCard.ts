@@ -204,8 +204,19 @@ export function nodeSubtitle(
       return firstLine(state.statusDetail ?? 'waiting for you', width);
     case 'error':
       return firstLine(state.statusDetail ?? 'failed', width);
-    case 'done':
-      return outcomeSummary(node, state.output) ?? plannedSummary(node);
+    case 'done': {
+      const outcome = outcomeSummary(node, state.output) ?? plannedSummary(node);
+      // A finished node normally has nothing left to say but what it produced.
+      // A node that was *blocked* on the way there does: under the `hooks`
+      // tier a denial is the only activity a run records at all, so replacing
+      // it with success text is the canvas hiding the run's only evidence at
+      // the moment someone would go looking for it. The count goes with it,
+      // because "one blocked" and "nine blocked" are different situations.
+      const denials = state.denials ?? 0;
+      if (denials === 0) return outcome;
+      const suffix = ` · ⚠ ${denials} blocked`;
+      return `${firstLine(outcome, Math.max(4, width - suffix.length))}${suffix}`;
+    }
     case 'skipped':
       return firstLine(state.statusDetail ?? 'skipped', width);
     default:
