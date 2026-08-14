@@ -68,7 +68,10 @@ boundary working, not a bug.** Do not route around it, and do not report a step 
 that you were prevented from doing.
 
 Not enforced, because flow-code did not start your session: which model you run on, what
-the session costs, the directory and environment you run in, and routing you back along a
-return path. A run records the `hooks` tier only when the enforcement layer is verified to
-be running; otherwise it records `reported`, and is labelled that way wherever it is
-shown.
+the session costs, the directory and environment you run in, which subagent types you have
+available to delegate to, and routing you back along a return path. A run records the
+`hooks` tier only when the enforcement layer is verified to be running; otherwise it
+records `reported`, and is labelled that way wherever it is shown.
+
+A subagent you spawn is not outside the boundary: its calls are checked against the same
+step's capability set, so a subagent running the review step cannot edit either.

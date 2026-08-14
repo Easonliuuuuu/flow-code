@@ -55,10 +55,10 @@ edges:
   - { from: gate, to: ship }
 `;
 
-function repoWithWorkflow(): string {
+function repoWithWorkflow(yaml: string = YAML): string {
   const repo = makeTempGitRepo();
   mkdirSync(join(repo, '.flow-code'), { recursive: true });
-  writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), YAML);
+  writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), yaml);
   return repo;
 }
 
@@ -79,6 +79,29 @@ describe('when nothing is being enforced', () => {
     expect(
       enforceCall(repo, { toolName: 'mcp__flow-code__start_node', toolInput: {} }).kind,
     ).toBe('not-in-force');
+  });
+
+  // Both spellings observed from a real Claude Code session: the first from a
+  // per-project `.mcp.json` (what `flow-code connect` writes), the second from
+  // the same server installed as a plugin, which namespaces it again. Matching
+  // only the first deadlocked every plugin install on its own first step.
+  it.each([
+    ['per-project server', 'mcp__flow-code__start_node'],
+    ['plugin-namespaced server', 'mcp__plugin_flow-code_flow-code__start_node'],
+  ])('permits reporting tools however the host namespaces them (%s)', async (_label, toolName) => {
+    const repo = repoWithWorkflow();
+    await openGuestRun(repo, { surface: 'mcp' });
+    expect(enforceCall(repo, { toolName, toolInput: {} }).kind).toBe('not-in-force');
+  });
+
+  it('does not exempt another server\'s tools just because they are named alike', async () => {
+    const repo = repoWithWorkflow();
+    await openGuestRun(repo, { surface: 'mcp' });
+    // No step is in progress, so anything not ours must fail closed rather than
+    // ride in on a tool name it happens to share.
+    expect(
+      enforceCall(repo, { toolName: 'mcp__other__start_node', toolInput: {} }).kind,
+    ).toBe('failed');
   });
 
   it('permits everything again once the run is closed', async () => {
@@ -585,6 +608,36 @@ describe('work delegated to a subagent', () => {
     expect(entry.nodeId).toBe('review');
     expect(entry.agentId).toBe('sub-1');
     expect(entry.agentType).toBe('worker');
+  });
+
+  // `start_node` tells the agent to run each step in a fresh subagent, and that
+  // instruction is the only thing keeping Implement and Review out of one
+  // context window. Denying the spawn did not make the run safer — it made the
+  // agent do every step inline, which is the failure the graph exists to stop.
+  it('permits the spawn the instructions ask for, whatever the host calls its agents', async () => {
+    const repo = repoWithWorkflow();
+    const { runId } = await openGuestRun(repo, { surface: 'mcp' });
+    reportTransition(repo, runId, { nodeId: 'implement', kind: 'start' });
+
+    const spawn = hookOutput(repo, {
+      tool_name: 'Agent',
+      // A host's own agent type, which flow-code has no say in and cannot list.
+      tool_input: { subagent_type: 'general-purpose', prompt: 'the brief' },
+    });
+    expect(spawn.permissionDecision).toBeUndefined();
+  });
+
+  it('still refuses to delegate when the workflow turned subagents off', async () => {
+    const repo = repoWithWorkflow(`settings:\n  subagents: false\n${YAML}`);
+    const { runId } = await openGuestRun(repo, { surface: 'mcp' });
+    reportTransition(repo, runId, { nodeId: 'implement', kind: 'start' });
+
+    const spawn = hookOutput(repo, {
+      tool_name: 'Agent',
+      tool_input: { subagent_type: 'general-purpose', prompt: 'the brief' },
+    });
+    expect(spawn.permissionDecision).toBe('deny');
+    expect(spawn.permissionDecisionReason).toContain('subagents are disabled');
   });
 });
 

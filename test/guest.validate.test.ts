@@ -144,6 +144,20 @@ describe('reported output', () => {
     expect(reason).toContain('changedFiles');
   });
 
+  // Observed: an agent sent its output as JSON text four times running, each
+  // time reading "does not match the output shape" as a content problem and
+  // changing the content. The encoding is a different mistake and has to be
+  // named as one, or the reporter has no way to find the fix.
+  it('names double-encoding as such, rather than as a shape mismatch', () => {
+    const reason = reasonFor(ready, {
+      nodeId: 'implement',
+      kind: 'done',
+      output: JSON.stringify({ changedFiles: ['src/a.ts'], diff: '@@' }),
+    });
+    expect(reason).toContain('arrived as a string');
+    expect(reason).not.toContain('output shape');
+  });
+
   it('is accepted, parsed, when it matches', () => {
     const result = validateTransition(workflow, ready, {
       nodeId: 'implement',

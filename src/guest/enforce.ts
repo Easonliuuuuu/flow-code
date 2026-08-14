@@ -93,6 +93,9 @@ export function enforcementLive(repoRoot: string, now = Date.now()): boolean {
   }
 }
 
+/** The MCP server name this project registers, under every install path. */
+const SERVER_NAME = 'flow-code';
+
 /**
  * flow-code's own reporting tools, which enforcement must never block.
  *
@@ -100,9 +103,30 @@ export function enforcementLive(repoRoot: string, now = Date.now()): boolean {
  * envelope is defined by the current node, and the only way to have a current
  * node is to report one started. An enforcement layer that can stop the run
  * from advancing is one that eventually has to be turned off.
+ *
+ * **The host decides how these are named, and not every host names them the
+ * same way.** A server registered per-project is `mcp__flow-code__start_node`,
+ * but the same server installed as a Claude Code plugin is namespaced by the
+ * plugin too — `mcp__plugin_flow-code_flow-code__start_node`. Matching one
+ * spelling meant the plugin install deadlocked on its own first step while the
+ * `connect` install worked, which is the worst shape this bug could take: the
+ * enforcement layer was doing its job, and the only tools that could have
+ * released it were the ones being blocked.
+ *
+ * So the server segment is matched rather than the whole prefix, at its end, so
+ * any namespace a host wraps around it still resolves. Deliberately *not*
+ * matched on the tool name: a tool added to this server later must not have to
+ * be listed here to avoid re-creating the deadlock. The cost is that another
+ * MCP server whose name ends in `flow-code` would also be exempt from the
+ * envelope — a narrower hole than a run that cannot start.
  */
 export function isReportingTool(toolName: string): boolean {
-  return toolName.startsWith('mcp__flow-code__');
+  if (!toolName.startsWith('mcp__')) return false;
+  const boundary = toolName.lastIndexOf('__');
+  // No second separator: `mcp__something` names no tool, so it is not ours.
+  if (boundary < 'mcp__'.length) return false;
+  const namespace = toolName.slice('mcp__'.length, boundary);
+  return namespace === SERVER_NAME || namespace.endsWith(`_${SERVER_NAME}`);
 }
 
 /**
@@ -235,7 +259,19 @@ export function enforceCall(repoRoot: string, input: EnforceInput): EnforcementO
 
   const gate = blockingGate(workflow, state, nodeId);
   const capabilities = capabilitiesForNode(node);
-  const decision = decideCall({ capabilities, workingDir: repoRoot }, input.toolName, input.toolInput);
+  // `settings.subagents` still decides *whether* a step may delegate; what
+  // changes under a host session is only *which* types it may delegate to,
+  // which is not flow-code's to say here. A subagent's own calls arrive back
+  // at this same hook, so the envelope holds either way.
+  const decision = decideCall(
+    {
+      capabilities,
+      workingDir: repoRoot,
+      ...(workflow.settings.subagents === false ? {} : { subagentTypes: 'host' as const }),
+    },
+    input.toolName,
+    input.toolInput,
+  );
 
   // A gate above this node that nobody has approved withdraws exactly one
   // thing: the ability to mutate the repository. Applied by classifying the

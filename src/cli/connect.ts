@@ -251,7 +251,8 @@ const WHAT_YOU_GET =
   '  While a step is in progress, tool calls outside that step\'s capability set are denied, and\n' +
   '  git writes stay blocked behind an unapproved approval gate.\n\n' +
   '  Still not in force, because flow-code did not start your session: process-level guards\n' +
-  '  (working directory, environment, push url), per-node model selection, token accounting, and\n' +
+  '  (working directory, environment, push url), per-node model selection, which subagent types\n' +
+  '  are available, token accounting, and\n' +
   '  automatic loop-back routing. A run records the `hooks` tier only when the hook is verified\n' +
   '  to be running; otherwise it records `reported` and says so.';
 
