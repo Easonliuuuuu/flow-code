@@ -16,6 +16,7 @@ import {
   installedSection,
   instructionsSection,
   instructionState,
+  nodeBrief,
   spliceSection,
 } from '../src/guest/instructions.js';
 import { makeTempGitRepo, workflowFromYaml } from './helpers.js';
@@ -237,6 +238,37 @@ describe('flow-code connect', () => {
     const out = await connect(dir, ['--check']);
     expect(out).toContain('stale');
     expect(out).toContain('added: review');
+  });
+
+  it('hands a step the outputs of the steps above it', () => {
+    // The failure this prevents: a Review subagent gets a brief, has `read`
+    // only, and so can neither be given the diff nor go and fetch it. The
+    // engine avoids this by serializing upstream outputs into node context;
+    // a brief is where a guest run does the same.
+    const brief = nodeBrief(workflow, 'check', {
+      discuss: { conclusion: 'build the thing', constraints: [] },
+      implement: { changedFiles: ['src/a.ts'], diff: '@@ -1 +1 @@' },
+    })!;
+
+    expect(brief).toContain('## Upstream context');
+    expect(brief).toContain('`implement`');
+    expect(brief).toContain('@@ -1 +1 @@');
+    // Only what it directly depends on: `discuss` is upstream of `implement`,
+    // not of `check`, and carrying the whole ancestry would bury the diff.
+    expect(brief).not.toContain('build the thing');
+  });
+
+  it('truncates a large upstream output rather than dropping it', () => {
+    const brief = nodeBrief(workflow, 'check', {
+      implement: { changedFiles: [], diff: 'x'.repeat(20_000) },
+    })!;
+
+    expect(brief).toContain('[truncated');
+    expect(brief.length).toBeLessThan(10_000);
+  });
+
+  it('says nothing about upstream context when there is none to give', () => {
+    expect(nodeBrief(workflow, 'implement', {})).not.toContain('Upstream context');
   });
 
   it('reports the same surfaces `inspect` reports, from the workflow alone', () => {

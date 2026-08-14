@@ -129,7 +129,15 @@ function briefFor(repoRoot: string, run: string | undefined, nodeId: string): st
   try {
     const state = resolveRun(repoRoot, run);
     if (!state.graph) return undefined;
-    return nodeBrief(rehydrateGraph(state.graph, { repoRoot }), nodeId);
+    // What the steps above already reported, so a delegated step is handed the
+    // work it is meant to act on rather than having to go and find it — which
+    // its capability set may well forbid.
+    const outputs = Object.fromEntries(
+      Object.entries(state.nodes)
+        .filter(([, node]) => node.output !== undefined)
+        .map(([id, node]) => [id, node.output]),
+    );
+    return nodeBrief(rehydrateGraph(state.graph, { repoRoot }), nodeId, outputs);
   } catch {
     // A brief is an aid, never a precondition: failing to build one must not
     // turn a successful transition into an error.

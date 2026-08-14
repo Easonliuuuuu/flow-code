@@ -7,7 +7,7 @@
  * pushurl block underneath is the defense in depth.
  */
 
-export type SegmentKind = 'non-git' | 'git-read' | 'git-write';
+export type SegmentKind = 'non-git' | 'git-read' | 'git-write' | 'inert';
 
 export interface CommandSegment {
   text: string;
@@ -146,6 +146,8 @@ export function splitSegments(command: string): string[] {
   const segments: string[] = [];
   let current = '';
   let quote: "'" | '"' | null = null;
+  /** Delimiter of a heredoc whose body is still to come, if any. */
+  let heredoc: string | null = null;
 
   const push = () => {
     const t = current.trim();
@@ -155,6 +157,44 @@ export function splitSegments(command: string): string[] {
 
   for (let i = 0; i < command.length; i++) {
     const ch = command[i]!;
+
+    // A heredoc body is data, not commands. Without this its lines are split
+    // on newlines like anything else and classified as commands, so
+    // `git commit -m "$(cat <<'EOF' … EOF)"` — the standard way to write a
+    // multi-line commit message — is judged on the prose inside it.
+    if (heredoc !== null) {
+      if (ch !== '\n') continue;
+      let j = i + 1;
+      let line = '';
+      while (j < command.length && command[j] !== '\n') line += command[j++];
+      if (line.trim() === heredoc) {
+        heredoc = null;
+        i = j;
+      } else {
+        i = j - 1;
+      }
+      continue;
+    }
+    if (quote === null && ch === '<' && command[i + 1] === '<') {
+      let j = i + 2;
+      if (command[j] === '-') j++;
+      let delimiter = '';
+      let delimiterQuote: "'" | '"' | null = null;
+      while (j < command.length && !/\s/.test(command[j]!)) {
+        const d = command[j]!;
+        if (delimiterQuote === null && (d === "'" || d === '"')) delimiterQuote = d;
+        else if (d === delimiterQuote) delimiterQuote = null;
+        else delimiter += d;
+        j++;
+      }
+      if (delimiter.length > 0) {
+        current += command.slice(i, j);
+        heredoc = delimiter;
+        i = j - 1;
+        continue;
+      }
+    }
+
     if (quote === "'") {
       if (ch === "'") quote = null;
       current += ch;
@@ -211,6 +251,38 @@ export function splitSegments(command: string): string[] {
 const WRAPPERS = new Set(['env', 'command', 'nohup', 'time']);
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash']);
 
+/**
+ * Commands that produce text and touch nothing.
+ *
+ * These exist because a node with git access but no `exec` could not write a
+ * conventional commit message: `git status && echo --- && git diff` was denied
+ * whole for the `echo`, and the heredoc idiom for a multi-line message is
+ * `cat`. Denying those does not withhold a capability from anyone — it only
+ * forces the same work into a shape the classifier happens to read — so they
+ * are judged by what they actually do.
+ *
+ * `cat` qualifies only with no file operands: `cat <<EOF` is inline text, while
+ * `cat /etc/passwd` is a read of the filesystem and stays outside.
+ */
+const INERT_COMMANDS = new Set(['echo', 'printf', 'true', 'false', ':']);
+
+/**
+ * Whether a segment only produces text.
+ *
+ * Redirection disqualifies it outright: `echo x > ~/.bashrc` is a write, and
+ * the point of this set is commands that cannot change anything. Heredoc `<<`
+ * is not redirection *out*, so it stays allowed.
+ */
+function isInert(words: string[], segment: string): boolean {
+  const cmd = words[0];
+  if (cmd === undefined) return false;
+  if (/(^|[^<>])>/.test(segment)) return false;
+  if (INERT_COMMANDS.has(cmd)) return true;
+  if (cmd !== 'cat') return false;
+  // Operands beyond flags mean it is reading a path, not a heredoc.
+  return words.slice(1).every((w) => w.startsWith('-') || w.startsWith('<<'));
+}
+
 function classifySegment(segment: string): CommandSegment[] {
   const words = tokenize(segment);
   let i = 0;
@@ -233,6 +305,8 @@ function classifySegment(segment: string): CommandSegment[] {
   }
   const cmd = words[i];
   if (cmd === undefined) return [{ text: segment, kind: 'non-git' }];
+
+  if (isInert(words.slice(i), segment)) return [{ text: segment, kind: 'inert' }];
 
   // Recurse into `sh -c '<command>'`.
   if (SHELLS.has(cmd)) {

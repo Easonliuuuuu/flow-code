@@ -136,6 +136,26 @@ describe('nodeSubtitle', () => {
     expect(nodeSubtitle(node('impl'), state({}), [], 0)).toBe('Add a token meter to the run UI');
   });
 
+  it('keeps a blocked count on the card after the node finishes', () => {
+    // Under the `hooks` tier a denial is the only activity a run records, so a
+    // finished node that swaps it for success text hides the run's sole
+    // evidence exactly when someone goes looking for it.
+    const subtitle = nodeSubtitle(
+      node('impl'),
+      state({ status: 'done', output: { changedFiles: ['a.ts'] }, denials: 4 }),
+      [],
+      0,
+    );
+    expect(subtitle).toContain('1 file changed');
+    expect(subtitle).toContain('4 blocked');
+  });
+
+  it('says nothing about blocking on a node that was never blocked', () => {
+    expect(
+      nodeSubtitle(node('impl'), state({ status: 'done', output: { changedFiles: ['a.ts'] } }), [], 0),
+    ).toBe('1 file changed');
+  });
+
   it('shows the failure reason on an error', () => {
     expect(nodeSubtitle(node('impl'), state({ status: 'error', statusDetail: 'boom' }), [], 0)).toBe(
       'boom',

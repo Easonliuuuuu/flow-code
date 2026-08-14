@@ -184,13 +184,37 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
  * delegating each node to a subagent, and a subagent needs the node's role
  * prompt and config, not a pointer to them.
  */
-export function nodeBrief(workflow: Workflow, nodeId: string): string | undefined {
+export function nodeBrief(
+  workflow: Workflow,
+  nodeId: string,
+  /**
+   * What the steps above this one reported, keyed by node id.
+   *
+   * Without this a delegated step arrives with nothing to work from. A Review
+   * subagent is the case that proves it: its capability set is `read`, so it
+   * cannot run `git diff`, and the diff it is supposed to review lives in
+   * Implement's recorded output — which only the parent conversation had. The
+   * engine never has this problem because it serializes upstream outputs into
+   * every node's context (`executors/helpers.ts`, `upstreamPreamble`); this is
+   * the same idea for a run the engine is not driving.
+   */
+  outputs: Readonly<Record<string, unknown>> = {},
+): string | undefined {
   const node = workflow.nodes.find((n) => n.id === nodeId);
   if (!node) return undefined;
   const config = node.config as Record<string, unknown> | undefined;
   const instructions = typeof config?.['instructions'] === 'string' ? config['instructions'] : undefined;
   const topic = typeof config?.['topic'] === 'string' ? config['topic'] : undefined;
   const commands = Array.isArray(config?.['commands']) ? (config['commands'] as unknown[]) : undefined;
+
+  const upstream = workflow.graph
+    .directDependencies(nodeId)
+    .flatMap((id) => {
+      const output = outputs[id];
+      if (output === undefined) return [];
+      const type = workflow.nodes.find((n) => n.id === id)?.type.id ?? 'unknown';
+      return [`### Output of upstream step \`${id}\` (${type})\n${serializeOutput(output)}`];
+    });
 
   return [
     `You are the \`${node.id}\` step (${node.type.displayName}) of this project's flow-code graph.`,
@@ -199,12 +223,30 @@ export function nodeBrief(workflow: Workflow, nodeId: string): string | undefine
     ...(instructions ? ['', `This project's instructions for this step: ${instructions}`] : []),
     ...(topic ? ['', `Topic: ${topic}`] : []),
     ...(commands ? ['', `Commands to run: ${commands.map((c) => `\`${String(c)}\``).join(', ')}`] : []),
+    ...(upstream.length > 0 ? ['', '## Upstream context', '', upstream.join('\n\n')] : []),
     '',
     `When you finish, report: \`${node.type.outputSummary}\`.`,
     '',
     'Your tool calls are checked against this step\'s capability set while it is the step in',
     'progress. A denial is the boundary working — do not try to route around it.',
   ].join('\n');
+}
+
+/** Longest upstream output carried into a brief before it is cut. */
+const MAX_OUTPUT_CHARS = 6000;
+
+/**
+ * One upstream output as text a brief can carry.
+ *
+ * Truncated rather than omitted when it is large: a diff that is too long to
+ * paste whole is exactly the case where the reviewer most needs to see its
+ * beginning, and the marker tells them the rest exists.
+ */
+function serializeOutput(output: unknown): string {
+  const json = JSON.stringify(output, null, 2) ?? String(output);
+  return json.length <= MAX_OUTPUT_CHARS
+    ? json
+    : `${json.slice(0, MAX_OUTPUT_CHARS)}\n… [truncated — ${json.length - MAX_OUTPUT_CHARS} more characters]`;
 }
 
 /** The instructions as a Claude Code skill document. */

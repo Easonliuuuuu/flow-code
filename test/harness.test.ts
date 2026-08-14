@@ -54,13 +54,43 @@ describe('git command classification', () => {
 
   it('classifies non-git commands as non-git', () => {
     expect(kindsOf('npm test')).toEqual(['non-git']);
-    expect(kindsOf('echo hello')).toEqual(['non-git']);
+    // `echo` produces text and touches nothing — see the inert cases below.
+    expect(kindsOf('echo hello')).toEqual(['inert']);
   });
 
   it('finds git-write inside compound commands', () => {
-    expect(kindsOf('echo done && git push origin main')).toEqual(['non-git', 'git-write']);
+    expect(kindsOf('echo done && git push origin main')).toEqual(['inert', 'git-write']);
     expect(kindsOf('npm test; git commit -m x')).toEqual(['non-git', 'git-write']);
     expect(kindsOf('git log | head')).toEqual(['git-read', 'non-git']);
+  });
+
+  // A git-only node could not write a conventional commit message: the heredoc
+  // idiom is `cat`, and separating output with `echo` denied the whole
+  // compound. Neither restriction withheld a capability — they only forced the
+  // same work into a shape the classifier happened to read.
+  describe('commands that produce text and touch nothing', () => {
+    it('treats them as inert, whatever they are mixed with', () => {
+      expect(kindsOf('git status && echo --- && git diff')).toEqual(['git-read', 'inert', 'git-read']);
+      expect(kindsOf('printf "%s" done')).toEqual(['inert']);
+      expect(kindsOf('true && git status')).toEqual(['inert', 'git-read']);
+    });
+
+    it('reads a heredoc as data rather than as commands', () => {
+      // Without this the body's lines are split on newlines and classified as
+      // commands, so a commit message is judged on the prose inside it.
+      expect(kindsOf("git commit -m \"$(cat <<'EOF'\nfix: thing\n\nrm -rf whatever\nEOF\n)\"")).toEqual([
+        'inert',
+        'git-write',
+      ]);
+    });
+
+    it('still refuses a redirection, a file read, or a real command hiding in one', () => {
+      // Each of these would change or disclose something, so none of them is
+      // inert however harmless the first word looks.
+      expect(kindsOf('echo pwned > ~/.bashrc')).toEqual(['non-git']);
+      expect(kindsOf('cat /etc/passwd')).toEqual(['non-git']);
+      expect(kindsOf('echo $(rm -rf /tmp/x)')).toEqual(['non-git', 'inert']);
+    });
   });
 
   it('finds git-write inside command substitution and sh -c', () => {
@@ -321,6 +351,20 @@ describe('subagent registry', () => {
     expect(decision.behavior).toBe('deny');
     const denied = store.activityFor('n1').filter((e) => e.decision === 'denied');
     expect(denied[0]!.missingCapability).toBe('subagents');
+  });
+
+  it('lets a node ask the user something, whatever its capabilities are', () => {
+    // An Approval-Gate has no capabilities at all, and asking is the only thing
+    // it is for. Denying the question tool left a guest agent asking in prose —
+    // making the structured ask the one thing it could not do at a gate.
+    for (const type of ['approval-gate', 'review', 'implement'] as const) {
+      const { interceptor } = harnessFor(type);
+      expect(interceptor.check('AskUserQuestion', { questions: [] }).behavior, type).toBe('allow');
+    }
+    // Still nothing else: asking is permitted because it changes nothing, not
+    // because a gate is unguarded.
+    const { interceptor } = harnessFor('approval-gate');
+    expect(interceptor.check('Write', { file_path: 'a', content: 'x' }).behavior).toBe('deny');
   });
 
   it('never offers a subagent a tool its parent node lacks', () => {
