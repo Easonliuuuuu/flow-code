@@ -1,17 +1,18 @@
 ---
 name: testbed
-description: Generate a clean throwaway repo for driving the flow-code TUI by hand, and print how to run it. Use after changing anything in src/ui — canvas, panels, mouse, layout, zoom, splash, or the init/run flow — when the change needs to be looked at rather than asserted on.
+description: Generate a clean throwaway repo for driving flow-code by hand, and print how to run it. Use after changing anything in src/ui — canvas, panels, mouse, layout, zoom, splash, or the init/run flow — or anything in src/guest or plugin/, when the change needs to be looked at rather than asserted on.
 license: MIT
 metadata:
   author: local
-  version: "2.0"
+  version: "2.1"
 ---
 
 Ask which mode to generate, rebuild `dist/`, generate a disposable git repo
-matching that mode, and tell the user how to launch the TUI against it.
+matching that mode, and tell the user how to launch flow-code against it.
 
-**Input**: optionally a mode (`ui`, `splash`, `clean`), a shape (`wide`,
-`tall`, `tiny`, `ui` mode only), and/or a destination path, given as free text
+**Input**: optionally a mode (`ui`, `splash`, `clean`, `guest`), a shape
+(`wide`, `tall`, `tiny`, `ui` mode only), an install path (`connect`,
+`plugin`, `guest` mode only), and/or a destination path, given as free text
 after `/testbed`. Use whatever's given to skip the matching question below;
 ask for anything that's missing.
 
@@ -22,8 +23,10 @@ ask for anything that's missing.
 `src/ui` is judged by looking at it. Unit tests pin geometry and end-to-end
 render tests pin frames, but neither catches "the cards jump when I close the
 panel" — that needs a real terminal and a graph big enough to have somewhere
-to jump to. The three modes exist because "look at it" means different things
-depending on what changed:
+to jump to. `src/guest` has the same problem for a different reason: its
+subject is a *host agent* nobody here controls, so the only honest test of it
+is a real session on the other side of the boundary. The four modes exist
+because "look at it" means different things depending on what changed:
 
 - **`ui`** — the graph itself: canvas, panels, mouse, layout, zoom. Backed by
   `flow-code watch`, which draws a whole graph from `workflow.yaml` with every
@@ -31,8 +34,15 @@ depending on what changed:
   needs a git repo with a workflow in it.
 - **`splash`** — the startup animation, decoupled from graph content.
 - **`clean`** — the first-run experience: `flow-code init`'s preset picker and
-  provider wizard, then a real `flow-code run`. This is the only mode that
-  calls a real provider and costs real API usage — everything else is free.
+  provider wizard, then a real `flow-code run`.
+- **`guest`** — the outside-agent path: the MCP reporting tools, the generated
+  instructions, the PreToolUse enforcement hook, the tier the run records, and
+  reconciliation. Nothing in this mode is driven from here — a real Claude Code
+  session walks the graph and reports it, and `flow-code watch` attaches to a
+  run it did not start.
+
+`clean` and `guest` are the two modes that call a real provider and cost real
+API usage; `ui` and `splash` are free.
 
 ---
 
@@ -45,16 +55,27 @@ depending on what changed:
    - **splash** — "Just watch the startup animation."
    - **clean** — "Bare repo — I'll run `init` and `run` myself. Calls a real
      provider."
+   - **guest** — "Drive the graph from my own Claude session — MCP tools,
+     hook enforcement, tier. Calls a real provider."
 
-   If `ui` was picked (by the question or by the input) and no shape was
-   given, ask a second `AskUserQuestion` for the shape, using the table below
-   as the option descriptions. Skip this question entirely for `splash` and
-   `clean` — `splash` is always `tiny` internally, and `clean` has no shape.
+   Then ask one follow-up question, depending on what was picked:
+
+   - `ui` — the **shape**, using the table below as the option descriptions.
+   - `guest` — the **install path**, unless the input already named one:
+     - **connect** — "`flow-code connect` writes `.mcp.json`, the skill, the
+       instructions section, and the hook into the testbed. Works from this
+       checkout as-is."
+     - **plugin** — "Install `plugin/` as a Claude Code plugin. Needs a PATH
+       shim, which the script generates. Tests the manifest and `hooks.json`
+       themselves."
+
+   `splash` and `clean` get no follow-up — `splash` is always `tiny`
+   internally, and `clean` has no shape.
 
 2. **Run the generator.**
 
    ```bash
-   .claude/skills/testbed/make-testbed.sh --mode MODE [--shape SHAPE] [--dest PATH] [--no-build]
+   .claude/skills/testbed/make-testbed.sh --mode MODE [--shape SHAPE] [--install PATH] [--dest PATH] [--no-build]
    ```
 
    It rebuilds `dist/` (skip with `--no-build`), deletes and recreates the
@@ -67,9 +88,10 @@ depending on what changed:
    it by deleting anything yourself.
 
 3. **Relay the launch command(s)**, verbatim from the script's output. The
-   user runs the TUI themselves: it needs a real TTY, and Ink dies with "Raw
+   user runs them themselves: the TUI needs a real TTY, and Ink dies with "Raw
    mode is not supported" under a captured shell, so don't try to run it and
-   don't report that error as a bug.
+   don't report that error as a bug. In `guest` mode the second terminal is a
+   real Claude Code session — likewise the user's to start, never yours.
 
 4. **Give a checklist** matching the mode — see below. Two or three specific
    things beat a wall of table rows.
@@ -122,6 +144,34 @@ Mention this gotcha once per conversation: `run` in this mode is a real
 agent call against a real provider — it costs actual API usage, unlike `ui`
 and `splash`.
 
+### `guest` mode
+
+Start `watch` first, then the agent session, so the run appears under a
+viewer that was already attached. Choose two or three:
+
+- The graph fills in *while* the agent works, not in one burst at the end —
+  a run only visible after it finished is the failure this surface exists to
+  prevent.
+- The tier badge reads `hooks`, not `reported`. `reported` here means the
+  enforcement layer never verified, which is a bug in `connect`/the plugin,
+  not in the agent.
+- Ask the agent to edit a file during the `review` step: the hook must deny
+  it. A denial is the boundary working — check it is *reported* as one and
+  doesn't get routed around.
+- Ask it to commit before the gate is decided: git writes stay blocked until
+  `decide_gate` records an approval, and the gate must reach the user rather
+  than being answered by the agent.
+- Make the `unit` step fail (break the test first): the guest has to walk the
+  loop-back to `implement` itself, since nothing routes it.
+- `flow-code node --help` and `flow-code connect --check` from inside the
+  testbed: the CLI reporting path and the install report on the same run.
+
+Mention this gotcha once per conversation: the plugin install path only works
+with the shim on `PATH`, because `plugin/.claude-plugin/plugin.json` launches
+a bare `flow-code` for both the MCP server and the hook. Without it the
+session starts fine, reports nothing, and records `reported` — a working-
+looking install with no enforcement behind it.
+
 Several terminals (iTerm2, GNOME Terminal, Windows Terminal) bind ctrl+wheel
 to their own font zoom and never forward it, which affects `ui` mode; `z` and
 `o` do the same job if nothing happens.
@@ -140,6 +190,21 @@ Add a shape by extending the `case "$SHAPE"` block in `make-testbed.sh` and
 the table above. Keep each one justified by something it makes visible that
 the others don't.
 
+`guest` mode has one fixed graph instead of shapes: five nodes covering every
+enforcement-relevant kind (edit, exec-only, read-only, a zero-capability gate,
+git-write) plus one loop-back, short enough for an agent to walk in a single
+session. Passing `--shape` there is an error rather than a no-op.
+
+## Install paths (`guest` mode only)
+
+| install | what it does | what it tests that the other doesn't |
+| --- | --- | --- |
+| `connect` (default) | Runs `flow-code connect` in the testbed: `.mcp.json`, `.claude/skills/flow-code-workflow/SKILL.md`, an `AGENTS.md` section, and the `.claude/settings.json` hook. | The generated per-project instructions and their drift reporting. Works from a checkout with no PATH setup. |
+| `plugin` | Writes a `bin/flow-code` shim and prints the `/plugin marketplace add` and `/plugin install` lines, plus the `PATH=` prefix they need. | `plugin/.claude-plugin/plugin.json` and `plugin/hooks/hooks.json` themselves — the no-per-project-step path real users get. |
+
+Both land on the same tool surface. If they behave differently, that
+difference is the finding.
+
 ## Guardrails
 
 - Never `rm -rf` a destination yourself — that is the script's job, and the
@@ -147,5 +212,10 @@ the others don't.
 - Don't launch the TUI from a tool call; it needs a TTY the harness can't give.
 - Don't add the testbed path to the repo's `.gitignore` or commit it. It lives
   outside the repo on purpose.
-- `clean` mode's `run` step costs real API usage — never run it yourself on
-  the user's behalf; only relay the command for them to run.
+- `clean` mode's `run` step and `guest` mode's agent session both cost real
+  API usage — never run either yourself on the user's behalf; only relay the
+  commands for them to run.
+- In `guest` mode, don't walk the graph from this conversation. The point is a
+  separate session on the other side of the boundary; driving it from here
+  tests nothing, because the tools and the hook would be reaching the wrong
+  session.
