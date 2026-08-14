@@ -37,8 +37,18 @@ export interface PolicyContext {
   /**
    * Subagent types this node may spawn. Absent or empty refuses every spawn,
    * which is what `settings.subagents: false` compiles to — no special case.
+   *
+   * `'host'` is the third state, and it means flow-code did not start this
+   * session so it does not get to choose the types: the host's own are the
+   * only ones there are. The spawn is permitted and the type is not checked.
+   * That is not a hole, by the same argument the engine already relies on —
+   * every call the subagent makes comes back through this policy against this
+   * same capability set — and the alternative was worse than a hole: a guest
+   * agent is told by `start_node` to run each step in a fresh subagent, and
+   * denying that left it collapsing every step into one conversation, which is
+   * exactly the reviewer-is-author failure the graph exists to prevent.
    */
-  subagentTypes?: ReadonlySet<string>;
+  subagentTypes?: ReadonlySet<string> | 'host';
   /**
    * Claims a concurrency slot for a spawn, or returns false when the run's cap
    * is spent. Never waits: see `SubagentScope`.
@@ -174,7 +184,11 @@ export function decideCall(
 ): CallDecision {
   const { capabilities: caps, workingDir } = ctx;
   const bashAvailable = caps.has('exec') || caps.has('git-read') || caps.has('git-write');
-  const subagentTypes = ctx.subagentTypes ?? new Set<string>();
+  const hostChoosesSubagents = ctx.subagentTypes === 'host';
+  const subagentTypes: ReadonlySet<string> =
+    ctx.subagentTypes === undefined || ctx.subagentTypes === 'host'
+      ? new Set<string>()
+      : ctx.subagentTypes;
 
   /**
    * A spawn is judged on *which* agent type it names, never on what that agent
@@ -182,6 +196,10 @@ export function decideCall(
    * same check, against this same capability set.
    */
   function decideSpawn(): CallDecision {
+    // The host's types are the host's business — see `subagentTypes: 'host'`.
+    // The slot check below still does not apply: the run has no session pool to
+    // account against when flow-code did not start the sessions.
+    if (hostChoosesSubagents) return { behavior: 'allow' };
     if (subagentTypes.size === 0) {
       return {
         behavior: 'deny',

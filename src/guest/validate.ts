@@ -237,6 +237,17 @@ function validateDone(node: WorkflowNode, current: NodeRunState, output: unknown
       `node \`${node.id}\` cannot complete from \`${current.status}\` — report it started first`,
     );
   }
+  // A double-encoded output is a different mistake from a wrong one, and
+  // naming it as a shape problem sends the reporter off editing content that
+  // was never the issue. Checked before the schema so the message can say the
+  // one thing that fixes it.
+  if (typeof output === 'string') {
+    return reject(
+      `output for \`${node.id}\` arrived as a string. Send the object itself, not JSON text — ` +
+        'the CLI takes `--output <json>` and parses it for you, but every other surface takes the ' +
+        'object.',
+    );
+  }
   const parsed = node.type.outputSchema.safeParse(output);
   if (!parsed.success) {
     const problems = parsed.error.issues

@@ -254,9 +254,21 @@ export function buildMcpServer(repoRoot: string): McpServer {
         'declared shape and rejected by field name if it does not match.',
       inputSchema: {
         node: z.string().describe('Node id from the workflow graph.'),
+        // Declared as an object rather than `unknown`, which is what this was.
+        // `unknown` advertises no type at all, and an agent given no type sends
+        // a JSON *string* — a guess the CLI surface actively encourages, since
+        // `flow-code node done --output <json>` takes JSON text and parses it.
+        // The rejection that followed named the output shape, so the agent read
+        // it as a content problem and retried the same encoding with different
+        // content until it gave up. Every node type's output schema is an
+        // object, so requiring one here excludes nothing and lets the host
+        // reject the string before it ever reaches validation.
         output: z
-          .unknown()
-          .describe("The node's output, matching its type's output shape."),
+          .record(z.string(), z.unknown())
+          .describe(
+            "The node's output as an object, matching its type's output shape. " +
+              'Not a JSON string — send the object itself.',
+          ),
         ...runArg,
       },
     },

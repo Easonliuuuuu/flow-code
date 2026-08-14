@@ -126,8 +126,9 @@ function whatThisIsSection(enforced: boolean): string[] {
     'were prevented from doing.',
     '',
     'What is *not* enforced, because flow-code did not start your session: which model you run on,',
-    'what your session costs, the directory and environment you run in, and routing you back along',
-    'a return path. Those remain yours to get right.',
+    'what your session costs, the directory and environment you run in, which subagent types you',
+    'delegate to, and routing you back along a return path. Those remain yours to get right. A',
+    'subagent you spawn is still held to the step\'s capability set — its calls arrive here too.',
   ];
 }
 
