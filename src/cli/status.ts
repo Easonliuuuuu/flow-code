@@ -529,14 +529,23 @@ export function statusFor(dir: string, now: number = Date.now()): RunSummary {
 /** Kinds where another live run in the same repository would change how this row reads. */
 const MOVING: ReadonlySet<SummaryKind> = new Set<SummaryKind>(['waiting', 'running', 'idle']);
 
-const SCRIPT = `#!/usr/bin/env bash
+/**
+ * The status-line wrapper, as a host must invoke it.
+ *
+ * Takes the launcher rather than hardcoding `flow-code`, for the same reason
+ * `connect` writes an absolute path into `.mcp.json` when the binary is not on
+ * PATH: a status line that cannot start prints nothing, and prints nothing in a
+ * corner of the screen nobody is reading for errors, so it fails invisibly.
+ */
+export function statusLineScript(launcher = 'flow-code'): string {
+  return `#!/usr/bin/env bash
 # flow-code status line. Prints one row describing this repo's current run.
 #
-# Register it as your host's status-line command (Claude Code:
-# ~/.claude/settings.json -> "statusLine": { "type": "command", "command":
-# "~/.claude/flow-code-status.sh", "refreshInterval": 1 }). If you already have
-# a status line, don't replace it — call \`flow-code status --line --dir "$DIR"\`
-# from inside the script you have and paste the output into your own row.
+# Registered as your host's status-line command (Claude Code:
+# .claude/settings.json -> "statusLine": { "type": "command", "command":
+# "<this file>" }). If you already have a status line, don't replace it — call
+# \`${launcher} status --line --dir "$DIR"\` from inside the script you have and
+# paste the output into your own row.
 input=$(cat)
 
 # jq is not guaranteed to be installed; python3 effectively is. Prefer jq when
@@ -548,8 +557,11 @@ else
   DIR=$(printf '%s' "$input" | python3 -c "$PY" 2>/dev/null || echo .)
 fi
 
-exec flow-code status --line --dir "$DIR" --width "\${COLUMNS:-100}"
+exec ${launcher} status --line --dir "$DIR" --width "\${COLUMNS:-100}"
 `;
+}
+
+const SCRIPT = statusLineScript();
 
 function parseWidth(args: string[], fallback: number): number {
   const i = args.indexOf('--width');
