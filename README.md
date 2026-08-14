@@ -277,15 +277,24 @@ It exits non-zero when the repository contradicts the run, so it works as a chec
 
 ## Keyboard controls
 
+Press `?` in a run for the full map, including the panel and mouse gestures. The keys worth knowing before you start:
+
 | Key | Action |
 | --- | --- |
-| `tab` | Focus the next node |
-| `enter` | Open the focused node's details |
+| `?` | The whole key map, in a panel |
+| `tab` / `shift+tab` | Focus the next / previous node |
+| `enter` | Open the focused node's details — `esc` closes it |
 | `e` | Edit the focused node's settings |
 | `m` | Change the focused node's model |
 | `s` | Attach or detach skills |
 | `←→↑↓` | Pan the canvas (add `shift` while a panel has the keyboard) |
 | `z` | Toggle compact cards — the canvas does this itself once the graph outgrows the terminal |
+| `o` | Overview: one row per node, for a graph too big to read as cards |
+| `c` | Centre the canvas on the focused node, or leave it where it is |
+| `w` | Wrap a graph wider than the terminal into bands, or lay it flat |
+| `q` | Quit |
+
+The mouse is an enhancement layer, never the only way to do something: click a card to focus it, drag it to move it, click a model or skill badge to open that picker, and drag a panel by its `⠿` handle or resize it from the `⇲` corner (`ctrl+p` docks it again). The wheel pans, `shift+wheel` pans sideways, and `ctrl+wheel` zooms.
 
 Nodes can be edited mid-run: focus one and press `e` for its settings, `m` for its model, or `s` to attach skills. Changes are written back to `.flow-code/workflow.yaml` and picked up by any node that has not started yet.
 
