@@ -16,7 +16,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   describeDrift,
@@ -29,6 +29,7 @@ import {
 } from '../guest/instructions.js';
 import type { Workflow } from '../workflow/load.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
+import { statusLineScript } from './status.js';
 
 /** Agent instruction files this installs into, in the order it prefers them. */
 const INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
@@ -36,6 +37,7 @@ const INSTRUCTION_FILES = ['CLAUDE.md', 'AGENTS.md'] as const;
 const SKILL_PATH = join('.claude', 'skills', 'flow-code-workflow', 'SKILL.md');
 const MCP_CONFIG = '.mcp.json';
 const HOST_SETTINGS = join('.claude', 'settings.json');
+const STATUS_SCRIPT = join('.claude', 'flow-code-status.sh');
 const SERVER_NAME = 'flow-code';
 
 /**
@@ -111,7 +113,62 @@ interface HookEntry {
 
 interface HostSettings {
   hooks?: Record<string, HookEntry[]>;
+  statusLine?: { type?: string; command?: string };
   [key: string]: unknown;
+}
+
+/**
+ * Register the status line, without ever taking one the user already has.
+ *
+ * The point of this row is that a run stays visible without a second terminal
+ * running `watch`. The point of *not* overwriting is that a status line is
+ * someone's own screen furniture, and silently replacing it would be the most
+ * annoying thing this installer could do. When one is already there, we leave
+ * it and say how to add our row to it — the generated script says the same in
+ * its header.
+ *
+ * Returns undefined when nothing should change.
+ */
+export function mergeStatusLine(existing: string | undefined, command: string): string | undefined {
+  let settings: HostSettings = {};
+  if (existing !== undefined && existing.trim() !== '') {
+    try {
+      settings = JSON.parse(existing) as HostSettings;
+    } catch {
+      throw new Error(`${HOST_SETTINGS} is not valid JSON — fix it before connecting.`);
+    }
+  }
+  const current = settings.statusLine;
+  if (current !== undefined) return undefined;
+  return `${JSON.stringify({ ...settings, statusLine: { type: 'command', command } }, null, 2)}\n`;
+}
+
+/** Whether a settings object already carries a status line somebody else owns. */
+function foreignStatusLine(settings: HostSettings, ours: string): boolean {
+  const command = settings.statusLine?.command;
+  return command !== undefined && command !== ours;
+}
+
+/**
+ * Write the status-line script and register it, returning what changed.
+ *
+ * The script is written per-project rather than to a shared location because
+ * the launcher baked into it is this checkout's, and two projects on one
+ * machine may be running different builds.
+ */
+function installStatusLine(repoRoot: string, entry: Launcher): string[] {
+  const written: string[] = [];
+  const scriptPath = join(repoRoot, STATUS_SCRIPT);
+  const launcher = [entry.command, ...entry.prefixArgs]
+    .map((part) => (part.includes(' ') ? JSON.stringify(part) : part))
+    .join(' ');
+  if (writeIfChanged(scriptPath, statusLineScript(launcher))) written.push(STATUS_SCRIPT);
+  chmodSync(scriptPath, 0o755);
+  const withStatus = mergeStatusLine(read(join(repoRoot, HOST_SETTINGS)), scriptPath);
+  if (withStatus !== undefined && writeIfChanged(join(repoRoot, HOST_SETTINGS), withStatus)) {
+    written.push(HOST_SETTINGS);
+  }
+  return written;
 }
 
 /** Whether a settings object already registers our PreToolUse hook. */
@@ -228,13 +285,27 @@ export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
 
   const settings = read(join(repoRoot, HOST_SETTINGS));
   let hooked = false;
+  let statusLine: SurfaceReport = { path: `${HOST_SETTINGS} (statusLine)`, state: 'absent' };
   try {
-    hooked =
-      settings !== undefined && hasHook(JSON.parse(settings) as HostSettings, hookCommand(serverCommand()));
+    const parsed = settings === undefined ? {} : (JSON.parse(settings) as HostSettings);
+    hooked = settings !== undefined && hasHook(parsed, hookCommand(serverCommand()));
+    const ours = join(repoRoot, STATUS_SCRIPT);
+    if (foreignStatusLine(parsed, ours)) {
+      // Not "missing": nothing here is broken, and the next run of `connect`
+      // must not read as though it should fix it.
+      statusLine = {
+        path: `${HOST_SETTINGS} (statusLine)`,
+        state: 'stale',
+        drift: [`a status line is already set — add \`flow-code status --line --dir "$DIR"\` to it yourself`],
+      };
+    } else if (parsed.statusLine?.command === ours && read(ours) !== undefined) {
+      statusLine = { path: `${HOST_SETTINGS} (statusLine)`, state: 'current' };
+    }
   } catch {
     hooked = false;
   }
   reports.push({ path: HOST_SETTINGS, state: hooked ? 'current' : 'absent' });
+  reports.push(statusLine);
 
   return reports;
 }
@@ -247,7 +318,8 @@ export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
  * green graph as a stronger claim than it is.
  */
 const WHAT_YOU_GET =
-  'Installed: the reporting tools, this project\'s instructions, and the enforcement hook.\n' +
+  'Installed: the reporting tools, this project\'s instructions, the enforcement hook, and a\n' +
+  '  status row showing the run in your session — no second terminal needed.\n' +
   '  While a step is in progress, tool calls outside that step\'s capability set are denied, and\n' +
   '  git writes stay blocked behind an unapproved approval gate.\n\n' +
   '  Still not in force, because flow-code did not start your session: process-level guards\n' +
@@ -274,6 +346,35 @@ export async function cmdConnect(args: string[]): Promise<void> {
   const written: string[] = [];
   const entry = serverCommand();
 
+  // The Claude Code plugin installs the tools, the instructions, and the hook
+  // on its own, but a plugin manifest has no `statusLine` field — Claude Code
+  // ignores one if you write it — so the status row is the single piece a
+  // plugin user still has to install per project. This flag is that install and
+  // nothing else, so running it in a plugin-managed repo does not also scatter
+  // a second copy of the instructions the plugin is already serving.
+  if (args.includes('--status-line')) {
+    try {
+      for (const path of installStatusLine(repoRoot, entry)) written.push(path);
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
+    if (written.length === 0) {
+      console.log('flow-code: status line already installed — nothing changed.');
+      const settings = read(join(repoRoot, HOST_SETTINGS));
+      if (settings !== undefined && foreignStatusLine(JSON.parse(settings) as HostSettings, join(repoRoot, STATUS_SCRIPT))) {
+        console.log(
+          '\n  You already have a status line, so yours was left alone. To include this run in it,\n' +
+            `  call \`flow-code status --line --dir "$DIR"\` from your own script.`,
+        );
+      }
+    } else {
+      console.log('flow-code: status line installed. Files changed:');
+      for (const path of written) console.log(`  ${path}`);
+      console.log('\n  Start a new session to pick it up.');
+    }
+    return;
+  }
+
   // `connect` installs the enforcement hook, so the instructions it writes
   // describe a session in which calls really are checked.
   if (writeIfChanged(join(repoRoot, SKILL_PATH), skillDocument(workflow, { enforced: true })))
@@ -293,6 +394,10 @@ export async function cmdConnect(args: string[]): Promise<void> {
     const settings = mergeHookSettings(read(join(repoRoot, HOST_SETTINGS)), hookCommand(entry));
     if (settings !== undefined && writeIfChanged(join(repoRoot, HOST_SETTINGS), settings)) {
       written.push(HOST_SETTINGS);
+    }
+
+    for (const path of installStatusLine(repoRoot, entry)) {
+      if (!written.includes(path)) written.push(path);
     }
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
