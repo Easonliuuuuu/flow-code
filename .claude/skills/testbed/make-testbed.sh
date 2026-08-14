@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Generate a clean throwaway repo for driving the flow-code TUI by hand.
+# Generate a clean throwaway repo for driving flow-code by hand.
 #
 # The TUI can only be judged by looking at it, and `flow-code watch` renders a
 # whole graph without an API key, an agent call, or a single cent — but only
@@ -9,10 +9,13 @@
 # workflow *and* seeds a run file for it — the same all-idle, no-engine-ever-
 # attached document `flow-code run` writes before it starts anything — in
 # `ui` and `splash` mode. `clean` mode skips both, for exercising
-# `init`/`run` themselves.
+# `init`/`run` themselves. `guest` mode also skips both, for the opposite
+# reason: there the run document is what the outside agent is being tested on
+# producing, so seeding one would hide the very thing under test.
 #
-# Usage: make-testbed.sh [--mode ui|splash|clean] [--dest PATH]
-#                         [--shape wide|tall|tiny] [--no-build]
+# Usage: make-testbed.sh [--mode ui|splash|clean|guest] [--dest PATH]
+#                         [--shape wide|tall|tiny] [--install connect|plugin]
+#                         [--no-build]
 
 set -euo pipefail
 
@@ -21,23 +24,26 @@ MARKER=.flow-code-testbed
 DEST="${HOME}/flow-code-testbed"
 SHAPE=wide
 MODE=ui
+INSTALL=connect
 BUILD=1
 SHAPE_SET=0
+INSTALL_SET=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dest) DEST="$2"; shift 2 ;;
     --shape) SHAPE="$2"; SHAPE_SET=1; shift 2 ;;
     --mode) MODE="$2"; shift 2 ;;
+    --install) INSTALL="$2"; INSTALL_SET=1; shift 2 ;;
     --no-build) BUILD=0; shift ;;
-    -h|--help) sed -n '3,14p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,18p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 — see --help" >&2; exit 2 ;;
   esac
 done
 
 case "$MODE" in
-  ui|splash|clean) ;;
-  *) echo "unknown mode: $MODE — expected ui, splash, or clean" >&2; exit 2 ;;
+  ui|splash|clean|guest) ;;
+  *) echo "unknown mode: $MODE — expected ui, splash, clean, or guest" >&2; exit 2 ;;
 esac
 
 case "$SHAPE" in
@@ -45,8 +51,25 @@ case "$SHAPE" in
   *) echo "unknown shape: $SHAPE — expected wide, tall, or tiny" >&2; exit 2 ;;
 esac
 
+case "$INSTALL" in
+  connect|plugin) ;;
+  *) echo "unknown install: $INSTALL — expected connect or plugin" >&2; exit 2 ;;
+esac
+
 if [ "$MODE" = "clean" ] && [ "$SHAPE_SET" -eq 1 ]; then
   echo "--shape has no effect in clean mode (nothing is scaffolded)" >&2
+  exit 2
+fi
+
+# guest mode has one graph on purpose (see its block below), so a shape here
+# would silently do nothing.
+if [ "$MODE" = "guest" ] && [ "$SHAPE_SET" -eq 1 ]; then
+  echo "--shape has no effect in guest mode (its graph is fixed)" >&2
+  exit 2
+fi
+
+if [ "$MODE" != "guest" ] && [ "$INSTALL_SET" -eq 1 ]; then
+  echo "--install only applies to guest mode" >&2
   exit 2
 fi
 
@@ -111,6 +134,169 @@ EOF
   echo "init prompts for a preset and, without saved credentials, walks the"
   echo "provider wizard. run then does the real thing: it resolves a provider"
   echo "and calls it — this is the one mode that costs real API usage."
+  exit 0
+fi
+
+if [ "$MODE" = "guest" ]; then
+  # Guest mode tests the other half of flow-code: a run nobody here drives.
+  # An outside agent session walks the graph and reports each transition, the
+  # PreToolUse hook decides what that agent is allowed to touch while it does,
+  # and `watch` has to attach to a run it did not see created. So: a real
+  # (tiny) project the agent can actually change, a graph short enough to walk
+  # in one session, and deliberately no run document.
+  mkdir -p "$DEST/.flow-code" "$DEST/src" "$DEST/test"
+
+  cat > package.json <<'EOF'
+{
+  "name": "flow-code-guest-testbed",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/"
+  }
+}
+EOF
+
+  cat > src/greet.js <<'EOF'
+export function greet(name) {
+  return `hello ${name}`;
+}
+EOF
+
+  cat > test/greet.test.js <<'EOF'
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { greet } from '../src/greet.js';
+
+test('greets by name', () => {
+  assert.equal(greet('world'), 'hello world');
+});
+EOF
+
+  # Five nodes, one of every enforcement-relevant kind, plus a return path:
+  #
+  #   implement  read+edit+exec — the only node allowed to write code
+  #   unit       explicit commands (a loop-back span forbids `auto`)
+  #   review     read only, so an edit attempt here must be denied
+  #   gate       no capabilities at all, and blocks git writes below it
+  #   ship       git-write, reachable only once the gate is approved
+  #
+  # The loop-back exists because nothing routes a guest back along one — the
+  # agent has to walk it itself, which is the part that is easiest to get
+  # wrong and impossible to see without driving it.
+  cat > .flow-code/workflow.yaml <<'EOF'
+settings:
+  model: sonnet
+
+nodes:
+  - id: implement
+    type: implement
+    config:
+      instructions: Make greet handle an empty name, and cover it with a test.
+
+  - id: unit
+    type: test
+    config:
+      commands: ["npm test"]
+
+  - id: review
+    type: review
+
+  - id: gate
+    type: approval-gate
+
+  - id: ship
+    type: git-ops
+
+edges:
+  - { from: implement, to: unit }
+  - { from: unit, to: review }
+  - { from: review, to: gate }
+  - { from: gate, to: ship }
+  - { from: unit, to: implement, loopback: true }
+EOF
+
+  cat > README.md <<EOF
+# flow-code testbed (guest)
+
+Disposable repo for driving flow-code from *outside* — an agent session walks
+the graph in \`.flow-code/workflow.yaml\` and reports each step, instead of
+\`flow-code run\` executing it.
+
+There is deliberately no run document here: the guest creates it with
+\`open_run\`, and attaching \`flow-code watch\` to a run it did not start is
+part of what this is for.
+
+Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
+EOF
+
+  git init -q -b main
+  git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
+  git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+
+  node --input-type=module -e "
+    import { ensureGitExclude } from '$REPO_ROOT/dist/git/exclude.js';
+    ensureGitExclude(process.cwd());
+  "
+
+  if [ "$INSTALL" = "connect" ]; then
+    echo
+    echo "installing the reporting surface with \`flow-code connect\` ..."
+    node "$REPO_ROOT/dist/cli.js" connect
+  else
+    # The plugin manifest hardcodes `flow-code` for both the MCP server and
+    # the hook, so from a checkout it installs a server that never starts and
+    # a hook that never denies — which looks exactly like a working install
+    # with nothing to report. A shim on PATH is what makes the plugin path
+    # testable without a global npm install.
+    mkdir -p bin
+    cat > bin/flow-code <<EOF
+#!/usr/bin/env bash
+exec node "$REPO_ROOT/dist/cli.js" "\$@"
+EOF
+    chmod +x bin/flow-code
+  fi
+
+  git add -A
+  git commit -qm "chore: scaffold flow-code testbed (guest, $INSTALL)"
+
+  echo
+  echo "testbed ready: $DEST  (mode: guest, install: $INSTALL)"
+  echo
+  echo "Watch it in one terminal:"
+  echo
+  echo "  cd $DEST"
+  echo "  node $REPO_ROOT/dist/cli.js watch"
+  echo
+  echo "Drive it from a second terminal:"
+  echo
+  if [ "$INSTALL" = "connect" ]; then
+    echo "  cd $DEST"
+    echo "  claude"
+    echo
+    echo "  # then, in that session:"
+    echo "  Walk this project's flow-code graph: make greet handle an empty name."
+    echo
+    echo "Claude Code asks once whether to trust this project's .mcp.json —"
+    echo "answer yes, or no tool is reachable and the graph never fills in."
+  else
+    echo "  cd $DEST"
+    echo "  PATH=\"$DEST/bin:\$PATH\" claude"
+    echo
+    echo "  # then, in that session:"
+    echo "  /plugin marketplace add $REPO_ROOT"
+    echo "  /plugin install flow-code@flow-code"
+    echo "  # restart the session, then:"
+    echo "  /flow-code make greet handle an empty name"
+    echo
+    echo "The PATH entry is required: the plugin manifest launches a bare"
+    echo "\`flow-code\`, and \$DEST/bin/flow-code is the shim pointing at this"
+    echo "checkout. Without it the server and the hook both silently no-op."
+  fi
+  echo
+  echo "This mode runs a real agent session against a real provider — it costs"
+  echo "actual API usage, and the ship node commits inside the testbed."
   exit 0
 fi
 
