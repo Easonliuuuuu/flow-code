@@ -167,7 +167,7 @@ describe('App view-mode toggle', () => {
     try {
       const focusFrame = lastFrameLines(stdout).join('\n');
       expect(focusFrame).not.toContain(' · overview');
-      expect(focusFrame).toMatch(/[╭╰]/);
+      expect(focusFrame).toMatch(/[╭╰┏┗]/);
 
       stdin.write('o');
       await settle();
@@ -177,13 +177,13 @@ describe('App view-mode toggle', () => {
       expect(overviewFrame).toContain('rev');
       expect(overviewFrame).toContain(' · overview');
       // Denser: no card borders anywhere in the frame.
-      expect(overviewFrame).not.toMatch(/[╭╰]/);
+      expect(overviewFrame).not.toMatch(/[╭╰┏┗]/);
 
       stdin.write('o');
       await settle();
       const backFrame = lastFrameLines(stdout).join('\n');
       expect(backFrame).not.toContain(' · overview');
-      expect(backFrame).toMatch(/[╭╰]/);
+      expect(backFrame).toMatch(/[╭╰┏┗]/);
     } finally {
       instance.unmount();
     }
@@ -393,9 +393,11 @@ describe('App frame height', () => {
       await settle();
       // At 100 columns the full key list does not fit, which is fine — the
       // point is that the overflow is cut off rather than flowed onto a second
-      // row that the frame has no space for. `q: quit` leads so the one key
-      // you cannot discover any other way is the last to go.
+      // row that the frame has no space for. `?` and `q` lead, in that order:
+      // between them they are the two keys you cannot discover any other way,
+      // so they are the last to go.
       const lines = lastFrameLines(stdout);
+      expect(lines.at(-1)).toContain('?: keys');
       expect(lines.at(-1)).toContain('q: quit');
       expect(lines.at(-2)).not.toContain('tab: focus');
 
@@ -467,6 +469,38 @@ describe('App frame height', () => {
       expect(body).toContain('alt-2');
       for (const line of lines) expect(line.length).toBeLessThanOrEqual(80);
       expect(lines.length).toBeLessThanOrEqual(ROWS);
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('holds the status counts in lifecycle order as the run moves through them', async () => {
+    const store = storeFor(CANVAS_WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: CANVAS_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      await settle();
+      expect(lastFrameLines(stdout)[0]).toContain('○ 3');
+
+      // `impl` reaches `running` before `rev` reaches `done`, so reading the
+      // counts off the record's own key order put `◐` ahead of `○` — the
+      // idle count jumping rightward the moment anything started, and every
+      // segment after it shuffling again on each new status.
+      store.setStatus('impl', 'running');
+      store.setStatus('rev', 'done');
+      await settle();
+      expect(lastFrameLines(stdout)[0]).toContain('○ 1  ◐ 1  ● 1');
     } finally {
       instance.unmount();
     }

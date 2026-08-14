@@ -34,6 +34,15 @@ export function dockedRect(bounds: Bounds, height: number): PanelRect {
 export const DOCKED_HEIGHT_RATIO = 0.6;
 
 /**
+ * The key map takes more of the screen than a working panel does. It is a
+ * reference rather than something you work alongside — nothing on the canvas
+ * is worth keeping in view while reading it, and a map that has to be
+ * scrolled to reach the mouse gestures is a map nobody finds them in. It
+ * still scrolls, for a terminal too short to hold the whole thing.
+ */
+export const HELP_HEIGHT_RATIO = 0.9;
+
+/**
  * Splits the terminal between the canvas and a docked panel, below `headerRows`
  * of header. The panel is bottom-anchored, so the canvas must take up exactly
  * the rows between the header and the panel's top edge — any slack there shifts
@@ -42,11 +51,12 @@ export const DOCKED_HEIGHT_RATIO = 0.6;
 export function dockedLayout(
   bounds: Bounds,
   headerRows: number,
+  heightRatio: number = DOCKED_HEIGHT_RATIO,
 ): { rect: PanelRect; canvasHeight: number } {
   // Always leave at least one canvas row, however short the terminal is.
   const maxHeight = Math.max(1, bounds.rows - headerRows - 1);
   const height = Math.min(
-    Math.max(MIN_PANEL_HEIGHT, Math.floor(bounds.rows * DOCKED_HEIGHT_RATIO)),
+    Math.max(MIN_PANEL_HEIGHT, Math.floor(bounds.rows * heightRatio)),
     maxHeight,
   );
   const rect = dockedRect(bounds, height);

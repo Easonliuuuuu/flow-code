@@ -8,13 +8,20 @@ import type { RunStateStore } from '../runstate/store.js';
 import { readReport } from '../guest/reconcile.js';
 import { effectiveTier, TIER_LABELS, tierDisclosure } from '../runstate/tier.js';
 import { cacheReadTokens, cacheWriteTokens } from '../runstate/types.js';
-import type { RunState } from '../runstate/types.js';
+import type { NodeStatus, RunState } from '../runstate/types.js';
 import { driverLiveness, isAttached } from '../runstate/watch.js';
 import { defaultSkillRoots, discoverSkills, type DiscoveredSkill } from '../skills/discover.js';
 import { WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { editRunningNode, WorkflowWriteError } from '../workflow/write.js';
-import { gridToLines, nodeModelBadge, nodeSkillBadge, renderGraph, STATUS_GLYPHS } from './canvas.js';
+import {
+  gridToLines,
+  nodeModelBadge,
+  nodeSkillBadge,
+  renderGraph,
+  STATUS_GLYPHS,
+  STATUS_ORDER,
+} from './canvas.js';
 import { ellipsis, formatDuration, formatTokens, spinnerFrame, totalTokens } from './nodeCard.js';
 import { rateLimitSegments, type RateLimitTone } from './rateLimit.js';
 import { agentLabelsFor, formatActivityRow, needsAttribution } from './activityRow.js';
@@ -40,14 +47,17 @@ import {
   dockedLayout,
   hitTestPanel,
   pinAfterScroll,
+  HELP_HEIGHT_RATIO,
   MOVE_HANDLE,
   RESIZE_GRIP,
   tailWindow,
   type PanelRect,
 } from './panel.js';
 import { editableFields, parseFieldValue, type EditorField } from './nodeEditor.js';
+import { helpKeyWidth, helpRows } from './help.js';
 import type { UiInteractionPorts } from './ports.js';
 import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
+import { applyLineEdit } from './textInput.js';
 import { wrapText } from './textwrap.js';
 
 /** Provenance context the run UI needs to distinguish a node's own model
@@ -308,6 +318,11 @@ export function App({
   // null = moving between fields; a string = typing into the current one.
   const [editorBuffer, setEditorBuffer] = useState<string | null>(null);
 
+  // The key map (`?`). Not a per-node panel — it belongs to no node and
+  // survives tabbing — so it stays out of `panelNodeId`'s bookkeeping.
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [helpScroll, setHelpScroll] = useState(0);
+
   const [skillPickerOpen, setSkillPickerOpen] = useState(false);
   const [skillPickerCursor, setSkillPickerCursor] = useState(0);
   const [skillPickerSelected, setSkillPickerSelected] = useState<Set<string>>(new Set());
@@ -411,7 +426,8 @@ export function App({
     discussPanelOpen ||
     pickerOpen ||
     skillPickerOpen ||
-    editorOpen;
+    editorOpen ||
+    helpOpen;
   const floating = panelRect !== null;
 
   // A run that flow-code did not execute gets a permanent line of its own
@@ -427,7 +443,11 @@ export function App({
   const tier = effectiveTier(runState.enforcement);
   const tierLine = tierDisclosure(tier);
   const headerRows = HEADER_ROWS + (tierLine ? 1 : 0);
-  const docked = dockedLayout({ columns, rows }, headerRows);
+  const docked = dockedLayout(
+    { columns, rows },
+    headerRows,
+    helpOpen ? HELP_HEIGHT_RATIO : undefined,
+  );
   // A docked, open panel reserves flow space below the canvas; a floating one
   // overlays it instead, so the canvas reclaims that space (same as closed).
   // When docked the canvas height must come from dockedLayout, or the panel
@@ -565,38 +585,41 @@ export function App({
     return loader;
   };
 
-  const openModelPicker = (nodeId: string): void => {
+  /** Opens the model picker, or explains why it can't — `true` when it opened. */
+  const openModelPicker = (nodeId: string): boolean => {
     if (watch) {
       showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      return;
+      return false;
     }
     const node = workflow.nodes.find((n) => n.id === nodeId);
-    if (!node) return;
+    if (!node) return false;
     if (!node.type.hasModelField) {
       showPickerMessage(`${node.type.displayName} nodes have no model to choose.`);
-      return;
+      return false;
     }
     if (!modelContext.providerId) {
       showPickerMessage('no provider configured — run `flow-code init` to choose one.');
-      return;
+      return false;
     }
     setPickerCursor(0);
     setPickerFreeText(null);
     setPanelNodeId(nodeId);
     setPickerOpen(true);
     modelListLoaderFor(modelContext.providerId).ensureLoaded();
+    return true;
   };
 
-  const openSkillPicker = (nodeId: string): void => {
+  /** Opens the skill picker, or explains why it can't — `true` when it opened. */
+  const openSkillPicker = (nodeId: string): boolean => {
     if (watch) {
       showPickerMessage(WATCH_READ_ONLY_MESSAGE);
-      return;
+      return false;
     }
     const node = workflow.nodes.find((n) => n.id === nodeId);
-    if (!node) return;
+    if (!node) return false;
     if (!nodeTypeAcceptsAgentStep(node.type)) {
       showPickerMessage(`${node.type.displayName} nodes have no skills to attach.`);
-      return;
+      return false;
     }
     const catalogIds = new Set(skillCatalog.map((s) => s.id));
     const entries = (node.config as { skills?: string[] }).skills ?? [];
@@ -605,6 +628,7 @@ export function App({
     setSkillPickerSelected(new Set(entries.filter((e) => catalogIds.has(e))));
     setPanelNodeId(nodeId);
     setSkillPickerOpen(true);
+    return true;
   };
 
   const editorFields = focusedNode ? editableFields(focusedNode) : [];
@@ -912,6 +936,16 @@ export function App({
       (runState.nodes[focusedNode.id]?.output as { diffs?: unknown } | undefined)?.diffs,
     );
 
+  // The key map and its scroll window. It is taller than a short terminal's
+  // panel, so it scrolls like any other panel body rather than quietly
+  // dropping its last sections — which would be the mouse and text-editing
+  // keys, the two nobody would think to go looking for.
+  const helpAllRows = useMemo(() => helpRows({ watch }), [watch]);
+  const helpColumnWidth = useMemo(() => helpKeyWidth(helpAllRows), [helpAllRows]);
+  const helpVisible = Math.max(1, panelHeight - 4);
+  const helpMaxScroll = Math.max(0, helpAllRows.length - helpVisible);
+  const helpStart = Math.min(helpScroll, helpMaxScroll);
+
   /**
    * Whether a prompt is blocking on this node. A blocking prompt owns the
    * keyboard outright, so `m`/`s` can't reach the pickers while one is up
@@ -945,6 +979,8 @@ export function App({
     focusedNode,
     discussPanelOpen,
     discussWindow,
+    helpOpen,
+    helpMaxScroll,
     nodePanelIsDiffReplay,
     outputWindow,
     activityWindow,
@@ -971,6 +1007,8 @@ export function App({
       focusedNode,
       discussPanelOpen,
       discussWindow,
+      helpOpen,
+      helpMaxScroll,
       nodePanelIsDiffReplay,
       outputWindow,
       activityWindow,
@@ -1035,6 +1073,8 @@ export function App({
           expanded,
           focusedNode,
           discussPanelOpen,
+          helpOpen,
+          helpMaxScroll,
           nodePanelIsDiffReplay,
           outputWindow,
           activityWindow,
@@ -1161,34 +1201,57 @@ export function App({
           panelDragRef.current = null;
           setPanelDragMode(null);
         } else if (event.kind === 'scroll') {
+          // Up and left are the "backwards" ends of their axes: wheel-up
+          // zooms in, scrolls back through history, and pans left.
+          const backwards = event.direction === 'up' || event.direction === 'left';
+          // A sideways swipe on a trackpad arrives as its own direction; a
+          // wheel with no sideways axis reports shift instead, the same
+          // convention a browser uses. Either way it pans the canvas, and
+          // never a panel — nothing in one scrolls sideways.
+          const sideways = event.direction === 'left' || event.direction === 'right' || event.shift;
           // Ctrl+wheel zooms the canvas — but only over the canvas. Over an
           // open panel the wheel belongs to whatever is being read there, and
           // a stray ctrl while scrolling a conversation should not resize the
           // graph behind it. Wheel-up is zoom *in*, matching every other
           // zoomable surface.
           if (event.ctrl && !overPanel) {
-            zoomBy(event.direction === 'down' ? 1 : -1);
+            zoomBy(backwards ? -1 : 1);
+          } else if (sideways) {
+            // Written out rather than routed through `panBy`, for the same
+            // reason the vertical pan below is: this handler is registered
+            // once, so it has to read the viewport off the ref instead of
+            // closing over a `layout`/`canvasWidth` from first render.
+            if (!overPanel) {
+              setOffset((o) =>
+                clampOffset(layout, {
+                  ox: o.ox + (backwards ? -PAN_STEP_X : PAN_STEP_X),
+                  oy: o.oy,
+                  width: canvasWidth,
+                  height: canvasHeight,
+                }),
+              );
+            }
+          } else if (overPanel && helpOpen) {
+            setHelpScroll((s) => Math.min(helpMaxScroll, Math.max(0, s + (backwards ? -3 : 3))));
           } else if (overPanel && discussPanelOpen) {
-            setDiscussPin(
-              pinAfterScroll(mouseStateRef.current.discussWindow, event.direction === 'down' ? -3 : 3),
-            );
+            setDiscussPin(pinAfterScroll(mouseStateRef.current.discussWindow, backwards ? 3 : -3));
           } else if (pendingApproval || (overPanel && nodePanelIsDiffReplay)) {
             // Same 3-row-per-tick step as every other wheel-scrolled surface
             // here (discuss, node panel below) — this used to move 1 row/tick,
             // which read as noticeably slower under the mouse for no reason.
-            setDiffScroll((s) => Math.max(0, s + (event.direction === 'down' ? 3 : -3)));
+            setDiffScroll((s) => Math.max(0, s + (backwards ? -3 : 3)));
           } else if (overPanel && nodePanelOpen) {
             const splitY = activeRect.y + nodePanelHeaderRows + nodePanelOutputBudget;
             if (event.y < splitY) {
-              setOutputPin(pinAfterScroll(outputWindow, event.direction === 'down' ? -3 : 3));
+              setOutputPin(pinAfterScroll(outputWindow, backwards ? 3 : -3));
             } else {
-              setActivityPin(pinAfterScroll(activityWindow, event.direction === 'down' ? -3 : 3));
+              setActivityPin(pinAfterScroll(activityWindow, backwards ? 3 : -3));
             }
           } else {
             setOffset((o) =>
               clampOffset(layout, {
                 ox: o.ox,
-                oy: o.oy + (event.direction === 'down' ? PAN_STEP_Y : -PAN_STEP_Y),
+                oy: o.oy + (backwards ? -PAN_STEP_Y : PAN_STEP_Y),
                 width: canvasWidth,
                 height: canvasHeight,
               }),
@@ -1303,6 +1366,11 @@ export function App({
         else if (text.length > 0) ports.submitUserMessage(text);
         return;
       }
+      const editedDraft = applyLineEdit(inputBuffer, input, key);
+      if (editedDraft !== null) {
+        setInputBuffer(editedDraft);
+        return;
+      }
       if (key.backspace || key.delete) {
         setInputBuffer((b) => b.slice(0, -1));
         return;
@@ -1318,6 +1386,7 @@ export function App({
     if (pendingTestCommands) {
       const { resolve } = pendingTestCommands;
       if (testCommandInput !== null) {
+        const editedCommand = applyLineEdit(testCommandInput, input, key);
         if (key.escape) {
           setTestCommandInput(null);
         } else if (key.return) {
@@ -1327,6 +1396,8 @@ export function App({
             setTestCommandSelected((prev) => new Set([...prev, command]));
           }
           setTestCommandInput(null);
+        } else if (editedCommand !== null) {
+          setTestCommandInput(editedCommand);
         } else if (key.backspace || key.delete) {
           setTestCommandInput((b) => (b ?? '').slice(0, -1));
         } else if (!key.ctrl && !key.meta && !key.tab && input.length > 0) {
@@ -1408,7 +1479,29 @@ export function App({
       if (input === 'k' || key.upArrow) setDiffScroll((s) => Math.max(0, s - 1));
       if (key.pageDown) setDiffScroll((s) => s + diffPageStep);
       if (key.pageUp) setDiffScroll((s) => Math.max(0, s - diffPageStep));
-      if (key.tab) setFocusIdx((i) => (i + 1) % workflow.order.length);
+      // Shift-tab steps back, as it does everywhere else. Ink reports it as
+      // `tab` with `shift` set, so a bare `key.tab` here sent it forwards —
+      // the one panel where tabbing back to re-read an upstream node was a
+      // full lap around the graph.
+      if (key.tab) {
+        setFocusIdx((i) => (i + (key.shift ? workflow.order.length - 1 : 1)) % workflow.order.length);
+      }
+      return;
+    }
+
+    // The key map (`?`). It owns the keyboard while it is up, so the arrows
+    // scroll it rather than panning a canvas nobody can see — and every key
+    // that plausibly means "get me out of here" closes it, `q` included:
+    // quitting the run outright is not what that means on a help screen.
+    if (helpOpen) {
+      if (key.escape || key.return || input === '?' || input === 'q') {
+        setHelpOpen(false);
+        return;
+      }
+      if (key.upArrow || input === 'k') setHelpScroll((s) => Math.max(0, s - 1));
+      else if (key.downArrow || input === 'j') setHelpScroll((s) => Math.min(helpMaxScroll, s + 1));
+      else if (key.pageUp) setHelpScroll((s) => Math.max(0, s - helpVisible));
+      else if (key.pageDown) setHelpScroll((s) => Math.min(helpMaxScroll, s + helpVisible));
       return;
     }
 
@@ -1424,6 +1517,11 @@ export function App({
           const text = pickerFreeText.trim();
           closeNodePanel();
           if (text.length > 0) confirmModel(focusedNode.id, text);
+          return;
+        }
+        const editedModel = applyLineEdit(pickerFreeText, input, key);
+        if (editedModel !== null) {
+          setPickerFreeText(editedModel);
           return;
         }
         if (key.backspace || key.delete) {
@@ -1466,11 +1564,27 @@ export function App({
           setEditorCursor((c) => (c + 1) % editorFields.length);
         } else if (key.return) {
           setEditorBuffer(editorField.value);
+        } else if (input === 'm' || input === 's') {
+          // This panel's footer has always offered `m`/`s` as a way across to
+          // the other two per-node panels, and nothing implemented them —
+          // the settings editor swallowed both. Switch, rather than stack:
+          // all three edit the same node, and only one panel is ever up. A
+          // picker that declines (no model field, no skills) leaves the
+          // settings panel where it was, so the explanation has something to
+          // be an explanation *of*.
+          const opened =
+            input === 'm' ? openModelPicker(focusedNode.id) : openSkillPicker(focusedNode.id);
+          if (opened) setEditorOpen(false);
         }
         return;
       }
       if (key.return) {
         commitEditorField(focusedNode.id, editorField, editorBuffer);
+        return;
+      }
+      const editedField = applyLineEdit(editorBuffer, input, key);
+      if (editedField !== null) {
+        setEditorBuffer(editedField);
         return;
       }
       if (key.backspace || key.delete) {
@@ -1527,6 +1641,11 @@ export function App({
             return next;
           });
         }
+        return;
+      }
+      const editedQuery = applyLineEdit(skillPickerQuery, input, key);
+      if (editedQuery !== null) {
+        setSkillPickerQuery(editedQuery);
         return;
       }
       if (key.backspace || key.delete) {
@@ -1589,7 +1708,18 @@ export function App({
     }
 
     // Normal navigation.
-    if (key.tab && key.shift) {
+    if (key.escape) {
+      // Every other panel closes on escape. The node-detail panel — the one
+      // you are most likely to be sitting in, since `enter` opens it — was
+      // the exception, so escaping out of a diff you had finished reading did
+      // nothing whatsoever.
+      if (expanded) setExpanded(false);
+    } else if (input === '?') {
+      // The full key map. The hint line below can only ever advertise the
+      // first handful, and a docked panel replaces it outright.
+      setHelpScroll(0);
+      setHelpOpen(true);
+    } else if (key.tab && key.shift) {
       setFocusIdx((i) => (i + workflow.order.length - 1) % workflow.order.length);
     } else if (key.tab) {
       setFocusIdx((i) => (i + 1) % workflow.order.length);
@@ -1647,14 +1777,22 @@ export function App({
     [grid, offset, canvasWidth, canvasHeight],
   );
 
-  const statusCounts = Object.values(runState.nodes).reduce<Record<string, number>>(
-    (acc, n) => ({ ...acc, [n.status]: (acc[n.status] ?? 0) + 1 }),
+  const statusCounts = Object.values(runState.nodes).reduce<Partial<Record<NodeStatus, number>>>(
+    (acc, n) => {
+      acc[n.status] = (acc[n.status] ?? 0) + 1;
+      return acc;
+    },
     {},
   );
   const finished = runState.finishedAt !== undefined;
   const runTokens = totalTokens(runState.nodes);
-  const headerParts = Object.entries(statusCounts).map(
-    ([status, count]) => `${STATUS_GLYPHS[status as keyof typeof STATUS_GLYPHS]} ${count}`,
+  // Fixed lifecycle order, not whatever order the statuses first appeared in.
+  // Reading the record's own key order put the segments wherever the first
+  // node to reach each status happened to sit, so `● 3` and `◐ 1` swapped
+  // places as the run moved — the header's most-watched number changing
+  // position underneath the eye watching it.
+  const headerParts = STATUS_ORDER.filter((status) => statusCounts[status] !== undefined).map(
+    (status) => `${STATUS_GLYPHS[status]} ${statusCounts[status]}`,
   );
 
   // Watch-mode header. Both facts are pure functions of the state just
@@ -1731,6 +1869,12 @@ export function App({
         </Text>
         <Text dimColor> {runLabel}</Text>
         {selectedGraph ? <Text dimColor> ({selectedGraph})</Text> : null}
+        {/* Directly behind the run's own name, ahead of every standing
+            signal: this is the answer to the key just pressed, and it used to
+            sit last on a row that truncates — so on any terminal narrow
+            enough to need the explanation, the explanation was the first
+            thing cut. It clears itself after a few seconds. */}
+        {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
         <Text dimColor> · </Text>
         <Text>{headerParts.join('  ')}</Text>
         {tier !== 'engine' ? <Text color="yellow"> · {TIER_LABELS[tier]}</Text> : null}
@@ -1776,7 +1920,6 @@ export function App({
         {!wrapEnabled ? <Text dimColor> · wrap off</Text> : null}
         {offscreenHint ? <Text dimColor> · {offscreenHint} off-screen (⇧+arrows)</Text> : null}
         {floating ? <Text dimColor> · ctrl+p: dock panel</Text> : null}
-        {pickerMessage ? <Text color="yellow"> · {pickerMessage}</Text> : null}
       </Text>
       {tierLine ? (
         <Text color="yellow" wrap="truncate-end">
@@ -1988,6 +2131,44 @@ export function App({
             })()}
           </Box>
           <PanelFooter hint="[a] approve · [r] reject · j/k/PgUp/PgDn: scroll diff · drag ⠿/edge: move · ⇲: resize" />
+        </Box>
+      ) : helpOpen ? (
+        <Box {...panelBoxProps}>
+          {panelBackdrop}
+          <PanelTitle>
+            <Text bold color="yellow" wrap="truncate-end">
+              Keys
+              {helpMaxScroll > 0 ? (
+                <Text dimColor>
+                  {' '}
+                  ({helpStart} above
+                  {helpAllRows.length - helpStart - helpVisible > 0
+                    ? `, ${helpAllRows.length - helpStart - helpVisible} below`
+                    : ''}
+                  )
+                </Text>
+              ) : null}
+            </Text>
+          </PanelTitle>
+          <Box flexDirection="column" flexGrow={1} overflow="hidden">
+            {helpAllRows.slice(helpStart, helpStart + helpVisible).map((row, i) => {
+              if (row.kind === 'blank') return <Text key={i}> </Text>;
+              if (row.kind === 'title') {
+                return (
+                  <Text key={i} bold wrap="truncate-end">
+                    {row.text}
+                  </Text>
+                );
+              }
+              return (
+                <Text key={i} wrap="truncate-end">
+                  <Text color="cyan">{`  ${row.keys.padEnd(helpColumnWidth)}`}</Text>
+                  <Text dimColor>{`  ${row.what}`}</Text>
+                </Text>
+              );
+            })}
+          </Box>
+          <PanelFooter hint="↑/↓/PgUp/PgDn: scroll · ?/esc: close · drag ⠿/edge: move · ⇲: resize" />
         </Box>
       ) : pickerOpen && focusedNode ? (
         <Box {...panelBoxProps}>
@@ -2219,7 +2400,7 @@ export function App({
                     <Box flexDirection="column" flexGrow={1} overflow="hidden">
                       <DiffLines lines={lines} start={start} visible={visible} />
                     </Box>
-                    <PanelFooter hint="j/k/PgUp/PgDn: scroll diff · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                    <PanelFooter hint="j/k/PgUp/PgDn: scroll diff · enter/esc: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
                   </>
                 );
               }
@@ -2324,7 +2505,7 @@ export function App({
                     </Text>
                   ))}
                 </Box>
-                <PanelFooter hint="PgUp/PgDn: scroll activity · shift+PgUp/PgDn: scroll output · enter: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                <PanelFooter hint="PgUp/PgDn: scroll activity · shift+PgUp/PgDn: scroll output · enter/esc: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
               </>
             );
           })()}
@@ -2334,9 +2515,14 @@ export function App({
         // Kept short so truncation stays a narrow-terminal fallback rather
         // than the norm, and it lists only keys: the current zoom is reported
         // in the header, which stays visible behind a docked panel.
+        //
+        // `?` leads, then `q`: the row truncates from the right, and between
+        // them they are the two you cannot discover any other way — one shows
+        // the rest of the map, the other gets you out.
         <Text dimColor wrap="truncate-end">
-          q: quit · tab: focus · enter: details · {watch ? 'read-only' : 'e: settings'} · ←→↑↓ (⇧
-          anywhere): pan · z/⌃wheel: zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera · w:{' '}
+          ?: keys · q: quit · tab: focus · enter: details ·{' '}
+          {watch ? 'read-only' : 'e/m/s: settings/model/skills'} · ←→↑↓ (⇧ anywhere): pan · z/⌃wheel:
+          zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera · w:{' '}
           {wrapEnabled ? 'unwrap' : 'wrap'}
         </Text>
       )}

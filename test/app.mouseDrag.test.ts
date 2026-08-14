@@ -106,9 +106,18 @@ function columnOf(stdout: FakeStdout, id: string): number {
 const press = (col: number, row: number): string => `\x1b[<0;${col};${row}M`;
 const motion = (col: number, row: number): string => `\x1b[<32;${col};${row}M`;
 const release = (col: number, row: number): string => `\x1b[<0;${col};${row}m`;
-/** Wheel codes are 64/65; ctrl ORs in bit 16. */
-const wheel = (dir: 'up' | 'down', col: number, row: number, ctrl = false): string =>
-  `\x1b[<${64 + (dir === 'up' ? 0 : 1) + (ctrl ? 16 : 0)};${col};${row}M`;
+/** Wheel codes are 64-67 (up, down, left, right); ctrl ORs in bit 16, shift bit 4. */
+const WHEEL_CODES = { up: 0, down: 1, left: 2, right: 3 } as const;
+const wheel = (
+  dir: keyof typeof WHEEL_CODES,
+  col: number,
+  row: number,
+  ctrl = false,
+  shift = false,
+): string => `\x1b[<${64 + WHEEL_CODES[dir] + (ctrl ? 16 : 0) + (shift ? 4 : 0)};${col};${row}M`;
+
+/** One keypress/tick of horizontal pan — mirrors PAN_STEP_X in App.tsx. */
+const PAN_STEP_X = 4;
 
 /**
  * `impl` is the first node in topological order, so it is focused on mount
@@ -354,7 +363,7 @@ describe('canvas zoom', () => {
    */
   function zoomOf(stdout: FakeStdout): 'full' | 'compact' | 'mini' {
     const frame = lastFrameLines(stdout).slice(HEADER_ROWS).join('\n');
-    if (!/[╭╰]/.test(frame)) return 'mini';
+    if (!/[╭╰┏┗]/.test(frame)) return 'mini';
     return frame.includes('Implement') ? 'full' : 'compact';
   }
 
@@ -386,6 +395,47 @@ describe('canvas zoom', () => {
       stdin.write(wheel('down', 10, 3));
       await settle();
       expect(zoomOf(stdout)).toBe('full');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('pans sideways on a sideways wheel, and on shift+wheel, without moving vertically', async () => {
+    const { stdout, stdin, unmount } = mountApp();
+    try {
+      await settle();
+      // `rev` is the second card along, so it is on screen at the origin and
+      // still on screen a pan step to the right — unlike `impl`, which is
+      // flush against the left edge.
+      const rowOf = (id: string): number =>
+        lastFrameLines(stdout).findIndex((l) => l.includes(`○ ${id}`));
+      const col = columnOf(stdout, 'rev');
+      const row = rowOf('rev');
+      expect(col).toBeGreaterThan(0);
+
+      // A trackpad's sideways swipe arrives as its own button code. Read as
+      // an up/down pair it was a no-op here (the viewport is already at the
+      // top), so swiping sideways across a graph wider than the terminal did
+      // nothing at all.
+      stdin.write(wheel('right', 10, 3));
+      await settle();
+      expect(columnOf(stdout, 'rev')).toBe(col - PAN_STEP_X);
+      expect(rowOf('rev')).toBe(row);
+
+      stdin.write(wheel('left', 10, 3));
+      await settle();
+      expect(columnOf(stdout, 'rev')).toBe(col);
+
+      // A wheel with no sideways axis reports shift instead.
+      stdin.write(wheel('down', 10, 3, false, true));
+      await settle();
+      expect(columnOf(stdout, 'rev')).toBe(col - PAN_STEP_X);
+      expect(rowOf('rev')).toBe(row);
+
+      // And a plain vertical wheel is still vertical: no sideways drift.
+      stdin.write(wheel('down', 10, 3));
+      await settle();
+      expect(columnOf(stdout, 'rev')).toBe(col - PAN_STEP_X);
     } finally {
       unmount();
     }

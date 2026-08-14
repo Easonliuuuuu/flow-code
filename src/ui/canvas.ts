@@ -22,6 +22,29 @@ export const STATUS_GLYPHS: Record<NodeStatus, string> = {
   skipped: '⊘',
 };
 
+/**
+ * Lifecycle order, for anything that summarises a whole run as counts per
+ * status (the header's `○ 4  ◐ 1  ● 3`). Derived from the order statuses
+ * actually occur in, so a status only ever appears to the *right* of the ones
+ * a run passes through before it — segments then hold their position as the
+ * run progresses instead of being reshuffled by whichever node happened to
+ * reach a given status first.
+ */
+export const STATUS_ORDER: NodeStatus[] = ['idle', 'running', 'waiting', 'done', 'error', 'skipped'];
+
+/**
+ * Card border glyphs. The focused card is drawn in heavy rules rather than a
+ * brighter colour alone: focus and `running` are both cyan, so on a card that
+ * is either, colour answers "which of the two is this?" with a shade. A change
+ * of shape answers it at a glance — and keeps answering it on a terminal
+ * theme with a washed-out palette, or for a reader who can't separate the two
+ * hues at all.
+ */
+const BORDERS = {
+  normal: { tl: '╭', tr: '╮', bl: '╰', br: '╯', h: '─', v: '│' },
+  focus: { tl: '┏', tr: '┓', bl: '┗', br: '┛', h: '━', v: '┃' },
+} as const;
+
 const STATUS_STYLES: Record<NodeStatus, string> = {
   idle: 'dim',
   running: 'cyan',
@@ -268,19 +291,20 @@ export function renderGraph(
       continue;
     }
 
-    put(grid, box.x, box.y, `╭${'─'.repeat(inner)}╮`, style);
+    const border = focused ? BORDERS.focus : BORDERS.normal;
+    put(grid, box.x, box.y, `${border.tl}${border.h.repeat(inner)}${border.tr}`, style);
     // A running node's glyph animates, so a stalled node is visibly distinct
     // from a working one without reading anything else on the card.
     const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
     const blocked = state.denials > 0 ? ' !' : '';
     const title = fit(` ${glyph} ${node.id}${blocked}${delegationBadge(state)}`, inner).padEnd(inner);
-    put(grid, box.x, box.y + 1, '│', style);
+    put(grid, box.x, box.y + 1, border.v, style);
     put(grid, box.x + 1, box.y + 1, title, style);
     if (state.denials > 0) {
       const bangAt = box.x + 1 + ` ${glyph} ${node.id} `.length;
       put(grid, bangAt, box.y + 1, '!', 'blocked');
     }
-    put(grid, box.x + box.w - 1, box.y + 1, '│', style);
+    put(grid, box.x + box.w - 1, box.y + 1, border.v, style);
 
     if (compact) {
       // The rows that carried tokens and elapsed time are gone, so the
@@ -301,12 +325,12 @@ export function renderGraph(
           state.status === 'running' ? 'meter' : 'dim',
         );
       }
-      put(grid, box.x, box.y + box.h - 1, `╰${'─'.repeat(inner)}╯`, style);
+      put(grid, box.x, box.y + box.h - 1, `${border.bl}${border.h.repeat(inner)}${border.br}`, style);
       continue;
     }
 
     const typeLabel = fit(` ${node.type.displayName}`, inner).padEnd(inner);
-    put(grid, box.x, box.y + 2, '│', style);
+    put(grid, box.x, box.y + 2, border.v, style);
     put(grid, box.x + 1, box.y + 2, typeLabel, focused ? 'focus' : 'dim');
     // Only a node a loop-back has re-run carries a retry badge; a first
     // attempt is the ordinary case and says nothing. The retry badge takes
@@ -326,20 +350,30 @@ export function renderGraph(
       const badge = fit(skillBadge, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, focused ? 'focus' : 'skill-badge');
     }
-    put(grid, box.x + box.w - 1, box.y + 2, '│', style);
+    put(grid, box.x + box.w - 1, box.y + 2, border.v, style);
 
     // Subtitle: what the node is doing / produced / will do. Never the type
     // name again — that's the row above.
     const subtitle = nodeSubtitle(node, state, activityByNode.get(node.id) ?? [], anim.frame, inner - 1);
     const subtitleStyle =
       state.status === 'error' ? 'red' : state.status === 'running' ? 'label' : 'dim';
-    put(grid, box.x, box.y + 3, '│', style);
-    put(grid, box.x + 1, box.y + 3, fit(` ${subtitle}`, inner).padEnd(inner), focused ? 'focus' : subtitleStyle);
-    put(grid, box.x + box.w - 1, box.y + 3, '│', style);
+    put(grid, box.x, box.y + 3, border.v, style);
+    // Focus recolours the card cyan, which on a failed node used to take the
+    // one red line on it with it — so the node you tabbed to *because* it
+    // failed was the one node whose failure wasn't coloured as one. An error
+    // outranks focus here; the heavy border still says which card is focused.
+    put(
+      grid,
+      box.x + 1,
+      box.y + 3,
+      fit(` ${subtitle}`, inner).padEnd(inner),
+      state.status === 'error' ? 'red' : focused ? 'focus' : subtitleStyle,
+    );
+    put(grid, box.x + box.w - 1, box.y + 3, border.v, style);
 
     // Metrics: tokens burned and time spent, live while running.
     const metrics = nodeMetrics(state, anim.now);
-    put(grid, box.x, box.y + 4, '│', style);
+    put(grid, box.x, box.y + 4, border.v, style);
     put(
       grid,
       box.x + 1,
@@ -347,9 +381,9 @@ export function renderGraph(
       fit(` ${metrics}`, inner).padEnd(inner),
       state.status === 'running' ? 'meter' : 'dim',
     );
-    put(grid, box.x + box.w - 1, box.y + 4, '│', style);
+    put(grid, box.x + box.w - 1, box.y + 4, border.v, style);
 
-    put(grid, box.x, box.y + 5, `╰${'─'.repeat(inner)}╯`, style);
+    put(grid, box.x, box.y + 5, `${border.bl}${border.h.repeat(inner)}${border.br}`, style);
   }
 
   return grid;

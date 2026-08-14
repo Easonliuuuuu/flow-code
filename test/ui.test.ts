@@ -292,6 +292,42 @@ describe('canvas rendering', () => {
     expect(text).toContain('▶');
   });
 
+  it('draws the focused card in heavy rules, so focus is a shape and not just a shade', () => {
+    const store = storeFor(WF, '/tmp');
+    // `impl` is running, i.e. cyan — the same colour focus paints with, which
+    // is exactly the pair a reader has to be able to tell apart.
+    store.setStatus('impl', 'running');
+    const layout = computeLayout(WF);
+    const lines = (focused: string | null): string[] =>
+      gridToLines(renderGraph(WF, layout, store.snapshot(), focused), {
+        ox: 0,
+        oy: 0,
+        width: layout.width + 2,
+        height: layout.height + 1,
+      }).map((l) => l.replace(/\x1b\[[0-9;]*m/g, ''));
+
+    const impl = layout.boxes.get('impl')!;
+    const rev = layout.boxes.get('rev')!;
+    const focusedFrame = lines('impl');
+    expect(focusedFrame[impl.y]!.slice(impl.x, impl.x + impl.w)).toMatch(/^┏━+┓$/);
+    // Every other card keeps the rounded rule it always had.
+    expect(focusedFrame[rev.y]!.slice(rev.x, rev.x + rev.w)).toMatch(/^╭─+╮$/);
+    // And nothing is heavy when nothing is focused.
+    expect(lines(null).join('\n')).not.toMatch(/[┏┓┗┛┃━]/);
+  });
+
+  it('keeps a failed card red even while focused — focus must not hide the failure', () => {
+    const store = storeFor(WF, '/tmp');
+    store.setStatus('impl', 'error', 'exploded');
+    const layout = computeLayout(WF);
+    const grid = renderGraph(WF, layout, store.snapshot(), 'impl');
+    const box = layout.boxes.get('impl')!;
+    // The subtitle row is where a failure says what went wrong.
+    const subtitle = grid[box.y + 3]!.slice(box.x + 1, box.x + box.w - 1);
+    expect(subtitle.map((c) => c.ch).join('')).toContain('exploded');
+    expect(new Set(subtitle.map((c) => c.style))).toContain('red');
+  });
+
   it('draws a live card: spinner, current tool call, tokens and elapsed time', () => {
     const store = storeFor(WF, '/tmp');
     store.setStatus('impl', 'running');
@@ -1019,13 +1055,13 @@ edges:
 describe('mouse parsing (SGR)', () => {
   it('parses press, drag, and release with 0-based coordinates', () => {
     expect(parseMouseEvents('\x1b[<0;5;3M')).toEqual([
-      { kind: 'press', x: 4, y: 2, button: 0, ctrl: false },
+      { kind: 'press', x: 4, y: 2, button: 0, ctrl: false, shift: false },
     ]);
     expect(parseMouseEvents('\x1b[<32;6;3M')).toEqual([
-      { kind: 'drag', x: 5, y: 2, button: 0, ctrl: false },
+      { kind: 'drag', x: 5, y: 2, button: 0, ctrl: false, shift: false },
     ]);
     expect(parseMouseEvents('\x1b[<0;6;3m')).toEqual([
-      { kind: 'release', x: 5, y: 2, button: 0, ctrl: false },
+      { kind: 'release', x: 5, y: 2, button: 0, ctrl: false, shift: false },
     ]);
   });
 
@@ -1035,10 +1071,22 @@ describe('mouse parsing (SGR)', () => {
 
   it('parses wheel up/down as scroll events, not clicks', () => {
     expect(parseMouseEvents('\x1b[<64;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, direction: 'up' },
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, shift: false, direction: 'up' },
     ]);
     expect(parseMouseEvents('\x1b[<65;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: false, direction: 'down' },
+      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: false, shift: false, direction: 'down' },
+    ]);
+  });
+
+  it('reads the sideways wheel as its own axis rather than as up/down', () => {
+    // 66/67 are what a trackpad's sideways swipe (and a tilt wheel) emit.
+    // Read as a vertical pair — `code & 1` — they arrive as spurious up/down
+    // scrolls, i.e. a canvas that drifts vertically when you swipe sideways.
+    expect(parseMouseEvents('\x1b[<66;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 2, ctrl: false, shift: false, direction: 'left' },
+    ]);
+    expect(parseMouseEvents('\x1b[<67;5;3M')).toEqual([
+      { kind: 'scroll', x: 4, y: 2, button: 3, ctrl: false, shift: false, direction: 'right' },
     ]);
   });
 
@@ -1047,14 +1095,15 @@ describe('mouse parsing (SGR)', () => {
     // made ctrl+wheel indistinguishable from a bare wheel, so a zoom gesture
     // silently panned instead.
     expect(parseMouseEvents('\x1b[<80;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: true, direction: 'up' },
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: true, shift: false, direction: 'up' },
     ]);
     expect(parseMouseEvents('\x1b[<81;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: true, direction: 'down' },
+      { kind: 'scroll', x: 4, y: 2, button: 1, ctrl: true, shift: false, direction: 'down' },
     ]);
-    // Shift is a modifier too, and must not read as ctrl.
+    // Shift is a modifier too, and must not read as ctrl — it is reported in
+    // its own right, since on the wheel it means "sideways", not "zoom".
     expect(parseMouseEvents('\x1b[<68;5;3M')).toEqual([
-      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, direction: 'up' },
+      { kind: 'scroll', x: 4, y: 2, button: 0, ctrl: false, shift: true, direction: 'up' },
     ]);
   });
 
