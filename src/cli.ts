@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { cmdConnect } from './cli/connect.js';
-import { cmdDoctor } from './cli/doctor.js';
-import { cmdHook } from './cli/hook.js';
-import { cmdInit } from './cli/init.js';
-import { cmdMcp } from './cli/mcp.js';
-import { cmdNode } from './cli/node.js';
-import { cmdNodeTypes } from './cli/nodeTypes.js';
-import { cmdReconcile } from './cli/reconcile.js';
-import { cmdRun } from './cli/run.js';
-import { cmdRuns } from './cli/runs.js';
-import { cmdSkills } from './cli/skills.js';
-import { cmdStatus } from './cli/status.js';
-import { cmdValidate } from './cli/validate.js';
-import { cmdWatch } from './cli/watch.js';
 import { fail } from './cli/context.js';
+
+/*
+ * Every subcommand is imported dynamically, and that is a performance
+ * requirement rather than a style preference.
+ *
+ * Two of these commands are called by another program on a hot path: `hook
+ * pretooluse` runs once before *every* tool call in a host session, and
+ * `status` is re-run by a status line on every event. Static imports made both
+ * of them pay for the whole program — Ink, React, the engine, the agent SDK,
+ * the MCP server — to answer a question that reads one JSON file. Measured on
+ * the machine this was written on: 27ms to start node, 940ms to import the
+ * entry point, so the hook cost ~0.72s per tool call and a node doing thirty
+ * calls paid twenty seconds for nothing.
+ *
+ * Keep it this way. A static `import` of a command module at the top of this
+ * file re-couples every command to every other one, and the cost lands on the
+ * two paths least able to afford it.
+ */
 
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
 
@@ -49,8 +53,11 @@ Usage:
                               and the graph fills in beside your own session. \`flow-code node\`
                               on its own lists the subcommands
   flow-code connect [--check] Install flow-code's reporting surface into this project's agent
-                              configuration (MCP server, workflow skill, instructions section).
-                              --check reports what is installed and whether it is still current
+                              configuration (MCP server, workflow skill, instructions section,
+                              enforcement hook, and a status row for the host's status line).
+                              --check reports what is installed and whether it is still current;
+                              --status-line installs only the status row, which is the one piece
+                              the Claude Code plugin cannot install for you
   flow-code reconcile [runId] [--json]
                               Check a run's claims against the repository — which completed nodes
                               reported work the tree does not show. Read-only and advisory; exits
@@ -66,33 +73,33 @@ async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
     case 'init':
-      return cmdInit(args);
+      return (await import('./cli/init.js')).cmdInit(args);
     case 'run':
-      return cmdRun(args);
+      return (await import('./cli/run.js')).cmdRun(args);
     case 'runs':
-      return cmdRuns();
+      return (await import('./cli/runs.js')).cmdRuns();
     case 'watch':
-      return cmdWatch(args);
+      return (await import('./cli/watch.js')).cmdWatch(args);
     case 'status':
-      return cmdStatus(args);
+      return (await import('./cli/status.js')).cmdStatus(args);
     case 'node':
-      return cmdNode(args);
+      return (await import('./cli/node.js')).cmdNode(args);
     case 'connect':
-      return cmdConnect(args);
+      return (await import('./cli/connect.js')).cmdConnect(args);
     case 'mcp':
-      return cmdMcp();
+      return (await import('./cli/mcp.js')).cmdMcp();
     case 'hook':
-      return cmdHook(args);
+      return (await import('./cli/hook.js')).cmdHook(args);
     case 'reconcile':
-      return cmdReconcile(args);
+      return (await import('./cli/reconcile.js')).cmdReconcile(args);
     case 'validate':
-      return cmdValidate();
+      return (await import('./cli/validate.js')).cmdValidate();
     case 'node-types':
-      return cmdNodeTypes();
+      return (await import('./cli/nodeTypes.js')).cmdNodeTypes();
     case 'skills':
-      return cmdSkills();
+      return (await import('./cli/skills.js')).cmdSkills();
     case 'doctor':
-      return cmdDoctor(args);
+      return (await import('./cli/doctor.js')).cmdDoctor(args);
     case undefined:
     case 'help':
     case '--help':
