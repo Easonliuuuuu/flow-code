@@ -51,6 +51,7 @@ scopes:
   validate: [workflow-graph]
   record: [run-state, workflow-graph]
   runstate: [run-state]
+  connect: [session-status-line]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
