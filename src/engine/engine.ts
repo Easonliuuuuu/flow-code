@@ -3,6 +3,7 @@ import type { RunStateStore } from '../runstate/store.js';
 import type { RunBaseline } from '../runstate/types.js';
 import { evaluateCondition } from '../workflow/condition.js';
 import type { ConditionalEdge } from '../workflow/graph.js';
+import type { LoopbackTrigger } from '../workflow/schema.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import type {
   ExecuteContext,
@@ -339,10 +340,12 @@ export class Engine {
    * path between them, so the scheduler re-runs the segment. Returns false when
    * no loop-back applies — the caller then skips downstream as before.
    */
-  private fireLoopback(sourceId: string): boolean {
+  private fireLoopback(sourceId: string, trigger: LoopbackTrigger): boolean {
     // Interrupted runs unwind; they never start another attempt.
     if (this.signal.aborted) return false;
-    const loopbacks = this.wf.graph.loopbacksFrom(sourceId);
+    // Only the return paths this outcome takes: a verification loop waits for a
+    // failure, a revision step is taken *because* it finished.
+    const loopbacks = this.wf.graph.loopbacksFrom(sourceId).filter((l) => l.on === trigger);
     if (loopbacks.length === 0) return false;
 
     const firable = loopbacks.find((l) => this.store.attemptOf(l.to) < l.maxAttempts);
@@ -351,10 +354,14 @@ export class Engine {
       const exhausted = loopbacks
         .map((l) => `\`${l.to}\` after ${l.maxAttempts} attempt(s)`)
         .join(', ');
-      const detail = this.store.node(sourceId).statusDetail;
+      const current = this.store.node(sourceId);
+      const detail = current.statusDetail;
+      // A rejected gate is a loop-back source that did not fail, so it keeps its
+      // own terminal status and only gains the reason the loop stopped. Its
+      // branch is already held by the approved-conditions on its out-edges.
       this.store.setStatus(
         sourceId,
-        'error',
+        current.status === 'done' ? 'done' : 'error',
         `${detail ? `${detail} — ` : ''}loop-back attempt limit reached: ${exhausted}`,
       );
       return false;
@@ -364,6 +371,18 @@ export class Engine {
     this.recordRetryReason(firable.to, sourceId);
     for (const id of this.wf.graph.nodesBetween(firable.to, sourceId)) {
       this.store.resetNode(id);
+    }
+    // A branch the run routed around was skipped on outputs the segment is
+    // about to recompute, so that verdict no longer stands. Without this, an
+    // arm skipped on the first pass stays skipped however the second pass
+    // decides — the loop-back would re-run the work and then have nowhere to
+    // deliver it. Only `condition` skips: an `upstream` skip means something
+    // above actually failed, which the re-run may still leave true.
+    for (const id of this.wf.graph.downstreamOf(firable.to)) {
+      const node = this.store.node(id);
+      if (node.status === 'skipped' && node.skipReason === 'condition') {
+        this.store.clearSkip(id);
+      }
     }
     return true;
   }
@@ -473,13 +492,30 @@ export class Engine {
     } finally {
       this.nodeAborts.delete(node.id);
     }
-    if (sawError || this.store.node(node.id).status === 'error') {
-      // A budget stop is final: retrying past a ceiling is exactly what the
-      // ceiling exists to prevent. Every other failure may still loop back.
-      const stoppedByBudget =
-        this.nodeBudgetStops.has(node.id) || this.runBudgetStop !== null;
-      if (stoppedByBudget || !this.fireLoopback(node.id)) this.markDownstreamSkipped(node.id);
-    }
+    // A budget stop is final: retrying past a ceiling is exactly what the
+    // ceiling exists to prevent. Every other outcome may still loop back.
+    const stoppedByBudget = this.nodeBudgetStops.has(node.id) || this.runBudgetStop !== null;
+    const failed = sawError || this.store.node(node.id).status === 'error';
+    // A rejected gate did not fail, but it is the same kind of event to a
+    // return path: the run did not get what it came for.
+    const trigger: LoopbackTrigger = failed || this.wasRejectedGate(node) ? 'failure' : 'success';
+    const looped = !stoppedByBudget && this.fireLoopback(node.id, trigger);
+    // Only a real failure cascades. A rejected gate ends at `done`, and the
+    // approved-conditions on its out-edges already skip the branch it held —
+    // cascading here as well would take down nodes the rejection branch needs.
+    if (!looped && failed) this.markDownstreamSkipped(node.id);
+  }
+
+  /**
+   * A rejected Approval-Gate is a loop-back source even though it completed:
+   * `{ from: gate, to: implement, loopback: … }` predates rejection branches and
+   * stays supported. Its terminal status is `done`, so the failure path above
+   * would otherwise stop looking at it.
+   */
+  private wasRejectedGate(node: WorkflowNode): boolean {
+    if (node.type.id !== 'approval-gate') return false;
+    const output = this.store.node(node.id).output as { decision?: unknown } | undefined;
+    return output?.decision === 'rejected';
   }
 
   private startEligible(): void {

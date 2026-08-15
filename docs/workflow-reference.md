@@ -48,25 +48,43 @@ which is why an edge you did not draw is context a node does not get.
 
 ### Loop-backs
 
-A loop-back is a return path: when `from` fails, execution resumes at `to` and
-re-runs everything between them, with the failure passed in as context.
+A loop-back is a return path: when `from` ends, execution resumes at `to` and
+re-runs everything between them, with the outcome passed in as context.
 
 ```yaml
   - { from: test, to: implement, loopback: true }               # 3 attempts (default)
   - { from: validate, to: implement, loopback: { maxAttempts: 5 } }
+  - { from: revise, to: implement, loopback: { on: success } }  # see below
 ```
 
-Whether a node failed is the node type's call, not the edge's — `validate` and
-`review` fail on their own `fail` verdict, `test` on a non-zero exit status. The edge
-only says where that failure routes.
+Whether a node succeeded or failed is the node type's call, not the edge's —
+`validate` and `review` fail on their own `fail` verdict, `test` on a non-zero exit
+status. The edge only says where each outcome routes.
+
+`on` says which outcome takes the path:
+
+| `on` | fires when | for |
+| --- | --- | --- |
+| `failure` (default) | the source fails | verification loops — a failing check is another iteration, not the end of the run |
+| `success` | the source completes | a step whose whole job is deciding what to change next, reached because something upstream was rejected |
+
+`on: success` exists for one shape: a node reached *because* work was turned down,
+whose conclusion is itself the reason to retry. Waiting for such a node to fail would
+mean waiting forever. Everywhere else, `failure` is what you want — a check that
+passes has no reason to send the run backwards.
 
 `maxAttempts` is counted **on the target** and shared across every loop-back pointing
-at it. Three loop-backs into `implement` at `maxAttempts: 3` give you three retries in
-total, not nine — so a loop that never converges still terminates. After that the
-failure stands and downstream nodes are skipped.
+at it, whatever their triggers. Three loop-backs into `implement` at `maxAttempts: 3`
+give you three retries in total, not nine — so a loop that never converges still
+terminates. After that the outcome stands and downstream nodes are skipped.
 
-A loop-back cannot carry a `when:`. A return path is taken because its source failed,
-and that is its condition.
+When a loop-back fires, any branch that was skipped because a routing condition sent
+the run elsewhere is put back in play: the segment re-running is what decided that
+routing, so the skip no longer stands. A branch skipped because something above it
+*failed* stays skipped.
+
+A loop-back cannot carry a `when:`. A return path is taken because of how its source
+ended, which is what `on` already says.
 
 ### Conditional edges
 
@@ -222,12 +240,53 @@ The scaffolded graph puts an `approval-gate` between `review` and `git-ops`, so 
 "nothing is pushed without explicit approval" guarantee holds with zero configuration.
 The gate computes the pending diff against the run baseline and waits for a decision.
 
-A rejected gate deliberately has no loop-back: no means stop. To send a rejection back
-for another pass instead, add one:
+Both decisions finish the node — a gate that got its answer completed, so a rejection
+is recorded as `decision: 'rejected'` rather than as a failure. What stops the branch
+is the condition on the gate's out-edges: **an edge out of an `approval-gate` that
+states no `when` is read as if it said `when: "<gate>.decision == 'approved'"`.** You
+never write that yourself, and an edge that states its own condition is left alone. It
+is why `- { from: gate, to: git-ops }` is safe exactly as written.
+
+A rejected gate stops the run by default: no means stop. To send a rejection back for
+another pass instead, either loop straight back:
 
 ```yaml
   - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
 ```
+
+...which retries carrying nothing but "a human said no" — or route the rejection
+through a conversation first, so the retry knows what to change:
+
+```yaml
+nodes:
+  - id: revise
+    type: discuss
+    config: { topic: what to change before this can be approved }
+edges:
+  - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }
+```
+
+`revise` is an ordinary Discuss node — the same type the graph already starts with,
+placed a second time. Node **ids** must be unique; types may repeat. It receives the
+rejected diff through the gate (which is context-transparent), settles with you what
+needs to change, and its recorded conclusion becomes the context `implement` retries
+with. Each rejection costs an agent session, which is why the scaffolded graph ships
+this commented out.
+
+`on: success` is what makes the branch work. A loop-back fires when its source ends
+the way `on` names, and the default is `failure` — a failing test sends the run back,
+a passing one does not. A revision step is the inverse: **finishing** it is the signal
+to retry, so a return path waiting for it to fail would wait forever. See
+[loop-backs](#loop-backs) for the field itself.
+
+The loop returns to `implement` rather than to `discuss` on purpose: `spec` then stays
+outside the reset segment, so every retry is judged against the same acceptance
+criteria the first attempt was.
+
+This is engine-path only. A run driven from a guest session records a rejection as a
+failure and stops there; the rejection branch is not walked.
 
 `git-ops` commits only. To push, configure a remote explicitly:
 

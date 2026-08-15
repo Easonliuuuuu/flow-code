@@ -249,9 +249,16 @@ export const worktreeAgentOutput = z.object({
   convergedDir: z.string(),
 });
 
+/**
+ * `diffs` is what the decision was made on, kept so the decision stays
+ * reviewable after the fact and so a node downstream of the gate receives the
+ * changes rather than the bare verdict. Optional because the guest path records
+ * a decision it did not compute a diff for.
+ */
 export const approvalGateOutput = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedAt: z.string(),
+  diffs: z.array(z.object({ label: z.string().optional(), diff: z.string() })).optional(),
 });
 
 export type DiscussOutput = z.infer<typeof discussOutput>;
@@ -301,8 +308,11 @@ const definitions: NodeTypeDefinition[] = [
     agentDriven: true,
     interactive: true,
     hasModelField: true,
+    // Deliberately says nothing about *where* in the workflow this runs: the
+    // same type also serves as the revision step a rejected gate routes to,
+    // where "at the start" would be false.
     rolePrompt:
-      'You are the discussion partner at the start of a coding workflow. ' +
+      'You are the discussion partner in a coding workflow. ' +
       'Help the user clarify what should be built and which constraints apply. ' +
       'You may read the repository to inform the discussion, but you must not change anything.',
     configSchema: discussConfig,
@@ -467,7 +477,8 @@ const definitions: NodeTypeDefinition[] = [
     outputSchema: approvalGateOutput,
     configSummary:
       "title? (string), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
-    outputSummary: "decision ('approved'|'rejected'), decidedAt (ISO timestamp)",
+    outputSummary:
+      "decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on)",
     // A gate records a decision, not a result: without transparency every node
     // after a gate would receive `{decision, decidedAt}` and nothing else.
     contextTransparent: true,

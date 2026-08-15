@@ -150,6 +150,10 @@ export function fakeSessions(
     },
     async openInteractive(req): Promise<InteractiveAgentSession> {
       requests.push(req);
+      // The real runner reports the session id it opened, which is what lets a
+      // node resume rather than start over. Without this the harness can never
+      // reach the resume path a live run takes.
+      req.onSessionId?.(`fake-sess-${req.nodeId}-${requests.length}`);
       return {
         send: async (text) => handler({ ...req, prompt: text }),
         end: async () => {},

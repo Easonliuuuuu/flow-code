@@ -316,6 +316,33 @@ export function loadWorkflowFromString(source: string, options: LoadOptions = {}
 }
 
 /**
+ * A rejected Approval-Gate ends at `done`, so what holds its branch back is the
+ * condition on its out-edges rather than a failed status. An edge that states no
+ * condition is therefore loaded as though it required approval — otherwise a
+ * workflow written before rejection branches existed would let a rejected change
+ * reach a Git-ops node and be committed.
+ *
+ * Derived, never written back: the user's file is left exactly as they wrote it,
+ * and an edge that states its own condition is left exactly as it states it. A
+ * loop-back is skipped because it is a return path taken on failure, not a
+ * routed forward edge — the loader rejects `when` on one outright.
+ */
+function withGateApprovalConditions(
+  edges: WorkflowEdge[],
+  nodes: WorkflowNode[],
+): WorkflowEdge[] {
+  const gateIds = new Set(
+    nodes.filter((n) => n.type.id === 'approval-gate').map((n) => n.id),
+  );
+  if (gateIds.size === 0) return edges;
+  return edges.map((edge) =>
+    edge.loopback || edge.when !== undefined || !gateIds.has(edge.from)
+      ? edge
+      : { ...edge, when: `${edge.from}.decision == 'approved'` },
+  );
+}
+
+/**
  * Everything after the file has parsed and matched its top-level shape:
  * resolve node types and configs, resolve skills, and check the graph.
  *
@@ -411,9 +438,11 @@ export function buildWorkflow(
 
   if (problems.length > 0) throw new WorkflowValidationError(problems, 'declarations');
 
+  const edges = withGateApprovalConditions(file.edges, nodes);
+
   const graph = new Graph(
     nodes.map((n) => n.id),
-    file.edges,
+    edges,
   );
   let order: string[];
   try {
@@ -489,7 +518,10 @@ export function buildWorkflow(
   return {
     settings: file.settings ?? DEFAULT_SETTINGS,
     nodes,
-    edges: file.edges,
+    // The derived edges, not `file.edges`: the canvas, the layout and the run
+    // record should all describe the graph that actually ran. Nothing writes
+    // this back to YAML, so the user's file stays as they wrote it.
+    edges,
     graph,
     order,
   };

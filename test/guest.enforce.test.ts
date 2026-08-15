@@ -560,6 +560,7 @@ describe('an approval gate is answered by a person', () => {
       /upstream is unfinished/,
     );
   });
+
 });
 
 describe('work delegated to a subagent', () => {

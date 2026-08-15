@@ -1,11 +1,12 @@
 import { parseCondition, type Condition } from './condition.js';
-import type { WorkflowEdge } from './schema.js';
+import type { LoopbackTrigger, WorkflowEdge } from './schema.js';
 
-/** A return path: when `from` fails, execution resumes at `to`. */
+/** A return path: when `from` ends the way `on` names, execution resumes at `to`. */
 export interface Loopback {
   from: string;
   to: string;
   maxAttempts: number;
+  on: LoopbackTrigger;
 }
 
 /** A forward edge that only carries when its condition holds. */
@@ -39,7 +40,12 @@ export class Graph {
     }
     for (const e of edges) {
       if (e.loopback) {
-        this.loopbacks.push({ from: e.from, to: e.to, maxAttempts: e.loopback.maxAttempts });
+        this.loopbacks.push({
+          from: e.from,
+          to: e.to,
+          maxAttempts: e.loopback.maxAttempts,
+          on: e.loopback.on,
+        });
         continue;
       }
       this.out.get(e.from)!.push(e.to);

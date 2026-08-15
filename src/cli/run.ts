@@ -12,7 +12,7 @@ import {
   findLatestInterruptedRun,
 } from '../runstate/persist.js';
 import { RunStateStore } from '../runstate/store.js';
-import type { RunState } from '../runstate/types.js';
+import { isRejectedGate, type RunState } from '../runstate/types.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
 import { declaredGraphs, type Workflow } from '../workflow/load.js';
 import { RecordedGraphError, recordGraph, rehydrateGraph } from '../workflow/record.js';
@@ -175,10 +175,14 @@ export function formatRunSummary(runId: string, nodes: RunState['nodes'], interr
   );
 }
 
-/** 130 for an interrupt (the shell's SIGINT convention), 1 if any node errored, else 0. */
+/**
+ * 130 for an interrupt (the shell's SIGINT convention), 1 if any node errored
+ * or a gate was rejected, else 0. A rejection ends at `done`, but the run did
+ * not do what it set out to do, and CI should see that.
+ */
 export function runExitCode(nodes: RunState['nodes'], interrupted: boolean): number {
   if (interrupted) return 130;
-  return Object.values(nodes).some((n) => n.status === 'error') ? 1 : 0;
+  return Object.values(nodes).some((n) => n.status === 'error' || isRejectedGate(n)) ? 1 : 0;
 }
 
 export async function cmdRun(args: string[]): Promise<void> {

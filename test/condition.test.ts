@@ -165,3 +165,65 @@ ${edges}
     ).toThrow(/cannot carry a `when`/);
   });
 });
+
+describe('approved-condition synthesis on Approval-Gate out-edges', () => {
+  const wf = (edges: string): string => `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+  - id: revise
+    type: discuss
+edges:
+${edges}
+`;
+
+  it('conditions an unconditional gate out-edge on approval', () => {
+    // The safety property: a workflow written before rejection branches existed
+    // must not let a rejected change reach git.
+    const workflow = loadWorkflowFromString(
+      wf(`  - { from: impl, to: gate }\n  - { from: gate, to: ship }`),
+    );
+    const [condition] = workflow.graph.conditionsInto('ship');
+    expect(condition!.condition.source).toBe("gate.decision == 'approved'");
+  });
+
+  it('leaves an explicitly conditioned gate out-edge exactly as written', () => {
+    const workflow = loadWorkflowFromString(
+      wf(
+        `  - { from: impl, to: gate }\n  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }`,
+      ),
+    );
+    const [condition] = workflow.graph.conditionsInto('revise');
+    expect(condition!.condition.source).toBe("gate.decision == 'rejected'");
+  });
+
+  it('leaves edges out of other node types unconditional', () => {
+    const workflow = loadWorkflowFromString(
+      wf(`  - { from: impl, to: gate }\n  - { from: gate, to: ship }`),
+    );
+    expect(workflow.graph.conditionsInto('gate')).toHaveLength(0);
+  });
+
+  it('adds nothing to a loop-back out of a gate', () => {
+    // A return path is taken because the source failed; that is its condition,
+    // and the loader rejects a `when` on one outright.
+    const workflow = loadWorkflowFromString(
+      wf(
+        `  - { from: impl, to: gate }\n  - { from: gate, to: ship }\n  - { from: gate, to: impl, loopback: true }`,
+      ),
+    );
+    expect(workflow.graph.allLoopbacks()).toHaveLength(1);
+    expect(workflow.edges.find((e) => e.loopback)!.when).toBeUndefined();
+  });
+
+  it('does not rewrite the workflow file the user wrote', () => {
+    const source = wf(`  - { from: impl, to: gate }\n  - { from: gate, to: ship }`);
+    loadWorkflowFromString(source);
+    expect(source).not.toContain('approved');
+  });
+});

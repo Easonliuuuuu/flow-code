@@ -61,6 +61,30 @@ describe('runExitCode', () => {
     expect(runExitCode(nodes('done', 'done', 'skipped'), false)).toBe(0);
     expect(runExitCode({}, false)).toBe(0);
   });
+
+  it('is 1 when a gate was rejected, which completes rather than errors', () => {
+    const rejected = {
+      ...nodes('done'),
+      gate: {
+        status: 'done' as const,
+        denials: 0,
+        output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' },
+      },
+    };
+    expect(runExitCode(rejected, false)).toBe(1);
+  });
+
+  it('is 0 when that same gate was approved', () => {
+    const approved = {
+      ...nodes('done'),
+      gate: {
+        status: 'done' as const,
+        denials: 0,
+        output: { decision: 'approved', decidedAt: '2026-08-15T00:00:00.000Z' },
+      },
+    };
+    expect(runExitCode(approved, false)).toBe(0);
+  });
 });
 
 describe('formatRunSummary', () => {

@@ -396,6 +396,82 @@ nodes:
     expect(ports.beginCalls[0]!.seedTranscript).toEqual([]);
     expect(store.node('talk').status).toBe('done');
   });
+
+  // A loop-back preserves the transcript and session id, so the node resumes.
+  // Resuming silently would hand the agent a conversation from before the work
+  // it is being asked to reconsider — and the retry reason the engine recorded
+  // would never be spoken.
+  const LOOPED = `
+nodes:
+  - id: talk
+    type: discuss
+    config: { topic: "the greeting color" }
+  - id: gate
+    type: approval-gate
+edges:
+  - { from: talk, to: gate }
+  - { from: gate, to: talk, loopback: { maxAttempts: 3 } }
+`;
+
+  it('tells a re-entered discussion why it is running again', async () => {
+    const repo = makeTempGitRepo();
+    const sentPrompts: string[] = [];
+    const sessions = fakeSessions((req) => {
+      sentPrompts.push(req.prompt);
+      if (req.prompt.includes('JSON object recording')) {
+        return JSON.stringify({ conclusion: 'blue greeting', constraints: [] });
+      }
+      return 'understood';
+    });
+    let decisions = 0;
+    const ports = fakePorts({
+      userMessages: [],
+      approve: () => (++decisions === 1 ? 'reject' : 'approve'),
+    });
+    const { store } = await runReal(LOOPED, repo, { sessions, ports });
+
+    // Two passes through the discussion: the opening, then the re-opening.
+    const openings = sentPrompts.filter((p) => p.includes('Open a discussion'));
+    const reopenings = sentPrompts.filter((p) => p.includes('sent back'));
+    expect(openings).toHaveLength(1);
+    expect(reopenings).toHaveLength(1);
+    // The re-opening carries the retry reason the engine recorded, naming the
+    // node that sent the work back.
+    expect(reopenings[0]).toContain('running again because');
+    expect(reopenings[0]).toContain('gate');
+    expect(reopenings[0]).toContain('rejected');
+
+    // It continued the same conversation rather than starting a second one.
+    expect(sessions.requests[1]!.resumeSessionId).toBeDefined();
+    expect(ports.beginCalls[1]!.seedTranscript!.length).toBeGreaterThan(0);
+
+    expect(decisions).toBe(2);
+    expect(store.node('gate').status).toBe('done');
+    expect(store.node('gate').output).toMatchObject({ decision: 'approved' });
+  });
+
+  it('carries the current attempt into a second re-entry, not the first one', async () => {
+    const repo = makeTempGitRepo();
+    const sentPrompts: string[] = [];
+    const sessions = fakeSessions((req) => {
+      sentPrompts.push(req.prompt);
+      if (req.prompt.includes('JSON object recording')) {
+        return JSON.stringify({ conclusion: 'blue greeting', constraints: [] });
+      }
+      return 'understood';
+    });
+    let decisions = 0;
+    const ports = fakePorts({
+      userMessages: [],
+      approve: () => (++decisions <= 2 ? 'reject' : 'approve'),
+    });
+    await runReal(LOOPED, repo, { sessions, ports });
+
+    // Three decisions, so the node is re-entered twice — the attempt-2 case
+    // where the surviving transcript would otherwise stand in for fresh context.
+    expect(decisions).toBe(3);
+    expect(sentPrompts.filter((p) => p.includes('sent back'))).toHaveLength(2);
+  });
 });
 
 describe('Approval-Gate node', () => {
@@ -493,7 +569,20 @@ nodes:
     expect([...sessions.requests[0]!.capabilities].sort()).toEqual(['edit', 'read']);
   });
 
-  it('on reject: gate errors, downstream is skipped, independent branches still run', async () => {
+  it('records the diff it was decided on, so the decision stays reviewable', async () => {
+    const repo = makeTempGitRepo();
+    const { store } = await runReal(GATED, repo, {
+      sessions: implSessions(repo),
+      portOpts: { approve: 'approve' },
+    });
+    // The schema has to carry `diffs` for this to survive: the engine records
+    // the parsed output, and an unknown key would be stripped on the way in.
+    const output = store.node('gate').output as ApprovalGateOutput;
+    expect(output.diffs).toBeDefined();
+    expect(output.diffs![0]!.diff).toContain('agent-made.txt');
+  });
+
+  it('on reject: gate is done-but-rejected, downstream is skipped, independent branches still run', async () => {
     const repo = makeTempGitRepo();
     // Independent branch: `solo` depends only on impl, not on the gate.
     const withIndependent = `
@@ -518,10 +607,17 @@ edges:
       sessions: implSessions(repo),
       portOpts: { approve: 'reject' },
     });
-    expect(store.node('gate').status).toBe('error');
+    // A gate that got its answer completed; the rejection lives in the output,
+    // not in the status.
+    expect(store.node('gate').status).toBe('done');
     expect(store.node('gate').statusDetail).toContain('rejected');
     expect((store.node('gate').output as ApprovalGateOutput).decision).toBe('rejected');
+    // `after` is held back by the approved-condition synthesized onto
+    // `gate → after`, so it is skipped by routing rather than by a failure
+    // cascade. The skip reason is the load-bearing difference: a `condition`
+    // skip clears a dependency where an `upstream` skip does not.
     expect(store.node('after').status).toBe('skipped');
+    expect(store.node('after').skipReason).toBe('condition');
     expect(store.node('solo').status).toBe('done');
   });
 
