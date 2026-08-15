@@ -13,7 +13,7 @@
 # reason: there the run document is what the outside agent is being tested on
 # producing, so seeding one would hide the very thing under test.
 #
-# Usage: make-testbed.sh [--mode ui|splash|clean|guest] [--dest PATH]
+# Usage: make-testbed.sh [--mode ui|splash|clean|guest|revise] [--dest PATH]
 #                         [--shape wide|tall|tiny] [--install connect|plugin]
 #                         [--no-build]
 
@@ -42,8 +42,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$MODE" in
-  ui|splash|clean|guest) ;;
-  *) echo "unknown mode: $MODE — expected ui, splash, clean, or guest" >&2; exit 2 ;;
+  ui|splash|clean|guest|revise) ;;
+  *) echo "unknown mode: $MODE — expected ui, splash, clean, guest, or revise" >&2; exit 2 ;;
 esac
 
 case "$SHAPE" in
@@ -58,6 +58,13 @@ esac
 
 if [ "$MODE" = "clean" ] && [ "$SHAPE_SET" -eq 1 ]; then
   echo "--shape has no effect in clean mode (nothing is scaffolded)" >&2
+  exit 2
+fi
+
+# revise mode has one graph on purpose — its whole subject is that graph's
+# rejection branch, so a shape here would silently do nothing.
+if [ "$MODE" = "revise" ] && [ "$SHAPE_SET" -eq 1 ]; then
+  echo "--shape has no effect in revise mode (its graph is fixed)" >&2
   exit 2
 fi
 
@@ -137,6 +144,126 @@ EOF
   exit 0
 fi
 
+if [ "$MODE" = "revise" ]; then
+  # What a rejection does, driven live by the engine. `clean` mode starts from
+  # nothing so `init` itself can be watched, and `ui` mode never runs an agent
+  # — neither can show a gate being rejected and the run coming back round. So
+  # this scaffolds the graph already wired, and `run` works immediately.
+  #
+  # A real (tiny) project, because the gate has to have a diff to show and the
+  # revision conversation has to have something concrete to talk about.
+  mkdir -p "$DEST/.flow-code" "$DEST/src" "$DEST/test"
+
+  cat > package.json <<'EOF'
+{
+  "name": "flow-code-revise-testbed",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'"
+  }
+}
+EOF
+
+  cat > src/greet.js <<'EOF'
+export function greet(name) {
+  return `hello ${name}`;
+}
+EOF
+
+  cat > test/greet.test.js <<'EOF'
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { greet } from '../src/greet.js';
+
+test('greets by name', () => {
+  assert.equal(greet('world'), 'hello world');
+});
+EOF
+
+  # The rejection branch, wired. Short on purpose: you need to reach the gate
+  # quickly and reject it more than once, and every node before it is just
+  # setup.
+  #
+  #   gate --(approved)--> ship
+  #        --(rejected)--> revise --loopback on:success--> implement
+  #
+  # `on: success` is the part worth watching. A loop-back normally fires when
+  # its source *fails*; here finishing the conversation is the signal to go
+  # back, so a return path waiting for `revise` to fail would wait forever.
+  #
+  # Both return paths point at `implement`, which shares one attempt budget
+  # between them — so it is set high enough to absorb a couple of failed test
+  # runs *and* still leave room to reject twice. The `unit` loop-back is not
+  # optional scenery: without it a failing test dead-ends before the gate, and
+  # the gate is the entire subject of this mode.
+  cat > .flow-code/workflow.yaml <<'EOF'
+settings:
+  model: sonnet
+
+nodes:
+  - id: implement
+    type: implement
+    config:
+      instructions: Make greet handle an empty name, and cover it with a test.
+
+  - id: unit
+    type: test
+    config:
+      commands: ["npm test"]
+
+  - id: gate
+    type: approval-gate
+
+  - id: revise
+    type: discuss
+    config:
+      topic: what to change before this can be approved
+
+  - id: ship
+    type: git-ops
+
+edges:
+  - { from: implement, to: unit }
+  - { from: unit, to: gate }
+  - { from: gate, to: ship, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  - { from: unit, to: implement, loopback: { maxAttempts: 6 } }
+  - { from: revise, to: implement, loopback: { maxAttempts: 6, on: success } }
+EOF
+
+  cat > README.md <<EOF
+# flow-code testbed (revise)
+
+A small real project whose graph routes a rejected approval gate into a
+conversation, and loops that conversation's conclusion back to \`implement\`.
+
+Run it, let it reach the gate, and reject. \`ship\` should be skipped rather
+than errored, the gate should not read as a success, and \`revise\` should open
+already knowing what it is reconsidering. Reject a second time to check the
+conversation is told what changed instead of silently resuming the first one.
+
+Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
+EOF
+
+  git init -q -b main
+  git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
+  git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+  git add -A
+  git commit -qm "chore: scaffold flow-code testbed (revise)"
+
+  echo
+  echo "testbed ready: $DEST  (mode: revise)"
+  echo
+  echo "  cd $DEST"
+  echo "  node $REPO_ROOT/dist/cli.js run"
+  echo
+  echo "No init step — the graph is already wired, so run works immediately."
+  echo "Press r at the gate. This calls a real provider and costs real API usage."
+  exit 0
+fi
+
 if [ "$MODE" = "guest" ]; then
   # Guest mode tests the other half of flow-code: a run nobody here drives.
   # An outside agent session walks the graph and reports each transition, the
@@ -153,7 +280,7 @@ if [ "$MODE" = "guest" ]; then
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test test/"
+    "test": "node --test 'test/**/*.test.js'"
   }
 }
 EOF

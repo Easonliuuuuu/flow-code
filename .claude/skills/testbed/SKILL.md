@@ -10,7 +10,7 @@ metadata:
 Ask which mode to generate, rebuild `dist/`, generate a disposable git repo
 matching that mode, and tell the user how to launch flow-code against it.
 
-**Input**: optionally a mode (`ui`, `splash`, `clean`, `guest`), a shape
+**Input**: optionally a mode (`ui`, `splash`, `clean`, `guest`, `revise`), a shape
 (`wide`, `tall`, `tiny`, `ui` mode only), an install path (`connect`,
 `plugin`, `guest` mode only), and/or a destination path, given as free text
 after `/testbed`. Use whatever's given to skip the matching question below;
@@ -35,14 +35,19 @@ because "look at it" means different things depending on what changed:
 - **`splash`** — the startup animation, decoupled from graph content.
 - **`clean`** — the first-run experience: `flow-code init`'s preset picker and
   provider wizard, then a real `flow-code run`.
+- **`revise`** — what a rejection *does*: the gate's rejection branch, the
+  conversation it routes into, and the loop back to `implement`. Scaffolded
+  already wired and driven by `flow-code run`, because neither `clean` (starts
+  bare) nor `ui` (never runs an agent) can show a gate being rejected and the
+  run coming back round.
 - **`guest`** — the outside-agent path: the MCP reporting tools, the generated
   instructions, the PreToolUse enforcement hook, the tier the run records, and
   reconciliation. Nothing in this mode is driven from here — a real Claude Code
   session walks the graph and reports it, and `flow-code watch` attaches to a
   run it did not start.
 
-`clean` and `guest` are the two modes that call a real provider and cost real
-API usage; `ui` and `splash` are free.
+`clean`, `guest` and `revise` call a real provider and cost real API usage;
+`ui` and `splash` are free.
 
 ---
 
@@ -57,6 +62,8 @@ API usage; `ui` and `splash` are free.
      provider."
    - **guest** — "Drive the graph from my own Claude session — MCP tools,
      hook enforcement, tier. Calls a real provider."
+   - **revise** — "Reject a gate and watch it route into a conversation and
+     loop back. Already wired, no `init`. Calls a real provider."
 
    Then ask one follow-up question, depending on what was picked:
 
@@ -69,7 +76,7 @@ API usage; `ui` and `splash` are free.
        shim, which the script generates. Tests the manifest and `hooks.json`
        themselves."
 
-   `splash` and `clean` get no follow-up — `splash` is always `tiny`
+   `splash`, `clean` and `revise` get no follow-up — `splash` is always `tiny`
    internally, and `clean` has no shape.
 
 2. **Run the generator.**
@@ -144,6 +151,27 @@ Mention this gotcha once per conversation: `run` in this mode is a real
 agent call against a real provider — it costs actual API usage, unlike `ui`
 and `splash`.
 
+### `revise` mode
+
+- Reject at the gate: `ship` renders skipped (`⊘`), **not** errored. Nothing
+  failed — it was routed around, and the difference is the whole design.
+- The gate card must not read as a success. It reaches `done` like an approved
+  one, so it takes the failed glyph off its recorded decision instead.
+- `revise` opens already knowing what it is reconsidering — the rejected diff
+  reaches it through the gate, which is context-transparent.
+- Reject a **second** time. This is the one worth watching: `revise` resumes
+  its earlier session, so the new retry reason is sent as a fresh turn into
+  that conversation. If it picks up as though nothing happened between the two
+  rejections, that is the bug this mode exists to catch.
+- `echo $?` after a rejected run — still non-zero, because the run did not do
+  what it set out to do.
+
+Mention this gotcha once per conversation: `maxAttempts` is counted on the
+loop-back **target** (`implement`) and shared across every loop-back pointing
+at it. This graph has 3 and only one loop-back, so there is room to reject
+twice and still ship — add another return path into `implement` and that
+budget is shared, not doubled.
+
 ### `guest` mode
 
 Start `watch` first, then the agent session, so the run appears under a
@@ -189,6 +217,11 @@ to their own font zoom and never forward it, which affects `ui` mode; `z` and
 Add a shape by extending the `case "$SHAPE"` block in `make-testbed.sh` and
 the table above. Keep each one justified by something it makes visible that
 the others don't.
+
+`revise` mode has one fixed graph instead of shapes: five nodes
+(`implement → unit → gate`, then `ship` on approval and `revise` on rejection,
+looping back to `implement` with `on: success`), short enough to reach the gate
+quickly and reject it more than once. Passing `--shape` there is an error.
 
 `guest` mode has one fixed graph instead of shapes: five nodes covering every
 enforcement-relevant kind (edit, exec-only, read-only, a zero-capability gate,
