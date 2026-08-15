@@ -397,6 +397,70 @@ nodes:
     expect(store.node('talk').status).toBe('done');
   });
 
+  describe('tappable option blocks', () => {
+    const reply = (text: string) =>
+      fakeSessions((req) =>
+        req.prompt.includes('JSON object recording')
+          ? JSON.stringify({ conclusion: 'c', constraints: [] })
+          : text,
+      );
+
+    it('offers the choices and keeps the markup out of the transcript', async () => {
+      const repo = makeTempGitRepo();
+      const ports = fakePorts({ userMessages: [] });
+      await runReal(DISCUSS_YAML, repo, {
+        sessions: reply('What colour?\n\n<<<OPTIONS\n["blue", "green"]\n>>>'),
+        ports,
+      });
+      expect(ports.assistantOptions[0]).toEqual(['blue', 'green']);
+      expect(ports.assistantTexts[0]).toBe('What colour?');
+      expect(ports.assistantTexts[0]).not.toContain('OPTIONS');
+    });
+
+    it('handles two blocks in one reply without leaking either as raw text', async () => {
+      // Agents do ask two questions at once, despite the prompt asking for one
+      // block at the end. The end-anchored match used to swallow everything
+      // between the first `<<<OPTIONS` and the last `>>>`, fail to parse it as
+      // JSON, and dump the whole reply into the transcript as markup.
+      const repo = makeTempGitRepo();
+      const ports = fakePorts({ userMessages: [] });
+      await runReal(DISCUSS_YAML, repo, {
+        sessions: reply(
+          '1. Language?\n2. Happy path or retry?\n\n' +
+            '<<<OPTIONS\n["Python", "Bash"]\n>>>\n\n' +
+            '<<<OPTIONS\n["Clean run", "Retry first"]\n>>>',
+        ),
+        ports,
+      });
+      // The first block is the one offered — it belongs to the first question.
+      expect(ports.assistantOptions[0]).toEqual(['Python', 'Bash']);
+      // Neither block survives as markup, but both questions still read as prose.
+      expect(ports.assistantTexts[0]).not.toContain('OPTIONS');
+      expect(ports.assistantTexts[0]).not.toContain('>>>');
+      expect(ports.assistantTexts[0]).toContain('1. Language?');
+      expect(ports.assistantTexts[0]).toContain('2. Happy path or retry?');
+    });
+
+    it('shows a malformed block as written rather than dropping it', async () => {
+      const repo = makeTempGitRepo();
+      const ports = fakePorts({ userMessages: [] });
+      await runReal(DISCUSS_YAML, repo, {
+        sessions: reply('Pick one\n\n<<<OPTIONS\nnot json at all\n>>>'),
+        ports,
+      });
+      expect(ports.assistantOptions[0]).toBeNull();
+      expect(ports.assistantTexts[0]).toContain('not json at all');
+    });
+
+    it('offers nothing when the reply is plain prose', async () => {
+      const repo = makeTempGitRepo();
+      const ports = fakePorts({ userMessages: [] });
+      await runReal(DISCUSS_YAML, repo, { sessions: reply('Tell me more.'), ports });
+      expect(ports.assistantOptions[0]).toBeNull();
+      expect(ports.assistantTexts[0]).toBe('Tell me more.');
+    });
+  });
+
   // A loop-back preserves the transcript and session id, so the node resumes.
   // Resuming silently would hand the agent a conversation from before the work
   // it is being asked to reconsider — and the retry reason the engine recorded

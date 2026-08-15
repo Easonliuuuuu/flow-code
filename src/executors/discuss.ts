@@ -14,21 +14,37 @@ import { nodeModel, parseNodeOutput, rolePromptFor, upstreamPreamble } from './h
  *
  * Split it out of the prose so the transcript shows only what the agent
  * said, with the choices rendered separately by the UI.
+ *
+ * The prompt asks for one block at the end, but agents do ask two questions at
+ * once and emit one block each. Every block is stripped from the prose so none
+ * of them leak into the transcript as raw markup, and the first is the one
+ * offered — it belongs to the first question, which is the one being answered
+ * now. The rest of the reply still reads as prose, so the second question is
+ * not lost; the agent re-offers it once the first is settled.
  */
-function splitOptions(text: string): { prose: string; options: string[] | null } {
-  const trimmed = text.trimEnd();
-  const match = /\n?<<<OPTIONS\n([\s\S]*?)\n>>>$/.exec(trimmed);
-  if (!match) return { prose: text, options: null };
+const OPTIONS_BLOCK = /\n?<<<OPTIONS\n([\s\S]*?)\n>>>[ \t]*/g;
+
+function parseOptions(body: string): string[] | null {
   try {
-    const parsed: unknown = JSON.parse(match[1]!);
-    if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((o) => typeof o === 'string')) {
-      return { prose: trimmed.slice(0, match.index).trimEnd(), options: parsed as string[] };
-    }
+    const parsed: unknown = JSON.parse(body);
+    return Array.isArray(parsed) && parsed.length > 0 && parsed.every((o) => typeof o === 'string')
+      ? (parsed as string[])
+      : null;
   } catch {
-    // Malformed block — fall through and show it as plain prose rather than
-    // silently dropping what the agent said.
+    return null;
   }
-  return { prose: text, options: null };
+}
+
+function splitOptions(text: string): { prose: string; options: string[] | null } {
+  const matches = [...text.trimEnd().matchAll(OPTIONS_BLOCK)];
+  if (matches.length === 0) return { prose: text, options: null };
+  // A malformed block is shown as written rather than silently dropped: the
+  // agent said something, and swallowing it would leave the user staring at a
+  // question with no way to tell it was ever asked.
+  const options = matches.map((m) => parseOptions(m[1]!)).find((o) => o !== null) ?? null;
+  if (options === null) return { prose: text, options: null };
+  const prose = text.trimEnd().replace(OPTIONS_BLOCK, '').trimEnd();
+  return { prose, options };
 }
 
 /**
