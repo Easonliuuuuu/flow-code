@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 241/241` tasks across 6 change(s)
+`██████████ 277/280` tasks across 7 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -18,6 +18,7 @@ flatter you.
 
 | Change | State | Tasks |
 | --- | --- | --- |
+| `route-rejected-gate-to-revision` | active | █████████░ 36/39 |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
