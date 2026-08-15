@@ -83,12 +83,15 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
   convergenceRequests: ConvergenceRequest[];
   testCommandRequests: TestCommandsRequest[];
   assistantTexts: string[];
+  /** Options offered alongside each assistant turn; null when it offered none. */
+  assistantOptions: Array<string[] | null>;
   beginCalls: Array<{ nodeId: string; topic: string | undefined; seedTranscript: DiscussTranscriptEntry[] }>;
 } {
   const approvalRequests: ApprovalRequest[] = [];
   const convergenceRequests: ConvergenceRequest[] = [];
   const testCommandRequests: TestCommandsRequest[] = [];
   const assistantTexts: string[] = [];
+  const assistantOptions: Array<string[] | null> = [];
   const beginCalls: Array<{
     nodeId: string;
     topic: string | undefined;
@@ -100,6 +103,7 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
     convergenceRequests,
     testCommandRequests,
     assistantTexts,
+    assistantOptions,
     beginCalls,
     approval: {
       async request(req) {
@@ -126,8 +130,9 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
       begin(nodeId, topic, seedTranscript = []) {
         beginCalls.push({ nodeId, topic, seedTranscript });
       },
-      postAssistant(_nodeId, text) {
+      postAssistant(_nodeId, text, options) {
         assistantTexts.push(text);
+        assistantOptions.push(options ?? null);
       },
       async nextUserMessage() {
         return remainingMessages.shift() ?? null;
