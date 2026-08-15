@@ -3,6 +3,7 @@ import { PassThrough, Writable } from 'node:stream';
 import React from 'react';
 import { describe, expect, it } from 'vitest';
 import { App, type ModelContext } from '../src/ui/App.js';
+import { STATUS_GLYPHS } from '../src/ui/canvas.js';
 import { UiInteractionPorts } from '../src/ui/ports.js';
 import type { RunStateStore } from '../src/runstate/store.js';
 import { makeTempGitRepo, storeFor, workflowFromYaml } from './helpers.js';
@@ -144,6 +145,30 @@ describe('Approval-gate panel rendering', () => {
       expect(frame).toContain('kept line');
       expect(frame).toContain('dropped line');
       expect(frame).toContain('approved');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('does not draw a rejected gate as a success, though it reaches `done`', async () => {
+    const { store, stdout, unmount } = mountGateApp();
+    try {
+      store.setOutput('gate', {
+        decision: 'rejected',
+        decidedAt: new Date().toISOString(),
+        diffs: [{ diff: '+rejected line' }],
+      });
+      store.setStatus('gate', 'done', 'rejected by user');
+      await settle();
+
+      // The card takes the failed glyph off the decision, not the status —
+      // the filled dot a `done` node would otherwise get reads as "went fine".
+      // Scoped to the node's own card: the header tally still counts it under
+      // `done`, which is what its status genuinely is.
+      const card = lastFrameLines(stdout).find((l) => l.includes('gate') && !l.includes('run '));
+      expect(card).toBeDefined();
+      expect(card).toContain(STATUS_GLYPHS.error);
+      expect(card).not.toContain(STATUS_GLYPHS.done);
     } finally {
       unmount();
     }

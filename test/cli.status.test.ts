@@ -66,6 +66,31 @@ describe('summarize', () => {
     expect(s.detail).toBe('2 failing');
   });
 
+  it('names a rejected gate, which stops the run without ever reaching `error`', () => {
+    const s = summarize(
+      stateWith({
+        review: node('done'),
+        gate: node('done', {
+          statusDetail: 'rejected by user',
+          output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' },
+        }),
+      }),
+    );
+    // Without this the summary would report an idle run nobody is coming back to.
+    expect(s.kind).toBe('error');
+    expect(s.node).toBe('gate');
+    expect(s.detail).toBe('rejected by user');
+  });
+
+  it('does not name an approved gate', () => {
+    const s = summarize(
+      stateWith({
+        gate: node('done', { output: { decision: 'approved', decidedAt: '2026-08-15T00:00:00.000Z' } }),
+      }),
+    );
+    expect(s.kind).toBe('idle');
+  });
+
   it('reports a finished run as finished rather than naming a node', () => {
     const s = summarize(stateWith({ a: node('done') }, { finishedAt: '2026-08-11T12:30:00.000Z' }));
     expect(s.kind).toBe('finished');

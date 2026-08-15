@@ -111,9 +111,44 @@ edges:
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
   - { from: review, to: implement, loopback: { maxAttempts: 3 } }
 
-  # A rejected approval gate deliberately has no loop-back: "no" means stop.
-  # To send a rejection back for another pass instead, add:
-  # - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
+  # A rejected gate stops the run by default: "no" means stop. The gate itself
+  # still finishes — it got its answer — and what holds \`git-ops\` back is that
+  # an edge out of a gate is read as \`when: "gate.decision == 'approved'"\`
+  # unless it says otherwise. You never have to write that; it is why the edge
+  # above is safe as it stands.
+  #
+  # To send a rejection back for another pass instead, either loop straight
+  # back:
+  #
+  #   - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
+  #
+  # ...which retries with nothing but "a human said no" as context — or route
+  # it through a conversation first, so the retry knows what to change:
+  #
+  #   nodes:
+  #     - id: revise
+  #       type: discuss
+  #       config: { topic: what to change before this can be approved }
+  #   edges:
+  #     - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
+  #     - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  #     - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }
+  #
+  # \`revise\` is an ordinary Discuss node — the same type as \`discuss\` above,
+  # placed second. It sees the rejected diff, settles what to fix with you, and
+  # its conclusion becomes the context \`implement\` retries with. Each rejection
+  # then costs an agent session, which is why this is off by default.
+  #
+  # \`on: success\` is the part worth reading twice. A loop-back normally fires
+  # when its source *fails* — that is what a verification loop wants. Here the
+  # opposite is true: finishing the conversation is the signal to go back, so a
+  # return path that waited for \`revise\` to fail would wait forever.
+  #
+  # Note the loop returns to \`implement\`, not to \`discuss\`: \`spec\` stays
+  # outside the segment, so every retry is still judged against the criteria the
+  # first attempt was. Spell out the approved edge once you add the rejected
+  # one — mixing an implicit condition with an explicit one reads badly even
+  # though it works.
 
   # Conditional edges route; they don't just sequence. An edge with a \`when\`
   # still waits for its source, but only carries when the condition holds —

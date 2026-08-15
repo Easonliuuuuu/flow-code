@@ -2393,8 +2393,12 @@ export function App({
                     <PanelTitle>
                       <Text bold wrap="truncate-end">
                         {focusedNode.id} <Text dimColor>({focusedNode.type.displayName})</Text>{' '}
-                        {STATUS_GLYPHS[state.status]}{' '}
-                        {output?.decision === 'approved' ? 'approved' : 'rejected'}
+                        {/* A rejection completes the node, so the status glyph
+                            alone would read as a success. The decision decides
+                            the glyph here, not the status. */}
+                        {output?.decision === 'approved'
+                          ? `${STATUS_GLYPHS[state.status]} approved`
+                          : `${STATUS_GLYPHS.error} rejected`}
                       </Text>
                     </PanelTitle>
                     <Box flexDirection="column" flexGrow={1} overflow="hidden">

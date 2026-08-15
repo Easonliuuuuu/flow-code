@@ -5,12 +5,25 @@ import { nodeWantsAgentStep, type ApprovalGateConfig, type GitOpsConfig, type Wo
 import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
 
 /**
+ * Per-diff ceiling on what the gate records. Deliberately well under
+ * `UPSTREAM_OUTPUT_LIMIT`: that budget is shared across every upstream output a
+ * downstream node receives, so a gate that recorded a whole unbounded diff
+ * would starve the review verdict that justified it. The full diff stays
+ * reachable in the run's own state.
+ */
+const RECORDED_DIFF_LIMIT = 8 * 1024;
+
+/**
  * No agent session by default: computes the pending diff against the run
  * baseline, renders it via the approval port, and holds `waiting` until the
- * user decides. Reject sets the gate to `error`; the engine then marks every
- * downstream node `skipped`. `agent: true` adds one optional, read-only-by-
- * default critique of the diff before the human decides — it never touches
- * the decision itself.
+ * user decides. Both decisions end at `done` — a gate that got its answer
+ * completed, and "the user said no" is a result rather than an execution
+ * failure. What halts the branch is the recorded `decision` and the edges
+ * conditioned on it: an unconditional edge out of a gate is loaded as though
+ * it required approval (see `buildWorkflow`), so a rejection skips the
+ * approval branch without the gate having to fail. `agent: true` adds one
+ * optional, read-only-by-default critique of the diff before the human
+ * decides — it never touches the decision itself.
  */
 export const executeApprovalGate: NodeExecutor = async function* (ctx) {
   const config = ctx.node.config as ApprovalGateConfig;
@@ -88,12 +101,17 @@ export const executeApprovalGate: NodeExecutor = async function* (ctx) {
   const decidedAt = new Date().toISOString();
   // Diffs ride along on the result so the detail panel can re-show the same
   // green/red view after the decision — the live approval panel is only
-  // reachable while the gate is actually waiting.
+  // reachable while the gate is actually waiting. Truncated first: every
+  // upstream output a downstream node receives shares one budget, and an
+  // unbounded diff here would crowd out the review that justified it.
+  const recorded = diffs.map((d) => ({ ...d, diff: truncateText(d.diff, RECORDED_DIFF_LIMIT) }));
   if (decision === 'approve') {
-    yield { type: 'result', output: { decision: 'approved', decidedAt, diffs } };
+    yield { type: 'result', output: { decision: 'approved', decidedAt, diffs: recorded } };
     yield { type: 'status', status: 'done', detail: 'approved' };
   } else {
-    yield { type: 'result', output: { decision: 'rejected', decidedAt, diffs } };
-    yield { type: 'status', status: 'error', detail: 'rejected by user' };
+    // A rejection is a decision, not a failure. Downstream is held back by the
+    // approved-condition on the gate's out-edges, not by an `error` status.
+    yield { type: 'result', output: { decision: 'rejected', decidedAt, diffs: recorded } };
+    yield { type: 'status', status: 'done', detail: 'rejected by user' };
   }
 };

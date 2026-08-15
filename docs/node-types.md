@@ -112,7 +112,7 @@ without `edit` cannot write files, whatever its instructions say.
 - **Agent session:** no — deterministic, with an optional read-only agent step
 - **Model field:** no
 - **Config:** `title? (string), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])`
-- **Output:** `decision ('approved'|'rejected'), decidedAt (ISO timestamp)`
+- **Output:** `decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on)`
 - **Context:** transparent — forwards its dependencies' outputs downstream, so inserting it into a graph does not sever the context chain across it.
 
 ---

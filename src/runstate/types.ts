@@ -219,6 +219,19 @@ export interface NodeRunState {
   skills?: string[];
 }
 
+/**
+ * A gate the user said no to. It reaches `done` like an approved one — the
+ * decision is the outcome, not a failure — so every surface that used to read
+ * "rejected" off an `error` status has to ask this instead: the exit code, the
+ * status line's attention signal, and the way the node is drawn.
+ *
+ * Keyed on the recorded decision rather than the node type, because run state
+ * carries outputs and statuses but not the type that produced them.
+ */
+export function isRejectedGate(node: Pick<NodeRunState, 'output'> | undefined): boolean {
+  return (node?.output as { decision?: unknown } | undefined)?.decision === 'rejected';
+}
+
 /** What the provider last said about one of its rate-limit windows. */
 export interface RateLimitWindowState {
   /** Percentage of the window consumed, 0–100, as the provider reports it. */

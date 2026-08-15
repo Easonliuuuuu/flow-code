@@ -254,3 +254,61 @@ describe('walking a loop-back by hand', () => {
     expect(reason).toContain('all 3 of its attempts');
   });
 });
+
+describe('a rejected gate never satisfies its dependents', () => {
+  // The engine records a rejection as `done` with the decision in the output;
+  // this path records `error`. "Reject stops the run" has to hold either way,
+  // so it rests on the recorded decision — the same thing git-write blocking
+  // already keys on — rather than on a status whose meaning differs between
+  // the two paths.
+  const GATED = `
+nodes:
+  - id: build
+    type: implement
+    config: { instructions: build it }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: build, to: gate }
+  - { from: gate, to: ship }
+`;
+  const gated = workflowFromYaml(GATED);
+
+  const gatedState = (gate: NodeRunState): RunState => ({
+    runId: 'r1',
+    createdAt: '2026-08-11T12:00:00.000Z',
+    repoRoot: '/repo',
+    pid: 0,
+    baseline: null,
+    graph: recordGraph(gated),
+    nodes: { build: node('done'), gate, ship: node('idle') },
+    worktrees: [],
+    activity: [],
+  });
+
+  const startShip = (gate: NodeRunState) =>
+    validateTransition(gated, gatedState(gate), { nodeId: 'ship', kind: 'start' });
+
+  it('blocks a dependent even when the gate carries `done`', () => {
+    const result = startShip(
+      node('done', { output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' } }),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('blocks a dependent when the gate carries `error`, as this path records it', () => {
+    const result = startShip(
+      node('error', { output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' } }),
+    );
+    expect(result.ok).toBe(false);
+  });
+
+  it('lets the dependent start once the gate is approved', () => {
+    const result = startShip(
+      node('done', { output: { decision: 'approved', decidedAt: '2026-08-15T00:00:00.000Z' } }),
+    );
+    expect(result.ok).toBe(true);
+  });
+});

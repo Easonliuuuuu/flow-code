@@ -66,24 +66,44 @@ export const DEFAULT_SETTINGS: RunSettings = settingsSchema.parse({});
 /** Attempts a loop-back target may take before the run gives up on it. */
 export const DEFAULT_LOOPBACK_MAX_ATTEMPTS = 3;
 
+/** What ends a node's execution and sends the run back up this return path. */
+export const LOOPBACK_TRIGGERS = ['failure', 'success'] as const;
+export type LoopbackTrigger = (typeof LOOPBACK_TRIGGERS)[number];
+
 /**
- * `loopback: true` takes the default bound; `loopback: {maxAttempts: N}` sets
- * it explicitly. Normalized to the object form so consumers see one shape.
+ * Which outcome takes a return path. `failure` — the default, and what every
+ * verification loop wants — fires when the source fails, so a failing test is
+ * another iteration rather than the end of the run.
+ *
+ * `success` exists for the one shape where finishing *is* the signal to go
+ * back: a step whose whole job is to decide what to change next, reached
+ * because something upstream was rejected. Its conclusion is the reason to
+ * retry, so waiting for it to fail would mean waiting forever.
  */
-const loopbackSchema = z
-  .union([
-    z.literal(true),
-    z.strictObject({
-      maxAttempts: z.number().int().min(1).default(DEFAULT_LOOPBACK_MAX_ATTEMPTS),
-    }),
-  ])
-  .transform((v) => (v === true ? { maxAttempts: DEFAULT_LOOPBACK_MAX_ATTEMPTS } : v));
+export const DEFAULT_LOOPBACK_TRIGGER: LoopbackTrigger = 'failure';
+
+/**
+ * `loopback: true` takes the defaults; `loopback: {maxAttempts: N, on: …}` sets
+ * them explicitly. Normalized to the object form so consumers see one shape.
+ */
+const loopbackSchema = z.preprocess(
+  // `true` is shorthand for "all defaults". Normalizing here rather than with a
+  // union keeps the schema a plain object, so a bad field is reported against
+  // that field — a union reports only that the whole value was invalid, which
+  // for `on: sometimes` reads as "Invalid input" and names nothing.
+  (v) => (v === true ? {} : v),
+  z.strictObject({
+    maxAttempts: z.number().int().min(1).default(DEFAULT_LOOPBACK_MAX_ATTEMPTS),
+    on: z.enum(LOOPBACK_TRIGGERS).default(DEFAULT_LOOPBACK_TRIGGER),
+  }),
+);
 
 /**
  * Edges declare structure, never behavior: `from` and `to`, plus — for a
- * loop-back — that the edge is a return path and how many attempts it allows.
- * Whether a node failed is the node type's call; a loop-back edge only says
- * where that failure routes. Enforced by strictObject.
+ * loop-back — that the edge is a return path, how many attempts it allows, and
+ * which outcome takes it. Whether a node succeeded or failed is still the node
+ * type's call; a loop-back edge only says where each outcome routes. Enforced
+ * by strictObject.
  */
 export const edgeSchema = z.strictObject({
   from: z.string().min(1),
@@ -94,7 +114,7 @@ export const edgeSchema = z.strictObject({
    * and its target is skipped when it does not. Parsed at load time, so a
    * malformed condition is a validation error rather than an edge that
    * silently never fires. Not meaningful on a loop-back — a return path is
-   * taken because a node failed, which is the condition.
+   * taken because of how its source ended, which is what `loopback.on` says.
    */
   when: z.string().min(1).optional(),
 });

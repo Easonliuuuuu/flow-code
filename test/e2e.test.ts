@@ -210,7 +210,11 @@ describe('end-to-end: default workflow on a sample repo', () => {
   it('a rejected gate halts git-ops while everything upstream stands', async () => {
     const { repo, store } = await runDefaultWorkflow('reject');
     expect(store.node('review').status).toBe('done');
-    expect(store.node('gate').status).toBe('error');
+    // The gate completed — it got its answer. The rejection is in the output,
+    // and git-ops is held back by the approved-condition the loader synthesizes
+    // onto `gate → git-ops`, which the scaffolded workflow does not state.
+    expect(store.node('gate').status).toBe('done');
+    expect(store.node('gate').output).toMatchObject({ decision: 'rejected' });
     expect(store.node('git-ops').status).toBe('skipped');
     // Nothing was committed.
     const log = execFileSync('git', ['log', '--oneline'], { cwd: repo }).toString();
@@ -336,5 +340,75 @@ describe('end-to-end: iterating on a failed verdict', () => {
     // Nothing was committed: the loop gave up before the git-mutating step.
     expect(execFileSync('git', ['log', '--oneline'], { cwd: repo }).toString().trim().split('\n')).toHaveLength(1);
     expect(store.snapshot().finishedAt).toBeDefined();
+  });
+});
+
+describe('end-to-end: a rejection routed to a revision step', () => {
+  it('loads the documented revise branch and drives it to a commit', async () => {
+    // The exact wiring `defaultWorkflow.ts` and the workflow reference document,
+    // applied to the scaffolded graph. If this drifts from the comment, the
+    // comment is telling users to write something that does not work.
+    const yaml = DEFAULT_WORKFLOW_YAML.replace(
+      '  - { from: gate, to: git-ops }',
+      [
+        '  - { from: gate, to: git-ops, when: "gate.decision == \'approved\'" }',
+        '  - { from: gate, to: revise, when: "gate.decision == \'rejected\'" }',
+        '  - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }',
+      ].join('\n'),
+    ).replace(
+      '  - id: git-ops',
+      [
+        '  - id: revise',
+        '    type: discuss',
+        '    config: { topic: what to change }',
+        '  - id: git-ops',
+      ].join('\n'),
+    );
+
+    const repo = makeTempGitRepo();
+    const workflow = workflowFromYaml(yaml);
+    const store = storeFor(workflow, repo);
+    const baseline = await recordBaseline(repo, false);
+    store.setBaseline(baseline);
+
+    let decisions = 0;
+    const ports = fakePorts({
+      approve: () => (++decisions === 1 ? 'reject' : 'approve'),
+      userMessages: ['blue please'],
+    });
+
+    let sawRejectionContext = false;
+    const script = (req: AgentSessionRequest, tools: HarnessTools): string => {
+      if (req.nodeId === 'revise') {
+        if (req.prompt.includes('JSON object recording')) {
+          return JSON.stringify({ conclusion: 'make the greeting green', constraints: [] });
+        }
+        // The conversation must know it was reached because of a rejection.
+        if (req.prompt.includes('rejected')) sawRejectionContext = true;
+        return 'Understood — I will change the color.';
+      }
+      return defaultWorkflowScript(req, tools);
+    };
+
+    const engine = new Engine({
+      workflow,
+      store,
+      repoRoot: repo,
+      baseline,
+      ports,
+      sessions: harnessedSessions(script),
+      executors: builtinExecutors,
+    });
+    await engine.run();
+
+    expect(decisions).toBe(2);
+    expect(sawRejectionContext).toBe(true);
+    // The conversation happened, the work was redone, and the second decision
+    // reached git — the whole point of the branch.
+    expect(store.node('revise').priorAttempts?.[0]?.status).toBe('done');
+    expect(store.node('implement').attempt).toBe(2);
+    expect(store.node('git-ops').status).toBe('done');
+    const log = execFileSync('git', ['log', '--oneline'], { cwd: repo }).toString();
+    expect(log).toContain('add greeting');
   });
 });

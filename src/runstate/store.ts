@@ -230,6 +230,19 @@ export class RunStateStore {
    * Skip a node, recording *why* — the distinction downstream scheduling turns
    * on (see `NodeRunState.skipReason`).
    */
+  /**
+   * Put a node the run routed around back in play, without counting an attempt
+   * against it — it never ran, so there is nothing to have been a second try at.
+   * Used when a loop-back re-runs the segment that decided the routing, which
+   * makes the skip a verdict on inputs that no longer exist.
+   */
+  clearSkip(nodeId: string): void {
+    const node = this.node(nodeId);
+    const { statusDetail: _detail, skipReason: _reason, endedAt: _endedAt, ...rest } = node;
+    this.state.nodes = { ...this.state.nodes, [nodeId]: { ...rest, status: 'idle' } };
+    this.commit();
+  }
+
   setSkipped(nodeId: string, reason: 'condition' | 'upstream', detail: string): void {
     const node = this.node(nodeId);
     this.state.nodes = {

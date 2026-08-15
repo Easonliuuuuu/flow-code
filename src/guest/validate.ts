@@ -16,6 +16,7 @@
  * is reconciliation's job, against the tree.
  */
 
+import { isRejectedGate } from '../runstate/types.js';
 import type { GateDecision, NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 
@@ -67,6 +68,12 @@ function reject(reason: string): TransitionResult {
  */
 function upstreamSatisfied(node: NodeRunState | undefined): boolean {
   if (!node) return false;
+  // A gate the user said no to never clears, whatever status it carries. The
+  // guest path records a rejection as `error`, so this is belt-and-braces
+  // today — but it is the check that actually holds the property, and it holds
+  // it the same way `enforce.ts` blocks git writes: on the recorded decision,
+  // not on a status whose meaning differs between the engine and this path.
+  if (isRejectedGate(node)) return false;
   if (node.status === 'done') return true;
   return node.status === 'skipped' && node.skipReason === 'condition';
 }

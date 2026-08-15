@@ -645,8 +645,10 @@ edges:
             decidedAt: new Date().toISOString(),
           },
         };
+        // Both decisions end at `done`; the rejection lives in the output. The
+        // loop-back has to fire off that, not off a failed status.
         yield rejected
-          ? { type: 'status', status: 'error', detail: 'rejected by user' }
+          ? { type: 'status', status: 'done', detail: 'rejected by user' }
           : { type: 'status', status: 'done' };
       },
       ship: doneAfter(IMPL_OUT),
@@ -654,6 +656,41 @@ edges:
     await engine.run();
     expect(implRuns).toBe(2);
     expect(store.node('ship').status).toBe('done');
+  });
+
+  it('skips the approval branch when a rejected gate has no loop-back', async () => {
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: ship }
+`;
+    let implRuns = 0;
+    let shipRuns = 0;
+    const { engine, store } = engineWith(yaml, {
+      impl: doneAfter(IMPL_OUT, async () => {
+        implRuns++;
+      }),
+      gate: doneAfter({ decision: 'rejected', decidedAt: new Date().toISOString() }),
+      ship: doneAfter(IMPL_OUT, async () => {
+        shipRuns++;
+      }),
+    });
+    await engine.run();
+    expect(implRuns).toBe(1);
+    expect(shipRuns).toBe(0);
+    expect(store.node('gate').status).toBe('done');
+    // Routed away from, not cascaded over: nothing failed here.
+    expect(store.node('ship').status).toBe('skipped');
+    expect(store.node('ship').skipReason).toBe('condition');
   });
 
   it('still skips downstream on failure when no loop-back is declared', async () => {

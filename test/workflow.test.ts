@@ -416,7 +416,7 @@ describe('loop-back edges', () => {
   it('applies the documented default bound when none is given', () => {
     const wf = loadWorkflowFromString(LOOPING);
     expect(wf.graph.loopbacksFrom('check')).toEqual([
-      { from: 'check', to: 'impl', maxAttempts: DEFAULT_LOOPBACK_MAX_ATTEMPTS },
+      { from: 'check', to: 'impl', maxAttempts: DEFAULT_LOOPBACK_MAX_ATTEMPTS, on: 'failure' },
     ]);
   });
 
@@ -425,6 +425,26 @@ describe('loop-back edges', () => {
       LOOPING.replace('loopback: true', 'loopback: { maxAttempts: 5 }'),
     );
     expect(wf.graph.loopbacksFrom('check')[0]!.maxAttempts).toBe(5);
+  });
+
+  it('accepts an explicit trigger, and defaults it to failure', () => {
+    const onSuccess = loadWorkflowFromString(
+      LOOPING.replace('loopback: true', 'loopback: { on: success }'),
+    );
+    expect(onSuccess.graph.loopbacksFrom('check')[0]!.on).toBe('success');
+    // Unstated stays `failure`, so an existing workflow behaves as it always has.
+    expect(loadWorkflowFromString(LOOPING).graph.loopbacksFrom('check')[0]!.on).toBe('failure');
+    expect(
+      loadWorkflowFromString(
+        LOOPING.replace('loopback: true', 'loopback: { maxAttempts: 5 }'),
+      ).graph.loopbacksFrom('check')[0]!.on,
+    ).toBe('failure');
+  });
+
+  it('rejects a trigger that is not one of the two outcomes, naming the edge', () => {
+    const problems = problemsOf(LOOPING.replace('loopback: true', 'loopback: { on: sometimes }'));
+    expect(problems.join('\n')).toContain('check -> impl');
+    expect(problems.join('\n')).toContain('on');
   });
 
   it('rejects an attempt bound that is not a positive integer, naming the edge', () => {
@@ -531,10 +551,12 @@ describe('default workflow template', () => {
   it('ships loop-backs enabled, so a failed check iterates instead of stopping the run', async () => {
     const { DEFAULT_WORKFLOW_YAML } = await import('../src/defaultWorkflow.js');
     const wf = loadWorkflowFromString(DEFAULT_WORKFLOW_YAML);
+    // Every shipped loop-back is failure-triggered: a check that passes has no
+    // reason to send the run back.
     expect(wf.graph.allLoopbacks()).toEqual([
-      { from: 'test', to: 'implement', maxAttempts: 3 },
-      { from: 'validate', to: 'implement', maxAttempts: 3 },
-      { from: 'review', to: 'implement', maxAttempts: 3 },
+      { from: 'test', to: 'implement', maxAttempts: 3, on: 'failure' },
+      { from: 'validate', to: 'implement', maxAttempts: 3, on: 'failure' },
+      { from: 'review', to: 'implement', maxAttempts: 3, on: 'failure' },
     ]);
     // A rejected gate still means stop: "no" is a decision, not a retry.
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);

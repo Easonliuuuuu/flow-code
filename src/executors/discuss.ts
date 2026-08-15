@@ -40,10 +40,16 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
   yield { type: 'status', status: 'running' };
   const config = ctx.node.config as DiscussConfig;
 
-  // A prior transcript/session id means `--resume` reset this node from a
-  // conversation ctrl+c cut short — continue it instead of starting blank.
+  // A prior transcript/session id means this node was reset with a conversation
+  // already on it — continue that instead of starting blank.
   const prior = ctx.store.node(ctx.node.id);
   const resuming = (prior.discussTranscript?.length ?? 0) > 0 && prior.sessionId !== undefined;
+  // ...but *why* it was reset decides what the agent is told. `--resume` after a
+  // ctrl+c leaves no retry reason: the conversation simply picks up. A loop-back
+  // does, and resuming silently on that would hand the agent a conversation from
+  // before the work it is being asked to reconsider — on a second loop-back,
+  // from two attempts ago.
+  const retrying = ctx.upstream.some((u) => u.retryReason);
 
   const release = await ctx.acquireSessionSlot();
   try {
@@ -76,16 +82,29 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
     ctx.ports.discuss.begin(ctx.node.id, config.topic, prior.discussTranscript);
     yield { type: 'status', status: 'waiting', detail: 'in discussion' };
 
+    const OPTIONS_PROTOCOL =
+      ' When a question boils down to a short list of natural choices, offer them as tappable' +
+      ' options: end that reply with a line reading exactly "<<<OPTIONS", then a JSON array of' +
+      ' 2-5 short option strings, then a line reading exactly ">>>", and nothing after it. Use this' +
+      ' only for genuine multiple-choice moments — open-ended questions should stay plain text.';
+
     if (!resuming) {
       const opening =
         `${upstreamPreamble(ctx.upstream)}Open a discussion with the user` +
         (config.topic ? ` about: ${config.topic}` : ' about what this change should accomplish.') +
         ' Ask what they want to achieve and surface any constraints worth pinning down. Keep it brief.' +
-        ' When a question boils down to a short list of natural choices, offer them as tappable' +
-        ' options: end that reply with a line reading exactly "<<<OPTIONS", then a JSON array of' +
-        ' 2-5 short option strings, then a line reading exactly ">>>", and nothing after it. Use this' +
-        ' only for genuine multiple-choice moments — open-ended questions should stay plain text.';
+        OPTIONS_PROTOCOL;
       postAssistant(await session.send(opening));
+    } else if (retrying) {
+      // Continue the same conversation, but say what happened since it stopped.
+      // Without this the agent resumes mid-thread with no idea the work was
+      // reconsidered, and the retry reason the engine recorded is never spoken.
+      const reopening =
+        `${upstreamPreamble(ctx.upstream)}You are picking this discussion back up because the ` +
+        'work that followed it was sent back. Take the context above into account, tell the user ' +
+        'briefly what you now understand needs to change, and settle what to do differently.' +
+        OPTIONS_PROTOCOL;
+      postAssistant(await session.send(reopening));
     }
 
     for (;;) {

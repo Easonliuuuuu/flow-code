@@ -21,7 +21,13 @@ import { dirname, join } from 'node:path';
 import { driverLiveness } from '../runstate/persist.js';
 import { effectiveTier, ENFORCEMENT_TIERS, type EnforcementTier } from '../runstate/tier.js';
 import { liveRuns } from '../runstate/watch.js';
-import { budgetedTokens, sumTokens, type NodeStatus, type RunState } from '../runstate/types.js';
+import {
+  budgetedTokens,
+  isRejectedGate,
+  sumTokens,
+  type NodeStatus,
+  type RunState,
+} from '../runstate/types.js';
 import { STATUS_GLYPHS } from '../ui/canvas.js';
 import { columnWidth, fitText } from '../ui/textwrap.js';
 
@@ -54,6 +60,8 @@ export type SummaryKind =
 export interface SummaryNode {
   id: string;
   status: NodeStatus;
+  /** An Approval-Gate the user said no to — `done`, but not a success. */
+  rejected?: boolean;
 }
 
 export interface RunSummary {
@@ -123,7 +131,11 @@ function budgetPctOf(state: RunState, tier: EnforcementTier): number | undefined
 /** Node order as the run recorded it; a document without a graph falls back to insertion order. */
 function orderedNodes(state: RunState): SummaryNode[] {
   const ids = state.graph?.nodes.map((n) => n.id) ?? Object.keys(state.nodes);
-  return ids.map((id) => ({ id, status: state.nodes[id]?.status ?? 'idle' }));
+  return ids.map((id) => ({
+    id,
+    status: state.nodes[id]?.status ?? 'idle',
+    ...(isRejectedGate(state.nodes[id]) ? { rejected: true } : {}),
+  }));
 }
 
 /**
@@ -132,12 +144,16 @@ function orderedNodes(state: RunState): SummaryNode[] {
  * answer to "what is it doing"; an error is only the headline once nothing is
  * still moving, because under a loop-back a failed node is often already being
  * retried further up the graph.
+ *
+ * A rejected gate ranks with the errors: it reaches `done`, but it is the
+ * reason the run stopped, and a summary that skipped over it would report an
+ * idle run that nobody is coming back to.
  */
 function focusNode(nodes: SummaryNode[]): SummaryNode | undefined {
   return (
     nodes.find((n) => n.status === 'waiting') ??
     nodes.find((n) => n.status === 'running') ??
-    nodes.find((n) => n.status === 'error')
+    nodes.find((n) => n.status === 'error' || n.rejected)
   );
 }
 
@@ -195,7 +211,10 @@ export function summarize(state: RunState | undefined, now: number = Date.now())
   const attempt = (node?.attempt ?? 1) > 1 ? node?.attempt : undefined;
   return {
     ...base,
-    kind: focus.status as 'waiting' | 'running' | 'error',
+    // A rejected gate reports as an error: the run stopped short of what it set
+    // out to do, and every surface that reacts to a failed node should react to
+    // this the same way.
+    kind: focus.rejected ? 'error' : (focus.status as 'waiting' | 'running' | 'error'),
     node: focus.id,
     ...(node?.statusDetail !== undefined ? { detail: node.statusDetail } : {}),
     ...(elapsedMs !== undefined ? { elapsedMs } : {}),

@@ -1,4 +1,5 @@
-import type { ActivityEntry, NodeStatus, RunState } from '../runstate/types.js';
+import { isRejectedGate } from '../runstate/types.js';
+import type { ActivityEntry, NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow } from '../workflow/load.js';
 import { resolveNodeModel } from '../workflow/modelResolution.js';
 import { BOX_HEIGHT, MINI_BOX_HEIGHT, type Layout, type NodeBox, type Viewport } from './layout.js';
@@ -21,6 +22,19 @@ export const STATUS_GLYPHS: Record<NodeStatus, string> = {
   // Deliberately distinct from idle: "will not run" vs "not yet started".
   skipped: '⊘',
 };
+
+/**
+ * What a node's status looks like on the card. A running node animates, so a
+ * stalled node is visibly distinct from a working one without reading anything
+ * else. A rejected gate is the one case where the glyph does not follow the
+ * status: it reaches `done`, but drawing it with the same filled dot as an
+ * approved one would say the run got what it wanted.
+ */
+function statusGlyphFor(state: NodeRunState, frame: number): string {
+  if (state.status === 'running') return spinnerFrame(frame);
+  if (isRejectedGate(state)) return STATUS_GLYPHS.error;
+  return STATUS_GLYPHS[state.status];
+}
 
 /**
  * Lifecycle order, for anything that summarises a whole run as counts per
@@ -286,7 +300,7 @@ export function renderGraph(
     const compact = !mini && box.h < BOX_HEIGHT;
 
     if (mini) {
-      const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
+      const glyph = statusGlyphFor(state, anim.frame);
       put(grid, box.x, box.y, fit(`${glyph} ${node.id}`, box.w).padEnd(box.w), style);
       continue;
     }
@@ -295,7 +309,7 @@ export function renderGraph(
     put(grid, box.x, box.y, `${border.tl}${border.h.repeat(inner)}${border.tr}`, style);
     // A running node's glyph animates, so a stalled node is visibly distinct
     // from a working one without reading anything else on the card.
-    const glyph = state.status === 'running' ? spinnerFrame(anim.frame) : STATUS_GLYPHS[state.status];
+    const glyph = statusGlyphFor(state, anim.frame);
     const blocked = state.denials > 0 ? ' !' : '';
     const title = fit(` ${glyph} ${node.id}${blocked}${delegationBadge(state)}`, inner).padEnd(inner);
     put(grid, box.x, box.y + 1, border.v, style);
@@ -355,8 +369,8 @@ export function renderGraph(
     // Subtitle: what the node is doing / produced / will do. Never the type
     // name again — that's the row above.
     const subtitle = nodeSubtitle(node, state, activityByNode.get(node.id) ?? [], anim.frame, inner - 1);
-    const subtitleStyle =
-      state.status === 'error' ? 'red' : state.status === 'running' ? 'label' : 'dim';
+    const failed = state.status === 'error' || isRejectedGate(state);
+    const subtitleStyle = failed ? 'red' : state.status === 'running' ? 'label' : 'dim';
     put(grid, box.x, box.y + 3, border.v, style);
     // Focus recolours the card cyan, which on a failed node used to take the
     // one red line on it with it — so the node you tabbed to *because* it
@@ -367,7 +381,7 @@ export function renderGraph(
       box.x + 1,
       box.y + 3,
       fit(` ${subtitle}`, inner).padEnd(inner),
-      state.status === 'error' ? 'red' : focused ? 'focus' : subtitleStyle,
+      failed ? 'red' : focused ? 'focus' : subtitleStyle,
     );
     put(grid, box.x + box.w - 1, box.y + 3, border.v, style);
 
