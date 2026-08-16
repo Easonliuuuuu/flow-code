@@ -213,6 +213,7 @@ to their own font zoom and never forward it, which affects `ui` mode; `z` and
 | `wide` (default) | 10 nodes, 290 × 13 | Wider than any terminal, two layers stacked two-deep, three badged cards. Panning, dragging, zoom, both pickers. |
 | `tall` | 9 nodes, 57 × 55 | Taller than the canvas, so auto-zoom starts compact. Checks the auto rule, and that dragging a node down doesn't re-densify the graph. |
 | `tiny` | 2 nodes, 57 × 6 | Fits the canvas whole — nothing off-screen, no auto-zoom. The "does this look right at rest" baseline. Also what `splash` mode uses internally. |
+| `loops` | 9 nodes, 4 loop-backs over 2 targets | The only shape with return paths. Three loops funnel into `implement` and one into `spec`, so per-target merging, the marks-only resting state, and focus-driven reveal are all visible — and against each other. Use it for anything touching how loop-backs are drawn; the other three shapes have no loop-back edge at all. |
 
 Add a shape by extending the `case "$SHAPE"` block in `make-testbed.sh` and
 the table above. Keep each one justified by something it makes visible that

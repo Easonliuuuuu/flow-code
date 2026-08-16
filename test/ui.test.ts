@@ -687,6 +687,23 @@ edges:
   - { from: check, to: impl, loopback: true }
 `);
 
+/** Two loop-backs onto one target — the shape a card cannot name in full. */
+const FAN_WF = workflowFromYaml(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: review
+    type: review
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: review }
+  - { from: check, to: impl, loopback: true }
+  - { from: review, to: impl, loopback: true }
+`);
+
 const FORWARD_WF = workflowFromYaml(`
 nodes:
   - id: impl
@@ -698,9 +715,13 @@ edges:
   - { from: impl, to: check }
 `);
 
-function renderText(wf: typeof LOOP_WF, state: ReturnType<typeof storeFor>): string {
+function renderText(
+  wf: typeof LOOP_WF,
+  state: ReturnType<typeof storeFor>,
+  focusedId: string | null = null,
+): string {
   const layout = computeLayout(wf);
-  const grid = renderGraph(wf, layout, state.snapshot(), null);
+  const grid = renderGraph(wf, layout, state.snapshot(), focusedId);
   return gridToLines(grid, {
     ox: 0,
     oy: 0,
@@ -722,38 +743,153 @@ describe('loop-back rendering', () => {
     }
   });
 
-  it('draws the return path distinctly from forward edges', () => {
+  /** The characters inside one card's own columns, cards being side by side. */
+  function card(wf: typeof LOOP_WF, layout: ReturnType<typeof computeLayout>, grid: ReturnType<typeof renderGraph>, id: string): string {
+    const box = layout.boxes.get(id)!;
+    return grid
+      .slice(box.y, box.y + box.h)
+      .map((row) => row.slice(box.x, box.x + box.w).map((c) => c.ch).join(''))
+      .join('\n');
+  }
+
+  it('never draws a return path, in any state or density', () => {
     const store = storeFor(LOOP_WF, '/tmp');
-    const text = renderText(LOOP_WF, store);
-    // Forward edges use ─ ▶; the return path uses a dashed run and ▲.
-    expect(text).toContain('▶');
-    expect(text).toContain('╌');
-    expect(text).toContain('▲');
-    expect(renderText(FORWARD_WF, storeFor(FORWARD_WF, '/tmp'))).not.toContain('╌');
+    store.setStatus('check', 'error', 'Validate verdict: fail');
+    store.resetNode('check');
+    store.resetNode('impl');
+    // Forward edges still draw; a loop-back has no line at all — not at rest,
+    // not focused on either end, not after it has fired, at no density.
+    for (const density of ['full', 'compact', 'mini'] as const) {
+      const layout = computeLayout(LOOP_WF, undefined, { density });
+      for (const focus of [null, 'impl', 'check']) {
+        const text = renderGraph(LOOP_WF, layout, store.snapshot(), focus)
+          .map((row) => row.map((c) => c.ch).join(''))
+          .join('\n');
+        for (const glyph of ['╌', '╎', '▲', '┴', '┼']) {
+          expect(text, `${density}/${focus ?? 'unfocused'} drew ${glyph}`).not.toContain(glyph);
+        }
+      }
+    }
+    expect(renderText(LOOP_WF, store)).toContain('▶');
   });
 
-  it('uses a distinct style for the return path', () => {
+  it('costs no rows below the graph, ever', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    const layout = computeLayout(LOOP_WF);
+    const forwardLayout = computeLayout(FORWARD_WF);
+    const looped = renderGraph(LOOP_WF, layout, store.snapshot(), 'check');
+    const forward = renderGraph(FORWARD_WF, forwardLayout, storeFor(FORWARD_WF, '/tmp').snapshot(), 'check');
+    // A graph with a loop-back is exactly as tall as the same graph without.
+    expect(looped.length).toBe(forward.length);
+    expect(looped.length).toBe(layout.height + 2);
+  });
+
+  it('names the node at the other end rather than pointing at it', () => {
     const store = storeFor(LOOP_WF, '/tmp');
     const layout = computeLayout(LOOP_WF);
     const grid = renderGraph(LOOP_WF, layout, store.snapshot(), null);
-    const styles = new Set(grid.flat().map((c) => c.style));
-    expect(styles.has('loopback')).toBe(true);
+    // check returns to impl, so its badge says where; impl is returned to by
+    // exactly one node, so its badge names that one too.
+    expect(card(LOOP_WF, layout, grid, 'check')).toContain('↺ impl');
+    expect(card(LOOP_WF, layout, grid, 'impl')).toContain('↻ check');
+    // And neither end's badge strays onto the other's card.
+    expect(card(LOOP_WF, layout, grid, 'check')).not.toContain('↻');
+  });
+
+  it('counts sources instead of naming them once there is more than one', () => {
+    const store = storeFor(FAN_WF, '/tmp');
+    const layout = computeLayout(FAN_WF);
+    const grid = renderGraph(FAN_WF, layout, store.snapshot(), null);
+    // Two loops land on impl — `↻check, review` would never fit a card.
+    expect(card(FAN_WF, layout, grid, 'impl')).toContain('↻ ×2');
+    // Each source still names its single target.
+    expect(card(FAN_WF, layout, grid, 'check')).toContain('↺ impl');
+    expect(card(FAN_WF, layout, grid, 'review')).toContain('↺ impl');
+  });
+
+  it('drops to shorter badge forms as density falls, never off the card', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    for (const density of ['full', 'compact', 'mini'] as const) {
+      const layout = computeLayout(LOOP_WF, undefined, { density });
+      const grid = renderGraph(LOOP_WF, layout, store.snapshot(), null);
+      const checkCard = card(LOOP_WF, layout, grid, 'check');
+      expect(checkCard).toContain('↺');
+      // The name survives at full density and is given up below it, but the
+      // badge itself never is — and the id it sits beside stays readable.
+      if (density === 'full') expect(checkCard).toContain('↺ impl');
+      else expect(checkCard).not.toContain('↺ impl');
+      expect(checkCard).toContain('check');
+    }
+  });
+
+  it('widens a mini card for its badge rather than truncating the id into it', () => {
+    // A mini card is sized to its id with no slack and the badge is reserved
+    // out of the title row, so a card sized without it renders `○ che…↺`.
+    const bare = computeLayout(FORWARD_WF, undefined, { density: 'mini' });
+    const looped = computeLayout(LOOP_WF, undefined, { density: 'mini' });
+    // One column for the glyph, one for the gap that keeps it off the id.
+    for (const id of ['impl', 'check']) {
+      expect(looped.boxes.get(id)!.w).toBe(bare.boxes.get(id)!.w + 2);
+    }
+    const store = storeFor(LOOP_WF, '/tmp');
+    const grid = renderGraph(LOOP_WF, looped, store.snapshot(), null);
+    expect(card(LOOP_WF, looped, grid, 'check')).toBe('○ check ↺');
+    expect(card(LOOP_WF, looped, grid, 'impl')).toBe('○ impl ↻');
+  });
+
+  it('brightens both ends of a loop when focus lands on either', () => {
+    const store = storeFor(LOOP_WF, '/tmp');
+    const layout = computeLayout(LOOP_WF);
+    const styleOfBadge = (focus: string | null, id: string): string | undefined => {
+      const box = layout.boxes.get(id)!;
+      return renderGraph(LOOP_WF, layout, store.snapshot(), focus)
+        .slice(box.y, box.y + box.h)
+        .flatMap((row) => row.slice(box.x, box.x + box.w))
+        .find((c) => c.ch === '↺' || c.ch === '↻')?.style;
+    };
+    // Unfocused, both badges are ordinary.
+    expect(styleOfBadge(null, 'impl')).toBe('loopback');
+    expect(styleOfBadge(null, 'check')).toBe('loopback');
+    // Focusing one end lights up the badge on *both* — that highlight is what
+    // replaced the line that used to connect them.
+    expect(styleOfBadge('check', 'check')).toBe('loopback-linked');
+    expect(styleOfBadge('check', 'impl')).toBe('loopback-linked');
+  });
+
+  it('leaves an unrelated node dark when focus is on a loop', () => {
+    const store = storeFor(FAN_WF, '/tmp');
+    const layout = computeLayout(FAN_WF);
+    const grid = renderGraph(FAN_WF, layout, store.snapshot(), 'check');
+    const box = layout.boxes.get('review')!;
+    // review loops to impl too, but not with check — its badge stays dark.
+    const badge = grid
+      .slice(box.y, box.y + box.h)
+      .flatMap((row) => row.slice(box.x, box.x + box.w))
+      .find((c) => c.ch === '↺');
+    expect(badge?.style).toBe('loopback');
   });
 
   it('shows no attempt badge on a first attempt', () => {
     const store = storeFor(LOOP_WF, '/tmp');
     store.setStatus('impl', 'done');
-    expect(renderText(LOOP_WF, store)).not.toContain('↻');
+    // The ↻ badge says impl is somewhere a loop returns to; ↻<n> is the
+    // attempt badge, and only that is absent on a first attempt.
+    expect(renderText(LOOP_WF, store)).not.toMatch(/↻\d/);
   });
 
-  it('badges a re-run node and marks the loop that fired', () => {
+  it('badges a re-run node and brightens the loop that fired', () => {
     const store = storeFor(LOOP_WF, '/tmp');
     store.setStatus('check', 'error', 'Validate verdict: fail');
     store.resetNode('check');
     store.resetNode('impl');
-    const text = renderText(LOOP_WF, store);
+    const layout = computeLayout(LOOP_WF);
+    const grid = renderGraph(LOOP_WF, layout, store.snapshot(), null);
+    const text = grid.map((row) => row.map((c) => c.ch).join('')).join('\n');
+    // The attempt count is the record that it fired — no label row needed.
     expect(text).toContain('↻2');
-    expect(text).toContain('retry from check');
+    // A fired loop outranks focus: both its badges read as fired, unfocused.
+    const styles = new Set(grid.flat().map((c) => c.style));
+    expect(styles.has('loopback-fired')).toBe(true);
   });
 
   it('renders reset nodes as idle again', () => {
@@ -1002,13 +1138,15 @@ edges:
     expect(cornerRow).toBeGreaterThanOrEqual(fanOutBottom);
   });
 
-  it('marks a crossing instead of breaking the wrap lane where a loop-back runs through it', () => {
+  it('leaves the wrap lanes alone even where a loop-back spans bands', () => {
     // b -> a loops back entirely inside band 0 — validCutPoints only forbids
     // splitting *inside* that span, not the a,b | c,d boundary right after
-    // it — so this still wraps into three bands. But every loop-back's row
-    // lives below the *whole* graph (see renderGraph), which for a band-0
-    // loop-back means routing down past both band boundaries below it: the
-    // exact case the wrap and loop-back lane allocators don't coordinate on.
+    // it — so this still wraps into three bands. This used to be the case the
+    // wrap and loop-back lane allocators didn't coordinate on: a loop-back's
+    // row lived below the *whole* graph, so a band-0 loop had to route down
+    // past both band boundaries, and the collision needed an explicit
+    // crossing glyph to stay legible. Loop-backs draw no lines now, so the
+    // wrap lanes are simply never crossed.
     const wf = workflowFromYaml(`
 nodes:
   - id: a
@@ -1040,15 +1178,17 @@ edges:
     expect(layout.boxes.get('e')!.band).toBe(2);
 
     const store = storeFor(wf, '/tmp');
-    const grid = renderGraph(wf, layout, store.snapshot(), null);
+    // Focused on one of the loop's ends — what used to draw it at all.
+    const grid = renderGraph(wf, layout, store.snapshot(), 'b');
     const styles = new Set(grid.flat().map((cell) => cell.style));
-    // The wrap lanes still drew — a crossing doesn't erase them...
+    // The wrap lanes drew, unbroken and uncrossed.
     expect(styles.has('wrap')).toBe(true);
-    // ...and the loop-back's run through them left an explicit marker rather
-    // than silently overwriting the wrap lane's glyph with its own dash.
-    expect(styles.has('crossing')).toBe(true);
+    expect(styles.has('crossing')).toBe(false);
     const text = grid.map((row) => row.map((c) => c.ch).join('')).join('\n');
-    expect(text).toContain('┼');
+    expect(text).not.toContain('┼');
+    // The loop is still on the cards, in both bands.
+    expect(text).toContain('↺');
+    expect(text).toContain('↻');
   });
 });
 

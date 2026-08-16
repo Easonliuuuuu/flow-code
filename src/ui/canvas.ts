@@ -82,7 +82,9 @@ const ANSI: Record<string, string> = {
   meter: '\x1b[96m',
   focus: '\x1b[1;36m',
   blocked: '\x1b[31;1m',
-  // Return paths read as a different kind of line from forward edges.
+  // Return paths read as a different kind of line from forward edges — and
+  // the same magenta marks the `↺`/`↻` badges on the cards a loop connects,
+  // which is all a loop shows until it fires or you focus one of its ends.
   loopback: '\x1b[35m',
   'loopback-fired': '\x1b[1;35m',
   // A band-wrap edge is still a forward edge, just routed through a reserved
@@ -92,10 +94,11 @@ const ANSI: Record<string, string> = {
   // A skill badge is a standing config choice, not a transient run signal —
   // dim like the model badge, but yellow so it doesn't read as identical.
   'skill-badge': '\x1b[33m',
-  // Where a loop-back's vertical run passes through a wrap lane on its way to
-  // the reserved row below the whole graph — see `putLoopbackRun`. Neutral so
-  // it reads as "two unrelated lines cross here", not as a piece of either.
-  crossing: '\x1b[37m',
+  // The other end of a loop-back from wherever focus is standing. Brightened
+  // rather than connected: highlighting both ends answers "which node does
+  // this loop reach?" without a line, and keeps answering it at a density
+  // where no line would have fit.
+  'loopback-linked': '\x1b[95m',
 };
 const RESET = '\x1b[0m';
 
@@ -174,20 +177,101 @@ function drawWrapEdge(grid: Grid, from: NodeBox, to: NodeBox, style: string): vo
 }
 
 /**
- * A loop-back's vertical run, from a box's edge down to its reserved row
- * below the whole graph. That row sits below every band, so a loop-back
- * whose nodes live above the last band has to pass through every wrap lane
- * between them on the way — band-wrap and loop-backs are laid out by two
- * independent allocators that don't know about each other's rows. Marking
- * the cell as an explicit crossing instead of just overwriting it keeps the
- * wrap edge legible instead of silently breaking wherever a loop-back
- * happens to run through its column.
+ * Loop-backs are never drawn as lines.
+ *
+ * A loop-back is a long-range *backward* edge in a left-to-right layout: the
+ * span from `review` back to `implement` is most of the canvas, and drawing
+ * it means a horizontal run that long plus vertical risers punching down
+ * through every band in between. That is clutter no routing trick fixes —
+ * merging return paths that share a target, or only drawing the ones that
+ * fired, reduces how many long lines there are and how often, not the fact
+ * that each one is long.
+ *
+ * So each end of a loop-back gets a badge on its own card instead, naming
+ * the node at the other end. `test ↺implement` is read, not traced. What a
+ * line was still doing beyond that — "which nodes are on this loop?" — is
+ * done by brightening both ends when focus lands on either (see
+ * `loopback-linked`), which costs no geometry and survives every density.
  */
-function putLoopbackRun(grid: Grid, x: number, y0: number, y1: number, style: string): void {
-  for (let y = y0; y < y1; y++) {
-    if (grid[y]?.[x]?.style === 'wrap') put(grid, x, y, '┼', 'crossing');
-    else put(grid, x, y, '╎', style);
+const LOOP_OUT = '↺';
+const LOOP_IN = '↻';
+
+/** Has this loop-back actually sent execution backwards during this run? */
+function loopHasFired(runState: RunState, loop: { from: string; to: string }): boolean {
+  return (
+    (runState.nodes[loop.to]?.attempt ?? 1) > 1 &&
+    (runState.nodes[loop.from]?.priorAttempts?.length ?? 0) > 0
+  );
+}
+
+interface LoopMark {
+  /**
+   * Renderings of this node's loops, most informative first. The card takes
+   * the first that fits the room its title leaves — the same graceful-drop
+   * the compact card's metrics use, rather than eliding into a badge that
+   * spends columns saying nothing.
+   */
+  forms: string[];
+  /** Some loop this node is an end of has fired during this run. */
+  fired: boolean;
+  /** The nodes at the other end of this node's loops, for focus highlighting. */
+  partners: Set<string>;
+}
+
+/**
+ * One badge per node that a loop-back touches.
+ *
+ * A source names its target, because from a source there is exactly one
+ * place execution goes. A target only counts its sources once there is more
+ * than one, because naming all of `test, validate, review` never fits a card
+ * and the count is the useful summary anyway — which of them fired is a run
+ * event, and the `↻2` attempt badge already says it happened.
+ */
+function loopMarks(loops: { loop: { from: string; to: string }; fired: boolean }[]): Map<string, LoopMark> {
+  const out = new Map<string, string[]>();
+  const inn = new Map<string, string[]>();
+  const fired = new Set<string>();
+  const partners = new Map<string, Set<string>>();
+  const link = (a: string, b: string): void => {
+    const set = partners.get(a) ?? new Set<string>();
+    set.add(b);
+    partners.set(a, set);
+  };
+  for (const { loop, fired: didFire } of loops) {
+    out.set(loop.from, [...(out.get(loop.from) ?? []), loop.to]);
+    inn.set(loop.to, [...(inn.get(loop.to) ?? []), loop.from]);
+    link(loop.from, loop.to);
+    link(loop.to, loop.from);
+    if (didFire) {
+      fired.add(loop.from);
+      fired.add(loop.to);
+    }
   }
+
+  const marks = new Map<string, LoopMark>();
+  for (const id of new Set([...out.keys(), ...inn.keys()])) {
+    const targets = out.get(id) ?? [];
+    const sources = inn.get(id) ?? [];
+    // The glyph is a glyph, not a prefix — it needs air between it and
+    // whatever it labels, or `↻review` reads as one word and `↻×3` as one
+    // token. Only the bare form has nothing to separate it from.
+    const named = (glyph: string, ids: string[]): string =>
+      ids.length === 0 ? '' : ids.length === 1 ? `${glyph} ${ids[0]}` : `${glyph} ×${ids.length}`;
+    const counted = (glyph: string, ids: string[]): string =>
+      ids.length === 0 ? '' : ids.length === 1 ? glyph : `${glyph} ×${ids.length}`;
+    const join = (a: string, b: string): string => (a && b ? `${a} ${b}` : a || b);
+    const forms = [
+      join(named(LOOP_OUT, targets), named(LOOP_IN, sources)),
+      join(counted(LOOP_OUT, targets), counted(LOOP_IN, sources)),
+      `${targets.length > 0 ? LOOP_OUT : ''}${sources.length > 0 ? LOOP_IN : ''}`,
+    ];
+    marks.set(id, {
+      forms: forms.filter((f, i) => f.length > 0 && forms.indexOf(f) === i),
+      fired: fired.has(id),
+      partners: partners.get(id) ?? new Set(),
+    });
+  }
+  return marks;
 }
 
 /**
@@ -209,7 +293,9 @@ export function renderGraph(
   focusedId: string | null,
   anim: AnimationState = { frame: 0, now: Date.now() },
 ): Grid {
-  const loopbacks = workflow.graph.allLoopbacks();
+  const loops = workflow.graph
+    .allLoopbacks()
+    .map((loop) => ({ loop, fired: loopHasFired(runState, loop) }));
   // Bucketed once per render: every running box wants only its own last entry,
   // and the activity log is run-wide and can be long.
   const activityByNode = new Map<string, ActivityEntry[]>();
@@ -218,10 +304,12 @@ export function renderGraph(
     if (list) list.push(entry);
     else activityByNode.set(entry.nodeId, [entry]);
   }
-  // Each return path gets its own row below the boxes so they never collide
-  // with each other or with the forward elbows between the same two nodes.
-  const bandTop = layout.height + 1;
-  const grid = makeGrid(layout.width + 2, bandTop + loopbacks.length + 1);
+
+  // Loop-backs live entirely on the cards they connect — see `loopMarks`.
+  // Nothing below the graph is reserved for them, at any density or run
+  // state, which is why the grid is now just the graph plus its own margin.
+  const marks = loopMarks(loops);
+  const grid = makeGrid(layout.width + 2, layout.height + 2);
 
   // Edges under boxes. Loop-backs are not dependencies and are drawn below.
   for (const edge of workflow.edges.filter((e) => !e.loopback)) {
@@ -254,38 +342,6 @@ export function renderGraph(
     put(grid, tx, ty, '▶', 'edge');
   }
 
-  // Return paths: down out of the failing node, back along a reserved row,
-  // then up into the node execution resumes at.
-  loopbacks.forEach((loop, i) => {
-    const from = layout.boxes.get(loop.from);
-    const to = layout.boxes.get(loop.to);
-    if (!from || !to) return;
-    const bandY = bandTop + i;
-    const sx = from.x + Math.floor(from.w / 2);
-    const tx = to.x + Math.floor(to.w / 2);
-    // A loop that has actually fired is drawn brighter, and says so.
-    const fired =
-      (runState.nodes[loop.to]?.attempt ?? 1) > 1 &&
-      (runState.nodes[loop.from]?.priorAttempts?.length ?? 0) > 0;
-    const style = fired ? 'loopback-fired' : 'loopback';
-
-    putLoopbackRun(grid, sx, from.y + from.h, bandY, style);
-    put(grid, sx, bandY, '╯', style);
-    const [left, right] = tx < sx ? [tx, sx] : [sx, tx];
-    for (let x = left + 1; x < right; x++) put(grid, x, bandY, '╌', style);
-    put(grid, tx, bandY, '╰', style);
-    putLoopbackRun(grid, tx, to.y + to.h + 1, bandY, style);
-    put(grid, tx, to.y + to.h, '▲', style);
-
-    if (fired) {
-      const label = ` ↻ retry from ${loop.from} `;
-      const span = right - left - 1;
-      if (span >= label.length) {
-        put(grid, left + 1 + Math.floor((span - label.length) / 2), bandY, label, style);
-      }
-    }
-  });
-
   // Boxes.
   for (const node of workflow.nodes) {
     const box = layout.boxes.get(node.id)!;
@@ -299,9 +355,28 @@ export function renderGraph(
     // border, title, border. See COMPACT_BOX_HEIGHT.
     const compact = !mini && box.h < BOX_HEIGHT;
 
+    // The loop badge rides the right edge of the title row at every density,
+    // in its own colour, so it reads as a separate channel from whatever the
+    // card's status is doing. Which form it takes is a density decision: a
+    // compact card has already given up the subtitle and the type name, so it
+    // gives up the loop target's name too rather than crowding out the live
+    // metrics that are the reason to look at a compact card at all.
+    const loopMark = marks.get(node.id);
+    const forms = mini ? loopMark?.forms.slice(-1) : compact ? loopMark?.forms.slice(1) : loopMark?.forms;
+    const markStyle = loopMark?.fired
+      ? 'loopback-fired'
+      : loopMark && focusedId !== null && (node.id === focusedId || loopMark.partners.has(focusedId))
+        ? 'loopback-linked'
+        : 'loopback';
+
     if (mini) {
       const glyph = statusGlyphFor(state, anim.frame);
-      put(grid, box.x, box.y, fit(`${glyph} ${node.id}`, box.w).padEnd(box.w), style);
+      const markText = forms?.[0] ?? '';
+      // The badge's columns are reserved out of the title rather than
+      // appended to it: a mini card is sized to its id with no slack, so
+      // appending would just push the badge back off the box's right edge.
+      put(grid, box.x, box.y, fit(`${glyph} ${node.id}`, box.w - markText.length).padEnd(box.w), style);
+      if (markText) put(grid, box.x + box.w - markText.length, box.y, markText, markStyle);
       continue;
     }
 
@@ -319,6 +394,10 @@ export function renderGraph(
       put(grid, bangAt, box.y + 1, '!', 'blocked');
     }
     put(grid, box.x + box.w - 1, box.y + 1, border.v, style);
+    // Whatever the title row has left after the title itself, minus a column
+    // so the badge never butts straight up against the id.
+    const markText = forms?.find((f) => f.length <= inner - title.trimEnd().length - 1) ?? '';
+    if (markText) put(grid, box.x + box.w - 1 - markText.length, box.y + 1, markText, markStyle);
 
     if (compact) {
       // The rows that carried tokens and elapsed time are gone, so the
@@ -326,14 +405,16 @@ export function renderGraph(
       // still has to show which node is burning the run's budget.
       // Tokens and the clock if both fit, tokens alone if they don't — an
       // elided `↑1.2k ↓340 · …` would spend the row saying nothing.
-      const room = inner - title.trimEnd().length - 1;
+      // The loop-back mark already holds the far right of this row, so the
+      // metrics have that much less room and start that much further left.
+      const room = inner - title.trimEnd().length - 1 - markText.length;
       const text = [nodeMetrics(state, anim.now), nodeMetrics(state, anim.now, { clock: false })].find(
         (m) => m.length > 0 && m.length <= room,
       );
       if (text) {
         put(
           grid,
-          box.x + box.w - 1 - text.length,
+          box.x + box.w - 1 - markText.length - text.length,
           box.y + 1,
           text,
           state.status === 'running' ? 'meter' : 'dim',
