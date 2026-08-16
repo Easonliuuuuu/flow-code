@@ -10,14 +10,15 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 277/280` tasks across 7 change(s)
+`██████████ 318/324` tasks across 8 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
-**Capabilities:** `agent-execution`, `approval-gate`, `node-model-selection`, `test-command-discovery`, `workflow-graph`
+**Capabilities:** `agent-execution`, `approval-gate`, `node-model-selection`, `plan-node`, `test-command-discovery`, `workflow-graph`
 
 | Change | State | Tasks |
 | --- | --- | --- |
+| `agent-generated-graphs` | active | █████████░ 41/44 |
 | `route-rejected-gate-to-revision` | active | █████████░ 36/39 |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |

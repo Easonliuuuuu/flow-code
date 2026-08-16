@@ -38,6 +38,7 @@ scopes:
   worktrees: [worktree-agent-node]
   worktree: [worktree-agent-node]
   discuss: [agent-execution, node-model-selection]
+  plan: [workflow-graph, agent-execution]
   preflight: [agent-execution]
   schema: [workflow-graph]
   ui: [terminal-canvas-ui]
@@ -85,14 +86,22 @@ modules:
 # workflow-graph, and workflow-graph maps to BR-08, so the BR link is inherited
 # rather than re-declared per feature.
 #
-# Two judgment calls worth knowing about, both recorded rather than smoothed:
+# Three judgment calls worth knowing about, all recorded rather than smoothed:
 #
-# 1. BR-08 owns five capabilities, which is the top of the healthy range — one
+# 1. BR-08 owns six capabilities as of `plan-node`, past the five this file
+#    used to call the top of the healthy range. Held here anyway because "the
+#    graph is the authority on what executes" is exactly plan-node's own job —
+#    it is what produces the graph the rest of BR-08 executes, not a
+#    tangential feature that happened to land nearby. If BR-08 ever splits,
+#    plan-node goes with "the graph is the truth" (workflow-graph,
+#    agent-execution, node-model-selection, test-command-discovery), not with
+#    "nothing escapes the gate" (approval-gate) — see call 2.
+# 2. BR-08 owns five capabilities, which is the top of the healthy range — one
 #    more and the label is probably a bucket. It holds here because "the graph
 #    is the authority on what executes" genuinely covers all five. The seam to
 #    watch, if it ever needs splitting, is between "the graph is the truth" and
 #    "nothing escapes the gate" (approval-gate).
-# 2. terminal-canvas-ui maps to BR-09 (a run is legible), not BR-05 (a big
+# 3. terminal-canvas-ui maps to BR-09 (a run is legible), not BR-05 (a big
 #    graph stays navigable), because the spec is mostly cards, panels, and the
 #    detail view rather than navigation. BR-05 therefore has no capability yet:
 #    it needs the navigation half of this spec split out, which is deferred ER
@@ -103,6 +112,11 @@ capabilities:
   approval-gate: BR-08
   node-model-selection: BR-08
   test-command-discovery: BR-08
+  # Not yet a real spec directory — openspec/changes/agent-generated-graphs is
+  # still open. Registered now so the BR home is decided before archival, the
+  # same way the `changes:` entry below is, rather than left for whoever
+  # archives it to guess.
+  plan-node: BR-08
   terminal-canvas-ui: BR-09
   run-state: BR-04
   node-skills: BR-07
@@ -120,6 +134,25 @@ capabilities:
 # serve. `status: parked` means deliberately not scheduled — it silences the
 # staleness warning, which is the whole reason to record it.
 changes:
+  agent-generated-graphs:
+    br: BR-08
+    note: >-
+      A `plan` node — interactive, read-only, like Discuss — negotiates the
+      graph itself before a run executes it, rather than only what the graph
+      builds. Does not complete until the user accepts a proposal; an
+      accepted proposal is spliced in and validated through the same checks
+      a hand-written file passes, including a new structural invariant this
+      change also adds: every node holding `git-write` must be dominated by
+      an Approval-Gate (not merely have one somewhere upstream), with no
+      opt-out. `flow-code init --preset planned` scaffolds the spine
+      (`plan → gate → git-ops`); a run that expands can keep the negotiated
+      shape as an ordinary static file, needing no further planning.
+      Engine-, runstate-, and workflow-level mechanics are implemented and
+      tested (1075 tests, including a real end-to-end run with a real git
+      commit); not yet done: focus preservation and viewport panning across
+      an expansion have no dedicated tests, and none of this has been driven
+      by hand in a real terminal against a real agent session.
+
   add-per-task-workflow-graphs:
     br: BR-08
     note: >-
