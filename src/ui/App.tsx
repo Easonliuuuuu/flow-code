@@ -416,18 +416,21 @@ export function App({
   const discussActive = discussState?.active ?? false;
   const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
   const focusedNode = workflow.nodes.find((n) => n.id === focusedId);
-  // Discuss is the one blocking prompt you can step away from: tabbing (or
-  // clicking) to another node hides the conversation — still paused,
-  // draft still in `inputBuffer` — in favor of that node's own panel, and
-  // tabbing back re-shows it. Every other pending-* prompt below stays
-  // forced open regardless of focus, since those are short single
-  // decisions where losing track of the request matters more than being
-  // able to browse mid-decision.
+  // Discuss and a pending approval gate are the blocking prompts you can step
+  // away from: tabbing (or clicking) to another node hides them — still
+  // paused, draft/scroll position and all — in favor of that node's own
+  // panel, and tabbing back re-shows them. A gate's diff is exactly the kind
+  // of thing you need other nodes' output in view to judge, so pinning it
+  // open regardless of focus would defeat its own purpose. Convergence and
+  // test-command prompts stay forced open regardless of focus, since those
+  // are short single decisions where losing track of the request matters
+  // more than being able to browse mid-decision.
   const discussPanelOpen = discussActive && discussState?.nodeId === focusedId;
+  const pendingApprovalPanelOpen = pendingApproval !== null && pendingApproval.req.nodeId === focusedId;
 
   const panelOpen =
     expanded ||
-    pendingApproval !== null ||
+    pendingApprovalPanelOpen ||
     pendingConvergence !== null ||
     pendingTestCommands !== null ||
     discussPanelOpen ||
@@ -840,9 +843,10 @@ export function App({
   // Reset diff scroll when focus lands on a different node, so an approval
   // gate's replayed diff always opens at the top rather than wherever the
   // previously-viewed node's diff happened to leave it. Skipped while a gate
-  // is actively awaiting a decision — its forced-open panel already owns
-  // `diffScroll`, and tabbing away to peek at other nodes shouldn't lose the
-  // read position in the diff you're deciding on.
+  // is actively awaiting a decision — `diffScroll` is shared with its live
+  // panel, and tabbing away to peek at other nodes (the panel hides, but the
+  // request is still the same one) shouldn't lose the read position in the
+  // diff you're deciding on.
   useEffect(() => {
     if (!pendingApproval) setDiffScroll(0);
   }, [focusedId, pendingApproval]);
@@ -992,12 +996,13 @@ export function App({
    * (see the mode chain in useInput) — and the mouse has to honour the same
    * rule. A badge click that opened a picker underneath one of these left it
    * invisible behind the higher-priority panel and keyboard-unreachable, then
-   * sprang it on you the moment the prompt was answered. Discuss is judged
-   * per node, since a paused discussion elsewhere in the graph is exactly the
-   * case tabbing away is meant to allow.
+   * sprang it on you the moment the prompt was answered. Discuss and a
+   * pending approval gate are judged per node, since a paused discussion (or
+   * a gate awaiting a decision) elsewhere in the graph is exactly the case
+   * tabbing away is meant to allow.
    */
   const blockingPromptFor = (nodeId: string): boolean =>
-    pendingApproval !== null ||
+    (pendingApproval !== null && pendingApproval.req.nodeId === nodeId) ||
     pendingConvergence !== null ||
     pendingTestCommands !== null ||
     (discussActive && discussState?.nodeId === nodeId);
@@ -1025,7 +1030,7 @@ export function App({
     outputWindow,
     activityWindow,
     nodePanelOutputBudget,
-    pendingApproval,
+    pendingApprovalPanelOpen,
     columns,
     rows,
     canvasWidth,
@@ -1053,7 +1058,7 @@ export function App({
       outputWindow,
       activityWindow,
       nodePanelOutputBudget,
-      pendingApproval,
+      pendingApprovalPanelOpen,
       columns,
       rows,
       canvasWidth,
@@ -1119,7 +1124,7 @@ export function App({
           outputWindow,
           activityWindow,
           nodePanelOutputBudget,
-          pendingApproval,
+          pendingApprovalPanelOpen,
           columns,
           rows,
           canvasWidth,
@@ -1275,7 +1280,7 @@ export function App({
             setHelpScroll((s) => Math.min(helpMaxScroll, Math.max(0, s + (backwards ? -3 : 3))));
           } else if (overPanel && discussPanelOpen) {
             setDiscussPin(pinAfterScroll(mouseStateRef.current.discussWindow, backwards ? 3 : -3));
-          } else if (pendingApproval || (overPanel && nodePanelIsDiffReplay)) {
+          } else if (overPanel && (pendingApprovalPanelOpen || nodePanelIsDiffReplay)) {
             // Same 3-row-per-tick step as every other wheel-scrolled surface
             // here (discuss, node panel below) — this used to move 1 row/tick,
             // which read as noticeably slower under the mouse for no reason.
@@ -1505,8 +1510,11 @@ export function App({
       return;
     }
 
-    // Approval gate: keyboard-first approve/reject.
-    if (pendingApproval) {
+    // Approval gate: keyboard-first approve/reject. Scoped to the gate being
+    // the focused node, same as Discuss above — tabbing away must reach the
+    // node you tabbed to instead of a/r still landing on a gate you can no
+    // longer see.
+    if (pendingApprovalPanelOpen && pendingApproval) {
       if (input === 'a') {
         pendingApproval.resolve('approve');
         return;
@@ -2112,7 +2120,7 @@ export function App({
           </Box>
           <PanelFooter hint="↑/↓: move · space: select · enter: confirm · drag ⠿/edge: move · ⇲: resize" />
         </Box>
-      ) : pendingApproval ? (
+      ) : pendingApprovalPanelOpen && pendingApproval ? (
         <Box {...panelBoxProps}>
           {panelBackdrop}
           <PanelTitle>
