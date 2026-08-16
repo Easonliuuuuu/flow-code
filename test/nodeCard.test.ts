@@ -8,6 +8,7 @@ import {
   nodeMetrics,
   nodeSubtitle,
   outcomeSummary,
+  outputDetailLines,
   plannedSummary,
   spinnerFrame,
   totalTokens,
@@ -97,6 +98,72 @@ describe('outcomeSummary — what a node produced', () => {
 
   it('returns null when there is no output to report', () => {
     expect(outcomeSummary(node('impl'), undefined)).toBeNull();
+  });
+});
+
+describe('outputDetailLines — the expanded panel breakdown for JSON-only nodes', () => {
+  const WF2 = workflowFromYaml(`
+nodes:
+  - id: talk
+    type: discuss
+    config: { topic: What are we building? }
+  - id: mkspec
+    type: spec
+  - id: chk
+    type: validate
+  - id: rev
+    type: review
+edges:
+  - { from: talk, to: mkspec }
+  - { from: mkspec, to: chk }
+  - { from: chk, to: rev }
+`);
+  const n2 = (id: string) => WF2.nodes.find((w) => w.id === id)!;
+
+  it('breaks a discussion conclusion into headline and constraint list', () => {
+    expect(
+      outputDetailLines(n2('talk'), { conclusion: 'Ship it', constraints: ['keep it small'] }),
+    ).toEqual(['Conclusion: Ship it', '', 'Constraints:', '- keep it small']);
+  });
+
+  it('breaks a spec into title, requirements and acceptance criteria — never raw JSON', () => {
+    const lines = outputDetailLines(n2('mkspec'), {
+      specPath: '.flow-code/specs/r1.md',
+      title: 'Add retries',
+      requirements: ['must be idempotent'],
+      acceptanceCriteria: [{ id: 'AC1', text: 'retries on 5xx' }],
+    })!;
+    expect(lines).toContain('Title: Add retries');
+    expect(lines).toContain('- AC1 — retries on 5xx');
+    expect(lines.join('\n')).not.toContain('{');
+  });
+
+  it('breaks a validate verdict into per-criterion checkmarks', () => {
+    const lines = outputDetailLines(n2('chk'), {
+      verdict: 'fail',
+      notes: '1 unmet',
+      criteria: [{ id: 'AC1', met: false, evidence: 'no retry logic found' }],
+    })!;
+    expect(lines).toContain('Verdict: fail');
+    expect(lines).toContain('- [ ] AC1 — no retry logic found');
+  });
+
+  it('breaks review findings into a severity-tagged list', () => {
+    const lines = outputDetailLines(n2('rev'), {
+      verdict: 'fail',
+      findings: [{ location: 'a.ts:10', description: 'off by one', severity: 'major' }],
+    })!;
+    expect(lines).toContain('Findings (1):');
+    expect(lines).toContain('- [major] a.ts:10 — off by one');
+  });
+
+  it('returns null rather than a half-built view when output does not match the shape yet', () => {
+    expect(outputDetailLines(n2('mkspec'), undefined)).toBeNull();
+    expect(outputDetailLines(n2('mkspec'), { unrelated: true })).toBeNull();
+  });
+
+  it('leaves non-JSON-only node types alone, since their transcript is already readable', () => {
+    expect(outputDetailLines(node('impl'), { changedFiles: [], diff: '', summary: 'done' })).toBeNull();
   });
 });
 

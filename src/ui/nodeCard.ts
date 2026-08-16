@@ -225,6 +225,83 @@ export function nodeSubtitle(
 }
 
 /**
+ * Multi-line, human-readable breakdown of a finished node's output, for the
+ * expanded detail panel. Only defined for node types whose entire session
+ * reply is a JSON object with nothing else worth reading — spec, validate,
+ * review, and a discussion's closing turn. Every other node type's `output`
+ * is either absent-of-interest (git-ops, worktree-agent) or already legible
+ * because the panel's live transcript is the agent's own prose (implement,
+ * test), so those fall through to that transcript rather than get a second,
+ * redundant view here.
+ *
+ * Returns `null` when there's nothing to show — including when the output
+ * doesn't look like this node type's shape (still unparsed, or from before a
+ * type change) — which tells the caller to fall back to the raw transcript
+ * instead of a blank or half-populated block.
+ */
+export function outputDetailLines(node: WorkflowNode, output: unknown): string[] | null {
+  if (output === null || typeof output !== 'object') return null;
+  const o = output as Record<string, unknown>;
+  switch (node.type.id) {
+    case 'discuss': {
+      if (typeof o['conclusion'] !== 'string') return null;
+      const constraints = Array.isArray(o['constraints']) ? (o['constraints'] as unknown[]) : [];
+      return [
+        `Conclusion: ${o['conclusion']}`,
+        '',
+        'Constraints:',
+        ...(constraints.length > 0 ? constraints.map((c) => `- ${String(c)}`) : ['(none)']),
+      ];
+    }
+    case 'spec': {
+      if (typeof o['title'] !== 'string') return null;
+      const requirements = Array.isArray(o['requirements']) ? (o['requirements'] as unknown[]) : [];
+      const criteria = Array.isArray(o['acceptanceCriteria'])
+        ? (o['acceptanceCriteria'] as Array<{ id?: unknown; text?: unknown }>)
+        : [];
+      return [
+        `Title: ${o['title']}`,
+        `Spec written to ${String(o['specPath'] ?? '?')}`,
+        '',
+        'Requirements:',
+        ...(requirements.length > 0 ? requirements.map((r) => `- ${String(r)}`) : ['(none stated)']),
+        '',
+        'Acceptance criteria:',
+        ...criteria.map((c) => `- ${String(c.id ?? '?')} — ${String(c.text ?? '')}`),
+      ];
+    }
+    case 'validate': {
+      if (typeof o['verdict'] !== 'string') return null;
+      const criteria = Array.isArray(o['criteria'])
+        ? (o['criteria'] as Array<{ id?: unknown; met?: unknown; evidence?: unknown }>)
+        : [];
+      return [
+        `Verdict: ${o['verdict']}`,
+        `Notes: ${String(o['notes'] ?? '')}`,
+        ...(criteria.length > 0
+          ? ['', 'Criteria:', ...criteria.map((c) => `- [${c.met === true ? 'x' : ' '}] ${String(c.id ?? '?')} — ${String(c.evidence ?? '')}`)]
+          : []),
+      ];
+    }
+    case 'review': {
+      if (typeof o['verdict'] !== 'string') return null;
+      const findings = Array.isArray(o['findings'])
+        ? (o['findings'] as Array<{ location?: unknown; description?: unknown; severity?: unknown }>)
+        : [];
+      return [
+        `Verdict: ${o['verdict']}`,
+        `Findings (${findings.length}):`,
+        ...(findings.length > 0
+          ? findings.map((f) => `- [${String(f.severity ?? 'info')}] ${String(f.location ?? '?')} — ${String(f.description ?? '')}`)
+          : ['(none)']),
+      ];
+    }
+    default:
+      return null;
+  }
+}
+
+/**
  * The metrics line: tokens consumed so far and wall-clock time, both live
  * while the node runs and frozen at its final value afterwards. Empty for a
  * node that hasn't started — there is nothing to measure yet.
