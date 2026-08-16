@@ -4,6 +4,7 @@ import type { RunStateStore } from '../runstate/store.js';
 import type { DiscussTranscriptEntry, NodeStatus, RunBaseline } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import type { RunSettings } from '../workflow/schema.js';
+import type { PlanProposal } from '../workflow/splice.js';
 
 /** Events every node execution yields; consumed centrally by the engine. */
 export type StatusEvent =
@@ -106,6 +107,25 @@ export interface DiscussPort {
 }
 
 /**
+ * The Plan node's interaction surface: the same shape as `DiscussPort`, but
+ * a turn is one of three things rather than text-or-null, because "the user
+ * stopped talking" and "the user accepted a graph" are not the same event —
+ * the node must be able to tell them apart to know whether it completed or
+ * merely ended.
+ */
+export interface PlanPort {
+  begin(nodeId: string, topic: string | undefined, seedTranscript?: DiscussTranscriptEntry[]): void;
+  /** Assistant text; `proposal` is the graph it proposed in this reply, if this reply proposed one. */
+  postAssistant(nodeId: string, text: string, proposal: PlanProposal | null): void;
+  /**
+   * The user's next turn. `null` means the session ended without the user
+   * accepting anything — the node errors rather than completing.
+   */
+  nextTurn(nodeId: string): Promise<{ text: string } | { accept: true } | null>;
+  end(nodeId: string): void;
+}
+
+/**
  * A Test node that reached execution still carrying the scaffolded
  * placeholder command, asking what it should actually run.
  *
@@ -126,6 +146,7 @@ export interface InteractionPorts {
   approval: { request(req: ApprovalRequest): Promise<'approve' | 'reject'> };
   convergence: { select(req: ConvergenceRequest): Promise<string[]> };
   discuss: DiscussPort;
+  plan: PlanPort;
   /** Resolve null to run no tests at all; the node passes and says so. */
   testCommands: { request(req: TestCommandsRequest): Promise<string[] | null> };
 }

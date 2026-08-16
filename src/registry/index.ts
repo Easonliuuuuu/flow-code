@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CAPABILITIES } from '../capabilities.js';
+import { edgeSchema, nodeEntrySchema } from '../workflow/schema.js';
 import type { WorkflowNode } from '../workflow/load.js';
 import type { NodeTypeDefinition, NodeTypeId } from './types.js';
 
@@ -40,6 +41,17 @@ const agentStepFields = {
 };
 
 const discussConfig = z.strictObject({
+  topic: z.string().min(1).optional(),
+  model: z.string().min(1).optional(),
+  skills: skillsField,
+});
+
+/**
+ * Same shape as Discuss: a topic to negotiate about, nothing more. What
+ * distinguishes Plan is not its config but its output — a graph rather than
+ * a conclusion.
+ */
+const planConfig = z.strictObject({
   topic: z.string().min(1).optional(),
   model: z.string().min(1).optional(),
   skills: skillsField,
@@ -161,6 +173,17 @@ export const discussOutput = z.object({
   constraints: z.array(z.string()),
 });
 
+/**
+ * A proposed graph, in exactly the shape a workflow file's `nodes`/`edges`
+ * are — reusing `nodeEntrySchema`/`edgeSchema` rather than a bespoke shape is
+ * what keeps "planning composes only existing node types" true structurally:
+ * there is no separate vocabulary a proposal could drift into.
+ */
+export const planOutput = z.object({
+  nodes: z.array(nodeEntrySchema).min(1),
+  edges: z.array(edgeSchema).default([]),
+});
+
 /** One testable statement the run is finished against. */
 export const acceptanceCriterion = z.object({
   /** Stable within a run (`AC1`, `AC2`, …) so downstream nodes can cite it. */
@@ -262,6 +285,7 @@ export const approvalGateOutput = z.object({
 });
 
 export type DiscussOutput = z.infer<typeof discussOutput>;
+export type PlanOutput = z.infer<typeof planOutput>;
 export type SpecOutput = z.infer<typeof specOutput>;
 export type AcceptanceCriterion = z.infer<typeof acceptanceCriterion>;
 export type ImplementOutput = z.infer<typeof implementOutput>;
@@ -273,6 +297,7 @@ export type WorktreeAgentOutput = z.infer<typeof worktreeAgentOutput>;
 export type ApprovalGateOutput = z.infer<typeof approvalGateOutput>;
 
 export type DiscussConfig = z.infer<typeof discussConfig>;
+export type PlanConfig = z.infer<typeof planConfig>;
 export type SpecConfig = z.infer<typeof specConfig>;
 export type ImplementConfig = z.infer<typeof implementConfig>;
 export type TestConfig = z.infer<typeof testConfig>;
@@ -319,6 +344,29 @@ const definitions: NodeTypeDefinition[] = [
     outputSchema: discussOutput,
     configSummary: 'topic? (string), model? (string), skills? (string[])',
     outputSummary: 'conclusion (string), constraints (string[])',
+  },
+  {
+    id: 'plan',
+    displayName: 'Plan',
+    description:
+      'Interactive negotiation of both the task and the graph that carries it out. ' +
+      'Does not complete until the user accepts a proposed graph; its output is a set of ' +
+      'nodes and edges, spliced into the run in place of this node\'s own successors, rather ' +
+      'than text for a downstream node to read.',
+    capabilities: ['read'],
+    agentDriven: true,
+    interactive: true,
+    hasModelField: true,
+    rolePrompt:
+      'You are the planning step of a coding workflow. ' +
+      'Talk with the user to settle what should be built, then propose a graph of nodes and ' +
+      'edges — drawn only from the built-in node types you are given — that carries it out. ' +
+      'You may read the repository to inform the plan, but you must not change anything. ' +
+      'The graph you propose is not adopted until the user explicitly accepts it.',
+    configSchema: planConfig,
+    outputSchema: planOutput,
+    configSummary: 'topic? (string), model? (string), skills? (string[])',
+    outputSummary: 'nodes ({id, type, config?, budget?}[]), edges ({from, to, when?, loopback?}[])',
   },
   {
     id: 'spec',
@@ -495,6 +543,37 @@ export function getNodeType(id: string): NodeTypeDefinition | undefined {
 
 export function listNodeTypes(): NodeTypeDefinition[] {
   return [...nodeTypeRegistry.values()];
+}
+
+/**
+ * The node-type reference as printed lines, one block per type. Shared by
+ * `flow-code node-types` and the Plan node's prompt, so the vocabulary a
+ * planner is told it may use and the vocabulary the loader actually accepts
+ * cannot drift apart — both read this, not a second description of it.
+ */
+export function nodeTypeReferenceLines(): string[] {
+  const lines: string[] = [];
+  for (const type of listNodeTypes()) {
+    lines.push(`${type.id}  (${type.displayName})`);
+    lines.push(`  ${type.description}`);
+    lines.push(
+      `  capabilities: ${type.capabilities.length > 0 ? type.capabilities.join(', ') : '(none)'}`,
+    );
+    lines.push(
+      `  agent session: ${type.agentDriven ? 'yes' : 'no'}` +
+        (type.agentDriven ? ` · interactive: ${type.interactive ? 'yes' : 'no'}` : ''),
+    );
+    lines.push(`  config: ${type.configSummary}`);
+    lines.push(`  output: ${type.outputSummary}`);
+    if (type.failsWhen) {
+      lines.push('  fails on: its own output verdict (a `fail` verdict errors the node)');
+    }
+    if (type.contextTransparent) {
+      lines.push("  context: transparent — forwards its dependencies' outputs downstream");
+    }
+    lines.push('');
+  }
+  return lines;
 }
 
 /** Can this node TYPE'S config even carry the agent-step fields? Drives UI availability (skill picker, detail panel). */

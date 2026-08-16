@@ -13,6 +13,7 @@ without `edit` cannot write files, whatever its instructions say.
 | Type | Purpose | Agent session |
 | --- | --- | --- |
 | [`discuss`](#discuss) | Interactive discussion with the user to settle intent and constraints | yes, interactive (can wait for you) |
+| [`plan`](#plan) | Interactive negotiation of both the task and the graph that carries it out | yes, interactive (can wait for you) |
 | [`spec`](#spec) | Writes the durable spec — requirements and acceptance criteria — that the rest of the run implements and is verified against | yes, headless |
 | [`implement`](#implement) | Agent session that writes code for the configured task | yes, headless |
 | [`test`](#test) | Deterministic command runner: executes configured shell commands with no agent session and no API cost | no — deterministic, with an optional read-only agent step |
@@ -31,6 +32,16 @@ without `edit` cannot write files, whatever its instructions say.
 - **Model field:** yes — settable per node, or with `m` mid-run
 - **Config:** `topic? (string), model? (string), skills? (string[])`
 - **Output:** `conclusion (string), constraints (string[])`
+
+## `plan`
+
+**Plan.** Interactive negotiation of both the task and the graph that carries it out. Does not complete until the user accepts a proposed graph; its output is a set of nodes and edges, spliced into the run in place of this node's own successors, rather than text for a downstream node to read.
+
+- **Capabilities:** `read`
+- **Agent session:** yes, interactive (can wait for you)
+- **Model field:** yes — settable per node, or with `m` mid-run
+- **Config:** `topic? (string), model? (string), skills? (string[])`
+- **Output:** `nodes ({id, type, config?, budget?}[]), edges ({from, to, when?, loopback?}[])`
 
 ## `spec`
 

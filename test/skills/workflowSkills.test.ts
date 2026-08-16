@@ -133,12 +133,12 @@ edges: []
 });
 
 describe('node type interactivity', () => {
-  it('marks Discuss interactive and nothing else', () => {
+  it('marks Discuss and Plan interactive, and nothing else', () => {
     const interactive = listNodeTypes()
       .filter((t) => t.interactive)
       .map((t) => t.id);
 
-    expect(interactive).toEqual(['discuss']);
+    expect(interactive.sort()).toEqual(['discuss', 'plan']);
   });
 
   it('gives every non-agent-driven type interactive: false', () => {

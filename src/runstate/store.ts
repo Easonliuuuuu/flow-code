@@ -197,6 +197,27 @@ export class RunStateStore {
   }
 
   /**
+   * Replaces the recorded graph with an expanded one — a Plan node's
+   * accepted proposal spliced in — and seeds run-state for every node the
+   * expansion introduces. Every node the prior graph already recorded
+   * (the Plan node itself, `done`, and everything else still `idle`) keeps
+   * its exact current state untouched; only ids the new graph adds are new.
+   *
+   * Kept on the same store instance rather than built via a fresh one: a
+   * reader already subscribed (the terminal UI, a persister) sees the
+   * expansion through the identical `subscribe` path an ordinary node edit
+   * already uses — see `patchGraphNode` — with no second attachment.
+   */
+  expandGraph(newGraph: RecordedGraph): void {
+    const addedIds = newGraph.nodes.map((n) => n.id).filter((id) => !(id in this.state.nodes));
+    const nodes = { ...this.state.nodes };
+    for (const id of addedIds) nodes[id] = { status: 'idle', denials: 0 };
+    this.state.graph = newGraph;
+    this.state.nodes = nodes;
+    this.commit();
+  }
+
+  /**
    * A detail belongs to the state that set it.
    *
    * Carrying one across a transition is how a Test node that ran `npm test`

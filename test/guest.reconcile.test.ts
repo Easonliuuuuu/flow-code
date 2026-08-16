@@ -218,13 +218,23 @@ describe('a committing node', () => {
       join(repo, '.flow-code', 'workflow.yaml'),
       `
 nodes:
+  - id: gate
+    type: approval-gate
   - id: ship
     type: git-ops
     config: { commitMessage: ship it }
-edges: []
+edges:
+  - { from: gate, to: ship }
 `,
     );
     const { runId } = await openGuestRun(repo, { surface: 'cli' });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'start' });
+    reportTransition(repo, runId, {
+      nodeId: 'gate',
+      kind: 'gate',
+      decision: 'approved',
+      surface: 'cli',
+    });
     reportTransition(repo, runId, { nodeId: 'ship', kind: 'start' });
     reportTransition(repo, runId, {
       nodeId: 'ship',
@@ -243,13 +253,23 @@ edges: []
       join(repo, '.flow-code', 'workflow.yaml'),
       `
 nodes:
+  - id: gate
+    type: approval-gate
   - id: ship
     type: git-ops
     config: { commitMessage: ship it }
-edges: []
+edges:
+  - { from: gate, to: ship }
 `,
     );
     const { runId } = await openGuestRun(repo, { surface: 'cli' });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'start' });
+    reportTransition(repo, runId, {
+      nodeId: 'gate',
+      kind: 'gate',
+      decision: 'approved',
+      surface: 'cli',
+    });
     reportTransition(repo, runId, { nodeId: 'ship', kind: 'start' });
     writeFileSync(join(repo, 'NEW.md'), 'new\n');
     execFileSync('git', ['add', '-A'], { cwd: repo });

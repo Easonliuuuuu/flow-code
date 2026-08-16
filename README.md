@@ -14,7 +14,7 @@ A terminal-native node-graph interface for running and observing agentic coding 
 Instead of scrolling a chat log, a coding task runs as a graph you can watch: each step is a live card showing its status, token spend, model, and streaming output. Steps that fail route back upstream and try again, and nothing reaches git without your explicit approval.
 
 - **Every node is customizable** — provider, model, config, and attached skills can all be set per node, and edited mid-run with `e` (settings), `m` (model), or `s` (skills), no restart required.
-- **Methodology presets** — `flow-code init --preset openspec` scaffolds an explore → propose → apply → archive graph wired to the OpenSpec skills; `--preset spec-kit` scaffolds a specify → plan → implement graph after GitHub Spec Kit. Both are ordinary node graphs, so they're as editable as anything else.
+- **Methodology presets** — `flow-code init --preset openspec` scaffolds an explore → propose → apply → archive graph wired to the OpenSpec skills; `--preset spec-kit` scaffolds a specify → plan → implement graph after GitHub Spec Kit; `--preset planned` scaffolds a spine and negotiates the rest of the graph with you at run time instead of declaring it up front. All three are ordinary node graphs, so they're as editable as anything else.
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/Easonliuuuuu/flow-code/main/docs/demo/flow-code.gif" width="900" alt="A flow-code run: eight nodes laid out as a graph, each card showing its status, model and token spend as the run moves through them, with a failing Test node routing back to Implement.">
@@ -45,6 +45,8 @@ Every node is optional and rewireable — the graph above is just what `flow-cod
 This follows Anthropic's own split between *workflows* — LLMs and tools orchestrated through predefined, inspectable code paths — and *agents*, where an LLM directs its own process. flow-code commits to the first: a graph you can read before it runs, not a plan improvised as it goes. See [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents).
 
 The `spec` node and the `openspec`/`spec-kit` presets apply the same commitment to the code itself: a written spec precedes implementation, outlives it, and is what changes get checked against — [spec-driven development](https://github.com/github/spec-kit), not a chat prompt discarded once the code exists.
+
+`--preset planned` is the one deliberate exception, worth naming rather than leaving implicit: its graph isn't fixed at load, it's negotiated with you by a `plan` node before anything runs headless. Not a graph read in advance, but one agreed to before it runs — and nothing reaches git without approval either way. See [planning the graph](docs/workflow-reference.md#planning-the-graph).
 
 ## Installation
 
@@ -157,6 +159,7 @@ line; `--graph <name>` skips the question. See
 | `flow-code init` | Scaffold `.flow-code/workflow.yaml` and configure provider/models |
 | `flow-code init --preset openspec` | Scaffold the OpenSpec graph (`explore → propose → apply → archive`) |
 | `flow-code init --preset spec-kit` | Scaffold after GitHub Spec Kit (`specify → plan → implement`) |
+| `flow-code init --preset planned` | Scaffold a spine (`plan → gate → git-ops`) that negotiates the rest at run time |
 | `flow-code run` | Execute the workflow graph |
 | `flow-code run --graph <name>` | Execute a named graph, for a file declaring more than one |
 | `flow-code watch` | Follow a run started elsewhere — same graph, read-only |

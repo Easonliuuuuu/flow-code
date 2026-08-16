@@ -195,7 +195,7 @@ ${edges}
   it('leaves an explicitly conditioned gate out-edge exactly as written', () => {
     const workflow = loadWorkflowFromString(
       wf(
-        `  - { from: impl, to: gate }\n  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }`,
+        `  - { from: impl, to: gate }\n  - { from: gate, to: ship }\n  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }`,
       ),
     );
     const [condition] = workflow.graph.conditionsInto('revise');

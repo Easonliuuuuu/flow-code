@@ -146,6 +146,10 @@ edges:
   });
 
   it('routes on a node upstream of the edge source, not just the source itself', async () => {
+    // The conditional edge sits between rev and gate (gate is ship's sole
+    // dominator, satisfying the git-write gate invariant) rather than
+    // reaching around the gate to ship directly — its condition still reads
+    // impl, upstream of its own source rev, which is what this test is about.
     const UPSTREAM_READ = `
 nodes:
   - id: impl
@@ -153,20 +157,25 @@ nodes:
     config: { instructions: x }
   - id: rev
     type: review
+  - id: gate
+    type: approval-gate
   - id: ship
     type: git-ops
 edges:
   - { from: impl, to: rev }
-  - { from: rev, to: ship, when: "impl.changedFiles isNotEmpty" }
+  - { from: rev, to: gate, when: "impl.changedFiles isNotEmpty" }
+  - { from: gate, to: ship }
 `;
     const { engine, store } = engineWith(UPSTREAM_READ, {
       impl: doneAfter(NO_CHANGES),
       rev: doneAfter({ verdict: 'pass', findings: [] }),
+      gate: doneAfter({ decision: 'approved', decidedAt: 'now' }),
       ship: doneAfter({ committed: true, pushed: false }),
     });
     await engine.run();
 
     expect(store.node('rev').status).toBe('done');
+    expect(store.node('gate').status).toBe('skipped');
     expect(store.node('ship').status).toBe('skipped');
   });
 });

@@ -1,6 +1,7 @@
 import type { RecordedGraph } from '../runstate/types.js';
 import { defaultSkillRoots, type SkillRoots } from '../skills/discover.js';
-import { buildWorkflow, WorkflowValidationError, type Workflow } from './load.js';
+import { buildWorkflow, buildWorkflowFromRaw, WorkflowValidationError, type Workflow } from './load.js';
+import { spliceProposal, type PlanProposal } from './splice.js';
 
 /**
  * Projects a loaded workflow down to what a run document can hold.
@@ -68,4 +69,28 @@ export function rehydrateGraph(
     if (err instanceof WorkflowValidationError) throw new RecordedGraphError(err.problems);
     throw err;
   }
+}
+
+/**
+ * The graph that results from splicing a Plan node's accepted proposal into
+ * `workflow`, rebuilt and re-validated exactly as any other graph is —
+ * defense in depth, not a re-implementation, since a caller is expected to
+ * reach this only with a proposal the Plan node's own propose/validate/
+ * repropose loop already accepted. Returns both the runnable `Workflow`
+ * (for a fresh `Engine`) and its `RecordedGraph` projection (for
+ * `RunStateStore.expandGraph`), built from the same rebuild so the two
+ * cannot describe different shapes.
+ */
+export function expandRecordedGraph(
+  workflow: Workflow,
+  planNodeId: string,
+  proposal: PlanProposal,
+  context: { repoRoot: string; skillRoots?: SkillRoots },
+): { workflow: Workflow; graph: RecordedGraph } {
+  const skillRoots = context.skillRoots ?? defaultSkillRoots(context.repoRoot);
+  const expanded = buildWorkflowFromRaw(spliceProposal(workflow, planNodeId, proposal), {
+    repoRoot: context.repoRoot,
+    skillRoots,
+  });
+  return { workflow: expanded, graph: recordGraph(expanded) };
 }

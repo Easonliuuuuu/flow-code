@@ -188,6 +188,41 @@ edges:
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
 `;
 
+const PLANNED_YAML = `# flow-code workflow (planned preset) — checked into your repo, edit as needed.
+# Run \`flow-code node-types\` for every node type, and \`flow-code skills\` for
+# every skill you can attach to one.
+#
+# The middle of this graph is negotiated at run time, not written here: the
+# \`plan\` node talks with you about what's being built, proposes a graph of
+# ordinary node types to build it, and does not complete until you accept
+# one. What it proposes is spliced in between \`plan\` and \`gate\` below — this
+# file only has to carry the part that never changes: the gate every
+# git-writing node must be dominated by, and the git-ops step behind it.
+#
+# After a run, you'll be offered the chance to keep the graph it negotiated —
+# accepting replaces this file with the expanded, ordinary one, and the next
+# run skips planning entirely.
+
+nodes:
+  - id: plan
+    type: plan
+
+  - id: gate
+    type: approval-gate
+    config:
+      title: Review the pending diff before git operations
+
+  - id: git-ops
+    type: git-ops
+    # Commits only. To push, add:
+    # config:
+    #   push: { remote: origin, branch: my-branch }
+
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: git-ops }
+`;
+
 const PRESETS: WorkflowPreset[] = [
   {
     name: 'openspec',
@@ -208,6 +243,13 @@ const PRESETS: WorkflowPreset[] = [
     yaml: SPEC_KIT_YAML,
     requiredSkills: [],
     cli: { command: 'specify', install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] } },
+  },
+  {
+    name: 'planned',
+    description: 'plan → gate → git-ops — the graph in between is negotiated with you at run time',
+    summary: 'plan → gate → git-ops',
+    yaml: PLANNED_YAML,
+    requiredSkills: [],
   },
 ];
 

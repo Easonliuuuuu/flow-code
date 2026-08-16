@@ -1,8 +1,9 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { isMap, parseDocument, type Document, type YAMLMap, type YAMLSeq } from 'yaml';
+import { isMap, parseDocument, stringify, type Document, type YAMLMap, type YAMLSeq } from 'yaml';
 import type { RunStateStore } from '../runstate/store.js';
 import { loadWorkflowFromString, WorkflowValidationError, type Workflow } from './load.js';
+import { stripPlanNode } from './splice.js';
 
 export class WorkflowWriteError extends Error {
   constructor(message: string) {
@@ -266,5 +267,44 @@ export function editRunningNode(
   }
   const node = workflow.nodes.find((n) => n.id === nodeId)!;
   store.patchGraphNode(nodeId, { config: node.config, ...(node.budget ? { budget: node.budget } : {}) });
+  return workflow;
+}
+
+/**
+ * Writes `expandedWorkflow` to `path` as an ordinary, static workflow file
+ * with its Plan node (and every edge touching it) removed — "keeping" a
+ * graph a Plan node negotiated, offered once a run that expanded finishes.
+ * Unlike every writer above, this replaces the file wholesale rather than
+ * editing one field of an existing document: there is no prior YAML for the
+ * negotiated shape to have come from, so nothing to preserve comments or
+ * formatting against.
+ *
+ * Re-validated after serializing, before anything touches disk, the same
+ * defense-in-depth every other writer here applies — `stripPlanNode` and
+ * `stringify` are not expected to produce anything invalid, but a writer
+ * that skipped checking its own output on the strength of that expectation
+ * is exactly the kind of assumption this codebase doesn't make.
+ */
+export function writeKeptWorkflow(path: string, expandedWorkflow: Workflow): Workflow {
+  const stripped = stripPlanNode(expandedWorkflow);
+  const next = `${stringify(stripped, { lineWidth: 0 })}`;
+  let workflow: Workflow;
+  try {
+    workflow = loadWorkflowFromString(next, { repoRoot: dirname(dirname(path)) });
+  } catch (err) {
+    const reason = err instanceof WorkflowValidationError ? err.message : String(err);
+    throw new WorkflowWriteError(
+      `refusing to write ${path}: the graph to keep would not load — ${reason}`,
+    );
+  }
+  const tmpPath = join(dirname(path), `.${Date.now()}-${process.pid}.workflow.yaml.tmp`);
+  try {
+    writeFileSync(tmpPath, next, 'utf8');
+    renameSync(tmpPath, path);
+  } catch (err) {
+    throw new WorkflowWriteError(
+      `could not write ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
   return workflow;
 }
