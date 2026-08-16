@@ -174,3 +174,106 @@ describe('Approval-gate panel rendering', () => {
     }
   });
 });
+
+describe('Approval-gate focus scoping', () => {
+  // Needs a second node to tab to — the single-node WF above can't exercise this.
+  const WF2 = workflowFromYaml(`
+    nodes:
+      - id: impl
+        type: implement
+        config: { instructions: x }
+      - id: gate
+        type: approval-gate
+    edges:
+      - { from: impl, to: gate }
+  `);
+
+  function mountTwoNodeApp(): {
+    ports: UiInteractionPorts;
+    store: RunStateStore;
+    stdout: FakeStdout;
+    stdin: NodeJS.ReadStream;
+    unmount: () => void;
+  } {
+    const store = storeFor(WF2, makeTempGitRepo());
+    const ports = new UiInteractionPorts();
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: WF2,
+        store,
+        ports,
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    return { ports, store, stdout, stdin, unmount: () => instance.unmount() };
+  }
+
+  it('lets you tab away to inspect another node while a decision is pending, and re-shows the prompt when you tab back', async () => {
+    const { ports, stdout, stdin, unmount } = mountTwoNodeApp();
+    try {
+      void ports.approval.request({
+        nodeId: 'gate',
+        title: 'Review the change',
+        diffs: [{ diff: '+added line' }],
+        upstreamSummaries: [],
+      });
+      await settle();
+      let frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('Approval — Review the change');
+
+      // Tab away to `impl`: the approval prompt must not stay pinned open —
+      // this is the bug being fixed (it used to render regardless of focus).
+      stdin.write('\t');
+      await settle();
+      frame = lastFrameLines(stdout).join('\n');
+      expect(frame).not.toContain('Approval — Review the change');
+
+      // Enter opens impl's own detail panel, not the gate's.
+      stdin.write('\r');
+      await settle();
+      frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('impl (Implement)');
+      stdin.write('\r'); // close it back up before tabbing again
+      await settle();
+
+      // Tab back onto the gate: the approval prompt returns on its own.
+      stdin.write('\t');
+      await settle();
+      frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('Approval — Review the change');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('does not let a/r resolve the gate while focus has moved elsewhere', async () => {
+    const { ports, stdin, unmount } = mountTwoNodeApp();
+    try {
+      const decision = ports.approval.request({
+        nodeId: 'gate',
+        title: 'Review the change',
+        diffs: [{ diff: '+added line' }],
+        upstreamSummaries: [],
+      });
+      let resolved = false;
+      void decision.then(() => {
+        resolved = true;
+      });
+      await settle();
+
+      stdin.write('\t'); // tab away from the gate onto impl
+      await settle();
+      stdin.write('a');
+      await settle();
+
+      expect(resolved).toBe(false);
+    } finally {
+      unmount();
+    }
+  });
+});
