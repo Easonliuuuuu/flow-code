@@ -40,6 +40,12 @@ Instead of scrolling a chat log, a coding task runs as a graph you can watch: ea
 
 Every node is optional and rewireable — the graph above is just what `flow-code init` scaffolds.
 
+## Why a graph, not a chat log
+
+This follows Anthropic's own split between *workflows* — LLMs and tools orchestrated through predefined, inspectable code paths — and *agents*, where an LLM directs its own process. flow-code commits to the first: a graph you can read before it runs, not a plan improvised as it goes. See [Building Effective Agents](https://www.anthropic.com/research/building-effective-agents).
+
+The `spec` node and the `openspec`/`spec-kit` presets apply the same commitment to the code itself: a written spec precedes implementation, outlives it, and is what changes get checked against — [spec-driven development](https://github.com/github/spec-kit), not a chat prompt discarded once the code exists.
+
 ## Installation
 
 Requires Node.js 20 or newer.
@@ -166,114 +172,13 @@ line; `--graph <name>` skips the question. See
 | `flow-code doctor` | Diagnose environment, tools, and provider credentials |
 | `flow-code help` | Show the full command reference |
 
-## Watching a run from another window
+## Watching a run
 
-The engine writes complete run state to `.flow-code/runs/<runId>.json` after every change, so a run can be followed from anywhere that can read the repo:
-
-```bash
-flow-code run      # window 1 — drives the workflow
-flow-code watch    # window 2 — same graph, read-only
-```
-
-`watch` attaches to whichever run is currently being written, and picks up a run started *after* it was opened, so it can be left open on a second monitor. Pass a run id (`flow-code watch <runId>`) to pin it to one run. It never writes: the keys that edit `workflow.yaml` are disabled, and the header reports whether the process driving the run is still alive. If two runs are live at once, `watch` names them and asks which — it will not pick one and appear to flip between them.
-
-A run document records which process on which machine owns it, and only that process may write it: a second writer is refused rather than allowed to interleave. That makes the driver's state one of three things, and every reader — `watch`, `runs`, `status`, `doctor` — reports them apart:
-
-| | What it means |
-| --- | --- |
-| **live** | The owning process is running on this machine. |
-| **gone** | The owning process was on this machine and has exited — a crash, or a `kill -9` that skipped the shutdown path. Distinct from a run you interrupted with ctrl+c, which records that it ended and stays resumable. |
-| **unknown** | This machine cannot answer: the run was driven from another machine over a shared checkout, or its document predates ownership being recorded. |
-
-`unknown` is deliberately never rounded to either neighbour. It is why `flow-code doctor` leaves worktrees belonging to an unanswerable run alone rather than reclaiming them — "I can't tell" must not authorize deleting someone else's working tree.
-
-## Keeping a run in view without a window
-
-When there is no window to spare — you are in an agent CLI, an editor terminal, or a tmux pane doing something else — `flow-code status` compresses the same run into a row or two:
-
-```
-●discuss ●spec ●implement ●test ●validate ●review ◆gate ○git-ops  ◆ gate needs your approval  6/8 · 2.1M tok · 12% budget
-```
-
-It answers the three questions a graph answers — where the run is, what it has cost, what it needs from you — and nothing else. It shows sequence and status, not shape: no edges, no loop-back arcs, no layout. It is a pointer to the canvas, not a replacement for it.
-
-```bash
-flow-code status                  # a row or two, sized to your terminal
-flow-code status --line           # exactly one row, for embedding in a status bar
-flow-code status --json           # the same summary as data, plus an attention token
-flow-code status --script         # a ready-made status-bar script, if you have none
-```
-
-`--line` emits one row and nothing else, so it can be pasted into a status bar you already have — in Claude Code, call it from your existing `statusLine` script rather than replacing that script, since a custom status line replaces some of the built-in footer hints. `--script` prints a complete one for a host with none; register it yourself (`status` never edits your host's configuration — `flow-code connect` is the one command that does, and it names every file it touches).
-
-The output narrows as the width does: labelled nodes, then status glyphs, then whichever node is blocking the run and why — that last part is the thing it never drops. It works against any run in the repo, whoever started it, and it reads the run file without writing, locking, or slowing the process driving it. A run whose driver died reads as *driver gone* rather than as work in progress.
-
-`--json` exists for scripting a notification: the payload carries an `attention` token that stays the same while the same node is blocked and changes when a different one is, so a hook can announce a waiting gate once instead of on every check. flow-code keeps no record of what it has announced — pass the last token back with `--since`.
+A second window can follow any run, read-only, from anywhere that can read the repo — `flow-code watch`. When there's no window to spare, `flow-code status` compresses the same run into one or two rows, sized to fit a status bar. See [Watching and status](docs/observability.md) for both, including driver-liveness detection (`live`/`gone`/`unknown`) and `status --json`/`--script`.
 
 ## Driving the graph from your own agent
 
-Everything above assumes `flow-code run` is executing the graph. It does not have to be. You can stay in the agent CLI you already use — `claude`, `codex`, whatever it is — walk the graph yourself, and have the run fill in beside you:
-
-```bash
-flow-code connect   # once per project: installs the tools and the instructions
-flow-code watch     # second window — the graph fills in as your session reports
-```
-
-`connect` writes four things and names each one: an MCP server entry in `.mcp.json`, a skill at `.claude/skills/flow-code-workflow/SKILL.md`, a delimited section in your `CLAUDE.md`/`AGENTS.md`, and a `PreToolUse` hook in `.claude/settings.json`. It only ever edits inside its own delimiters or its own entries, leaving the rest of each file byte-identical. Run it again after changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it still matches.
-
-For Claude Code specifically there is a plugin, which needs no per-project step at all — it reads the graph through a tool rather than installing a copy of it:
-
-```
-/plugin marketplace add Easonliuuuuu/flow-code
-/plugin install flow-code
-```
-
-Either way your agent reports each transition (`flow-code node start <id>`, `… done <id> --output '{…}'`, `… fail <id> <reason>`), and every one is checked against the graph before it is recorded. A step cannot start before the steps above it are done, cannot complete without having started, and cannot complete with output that does not match its node type's shape. A rejected report changes nothing and says why.
-
-### What a reported run is, and is not
-
-flow-code validates the *order* of what an outside agent reports. It does not execute that agent, so it cannot enforce anything about what the agent actually did. Runs record which of three tiers they ran under, and every surface that displays a run says which:
-
-| Tier | What is in force |
-| --- | --- |
-| **engine** | `flow-code run`: capability enforcement, process guards, per-node models, token accounting, loop-back routing. |
-| **host session** | A session flow-code did not start, with its enforcement layer active: the same tool policy and git interception, and nothing that depends on having spawned the process. |
-| **reported** | Self-reported. Transitions are checked against the graph; the work behind them is not. |
-
-Both non-engine tiers are labelled in the viewer on a line of its own and show spend as `n/a` rather than as zero — a run should not be able to display guarantees it never had. **A green graph from a `reported` run is a record of what your agent said it did, not evidence that anything was checked.**
-
-### What the enforcement layer actually does
-
-While a step is in progress, the hook applies *that step's* capability set to your session's tool calls, using the same policy function `flow-code run` compiles — a review step cannot edit files, and nothing can write to the repository while an approval gate above it is unanswered. The envelope moves as the run advances, with no session restart. Denials are recorded on the run, so the viewer's blocked-action indicator means the same thing either way.
-
-Three things make the claim honest rather than decorative:
-
-- **It fails closed.** If the layer errors, or cannot work out which step is in progress, the call is denied — and the reason says "could not determine", distinctly from "this step may not do that", because an agent that cannot tell those apart routes around the wrong one.
-- **It is verified, not assumed.** A run records the `hooks` tier only while a heartbeat the hook itself just wrote is fresh. An installed plugin proves nothing: hooks can be turned off afterwards. If enforcement stops mid-run the downgrade is recorded with its point, and the run is reported at its weakest tier from then on.
-- **A gate decision comes from a person.** `complete_node` refuses approval gates outright, so an agent has no path to approving its own work. The MCP tool that records one is annotated `requiresUserInteraction`, which forces its full permission prompt — no allow-rule bypass, and refused rather than passed in a non-interactive mode. On the CLI, `flow-code node approve <id>` requires an interactive terminal. Which surface collected a decision is recorded on the run, because `terminal` and `permission-prompt` are not the same evidence.
-
-What stays out of reach, because flow-code did not start the process: per-node model selection, exact token accounting, and the process-level guards (working directory, environment, the push-url block). Loop-backs are the one place a host-session run is structurally different rather than merely less enforced — the engine *routes* a failure back to its target, and a hook can only decline to end a turn. The generated instructions say so, and tell the agent to walk the return path itself.
-
-Enforcement is evadable through indirection — a script that shells out to git from inside another program — exactly as it is under `flow-code run`, which intercepts the same calls with the same parser. It is a boundary against accident, not against an adversary.
-
-### Asking the repository whether the run is true
-
-Enforcement narrows what an agent may *do*. It says nothing about what an agent *says* it did — and a graph that confidently shows work nobody performed is worse than a graph showing nothing. The tree is the one witness that does not depend on the agent's honesty:
-
-```bash
-flow-code reconcile            # the latest run; `reconcile <runId>` for a specific one
-```
-
-```
-run 9bdf1d06 — checked against the repository
-  1 claim(s) the repository does not support:
-    implement: reported changing `src/a.ts`, but it is unchanged from the run's baseline
-  skipped check — Test does not modify the repository
-```
-
-It compares each completed node's own recorded output against the run's baseline — the files it said it changed, the spec it said it wrote, the commit it said it made — so a finding is something you can check in one command rather than a vague "the tree looks wrong". Nodes whose type cannot modify the repository are skipped rather than flagged for doing their job, and a run with no baseline is reported as *unreconcilable* rather than as agreement: the absence of a check is not a clean bill of health.
-
-It exits non-zero when the repository contradicts the run, so it works as a check and not only as something to read. It never writes the run document — findings go to `.flow-code/reconcile/<runId>.json`, and `flow-code watch` picks them up from there and names the affected nodes in its header. And it never corrects anything: the tree cannot say *why* a claim is unsupported (a node may legitimately have been a no-op, or you may have reverted something by hand), so resolving the disagreement is yours.
+`flow-code run` executing the graph is one option, not a requirement. `flow-code connect` installs the tools and instructions for you to walk the graph yourself from `claude`, `codex`, or any agent CLI, reporting each transition as you go; there's also a Claude Code plugin that needs no per-project install. See [Driving the graph from your own agent](docs/agent-integration.md) for the enforcement tiers a self-driven run can and can't claim, and `flow-code reconcile`, which checks a run's claims against the repository itself.
 
 ## Keyboard controls
 
@@ -305,6 +210,8 @@ Nodes can be edited mid-run: focus one and press `e` for its settings, `m` for i
 | [Node type reference](docs/node-types.md) | Every node type: capabilities, config fields, recorded output |
 | [Workflow reference](docs/workflow-reference.md) | Nodes, edges, loop-backs, conditional routing, budgets, worktrees, named graphs |
 | [Skills](docs/skills.md) | Attaching custom `SKILL.md` instructions to a node |
+| [Watching and status](docs/observability.md) | Following a run from another window or a status line |
+| [Driving the graph from your own agent](docs/agent-integration.md) | `connect`, enforcement tiers, and `reconcile` |
 
 ## Contributing
 
