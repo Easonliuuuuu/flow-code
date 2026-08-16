@@ -47,8 +47,8 @@ case "$MODE" in
 esac
 
 case "$SHAPE" in
-  wide|tall|tiny) ;;
-  *) echo "unknown shape: $SHAPE — expected wide, tall, or tiny" >&2; exit 2 ;;
+  wide|tall|tiny|loops) ;;
+  *) echo "unknown shape: $SHAPE — expected wide, tall, tiny, or loops" >&2; exit 2 ;;
 esac
 
 case "$INSTALL" in
@@ -525,6 +525,86 @@ edges:
   - { from: validate, to: review }
   - { from: review, to: gate }
   - { from: gate, to: ship }
+EOF
+    ;;
+
+  loops)
+    # The only shape with return paths in it, and the only way to look at how
+    # they are drawn. Four loop-backs over three targets, chosen so all three
+    # of the drawing rules are visible at once and against each other:
+    #
+    #   - test, validate and review all return to `implement` — the funnel real
+    #     workflows have, and the case each loop-back drawn on its own row
+    #     turned into a stack of near-identical rows under the whole canvas.
+    #     These three have to merge onto one row with a junction apiece.
+    #   - review also returns to `spec`, a second target, so a merged bus is
+    #     visibly per-target rather than one bus for the whole graph. `review`
+    #     is deliberately an end of two different loops, so it carries the
+    #     source mark for both.
+    #   - `gate` and `ship` sit past every loop with none of their own: the
+    #     cards that should stay unmarked.
+    #
+    # Nine nodes across eight layers, one layer stacked two-deep — wide enough
+    # that a bus spans most of the canvas, short enough to read at full density
+    # without zooming first.
+    cat > .flow-code/workflow.yaml <<'EOF'
+settings:
+  model: sonnet
+  concurrency: 2
+
+nodes:
+  - id: discuss
+    type: discuss
+    config:
+      topic: What should this change accomplish?
+
+  - id: spec
+    type: spec
+
+  - id: implement
+    type: implement
+    config:
+      instructions: Make the change.
+      model: haiku
+
+  - id: docs
+    type: implement
+    config:
+      instructions: Update the docs alongside it.
+
+  - id: test
+    type: test
+    config:
+      commands: ["npm test"]
+
+  - id: validate
+    type: validate
+
+  - id: review
+    type: review
+
+  - id: gate
+    type: approval-gate
+
+  - id: ship
+    type: git-ops
+
+edges:
+  - { from: discuss, to: spec }
+  - { from: spec, to: implement }
+  - { from: spec, to: docs }
+  - { from: implement, to: test }
+  - { from: docs, to: test }
+  - { from: test, to: validate }
+  - { from: validate, to: review }
+  - { from: review, to: gate }
+  - { from: gate, to: ship }
+  # Three into one target: these must share a single row.
+  - { from: test, to: implement, loopback: { maxAttempts: 3 } }
+  - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
+  - { from: review, to: implement, loopback: { maxAttempts: 3 } }
+  # A second target, so per-target merging is visible rather than assumed.
+  - { from: review, to: spec, loopback: { maxAttempts: 2 } }
 EOF
     ;;
 

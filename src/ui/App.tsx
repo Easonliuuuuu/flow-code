@@ -862,6 +862,20 @@ export function App({
     ? resolveNodeModel(focusedNode.config, modelContext.workflowSettingsModel, modelContext.providerDefaultModel)
     : null;
 
+  // Every loop-back the focused node is an end of, in the direction it runs.
+  // The canvas badge can only name one end and count the rest — a card has
+  // no room for `↺test, validate, review` — so the full list, and each
+  // loop's attempt budget, land here instead.
+  const focusedLoops = useMemo(() => {
+    if (!focusedId) return [];
+    return workflow.graph.allLoopbacks().flatMap((loop) => {
+      const cap = loop.maxAttempts ? ` (max ${loop.maxAttempts})` : '';
+      if (loop.from === focusedId) return [`↺ returns to ${loop.to}${cap}`];
+      if (loop.to === focusedId) return [`↻ returns from ${loop.from}${cap}`];
+      return [];
+    });
+  }, [workflow, focusedId]);
+
   // Wrapped transcript rows for the Discuss panel, and the scrollback window
   // into them (see tailWindow's doc comment for the follow/pin model).
   const discussTranscriptWidth = Math.max(10, Math.min(activeRect.w - 6, MAX_PROSE_WIDTH));
@@ -2449,6 +2463,14 @@ export function App({
                   {nodeTypeAcceptsAgentStep(focusedNode.type) ? (
                     <Text dimColor wrap="truncate-end">
                       skills: {focusedNode.skills.length > 0 ? focusedNode.skills.map((s) => s.id).join(', ') : '(none)'} · s: change
+                    </Text>
+                  ) : null}
+                  {/* The canvas badge names one end and counts the rest; this
+                      is where the rest get named, along with the attempt
+                      budget that has nowhere to live on a card. */}
+                  {focusedLoops.length > 0 ? (
+                    <Text color="magenta" wrap="truncate-end">
+                      loops: {focusedLoops.join(' · ')}
                     </Text>
                   ) : null}
                   {state.tokens || state.startedAt ? (

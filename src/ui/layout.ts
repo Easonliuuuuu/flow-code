@@ -134,11 +134,20 @@ export function rowPitch(density: Density = 'full'): number {
  * boxes — and so reflow the whole graph — every time a running agent
  * reported a different tool call.
  */
-function boxWidth(node: Workflow['nodes'][number], density: Density = 'full'): number {
+function boxWidth(
+  node: Workflow['nodes'][number],
+  density: Density = 'full',
+  loopCols = 0,
+): number {
   if (density === 'mini') {
-    // No border, no denial bang, no summary — just "glyph id".
+    // No border, no denial bang, no summary — just "glyph id", plus whatever
+    // columns the loop badge needs. Those are added on top of the id's own
+    // width and on top of the cap, rather than taken out of them: the badge
+    // is reserved out of the title row when the card is drawn (see
+    // renderGraph), so a card sized without it truncates the id to make room,
+    // and a node's identity is the one thing on a mini card that can't go.
     const content = Math.max(node.id.length + 2, MINI_MIN_BOX_CONTENT);
-    return Math.min(content, MINI_MAX_BOX_CONTENT);
+    return Math.min(content, MINI_MAX_BOX_CONTENT) + loopCols;
   }
   if (density === 'compact') {
     // Border, title (glyph + id + denial bang) — no type-name or subtitle
@@ -156,6 +165,39 @@ function boxWidth(node: Workflow['nodes'][number], density: Density = 'full'): n
     MIN_BOX_CONTENT,
   );
   return Math.min(content, MAX_BOX_CONTENT) + 2;
+}
+
+/**
+ * Columns each node's loop-back badge occupies at its narrowest — one for
+ * `↺` if the node returns somewhere, one for `↻` if something returns to it,
+ * so a node that is both ends of some loop gets two — plus one for the gap
+ * that keeps the badge off the end of the node's id.
+ *
+ * This is the width of `renderGraph`'s shortest badge form, which is the one
+ * a mini card always draws. Only mini needs it: a full or compact card is
+ * floored well above its title's width and fits the badge in slack it
+ * already has, dropping to a shorter form or none at all if it doesn't.
+ */
+function loopBadgeColumns(workflow: Workflow): Map<string, number> {
+  const cols = new Map<string, number>();
+  const add = (id: string): void => {
+    cols.set(id, Math.min(2, (cols.get(id) ?? 0) + 1));
+  };
+  const seen = new Set<string>();
+  for (const loop of workflow.graph.allLoopbacks()) {
+    // One column per *direction*, not per loop: three loops into the same
+    // node still render as a single `↻`.
+    if (!seen.has(`out:${loop.from}`)) {
+      seen.add(`out:${loop.from}`);
+      add(loop.from);
+    }
+    if (!seen.has(`in:${loop.to}`)) {
+      seen.add(`in:${loop.to}`);
+      add(loop.to);
+    }
+  }
+  for (const [id, n] of cols) cols.set(id, n + 1);
+  return cols;
 }
 
 export interface LayoutOptions {
@@ -294,9 +336,10 @@ export function computeLayout(
     layers.get(l)!.push(id);
   }
 
+  const loopCols = loopBadgeColumns(workflow);
   const widths = new Map<string, number>();
   for (const node of workflow.nodes) {
-    widths.set(node.id, boxWidth(node, options.density ?? 'full'));
+    widths.set(node.id, boxWidth(node, options.density ?? 'full', loopCols.get(node.id) ?? 0));
   }
 
   // `Math.max()` on no layers is `-Infinity` — harmless to `Array.from`
