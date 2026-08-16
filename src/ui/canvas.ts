@@ -458,7 +458,11 @@ export function renderGraph(
     const modelBadge = nodeModelBadge(workflow, node.id);
     const skillBadge = nodeSkillBadge(workflow, node.id);
     if (attempt > 1) {
-      const badge = fit(`↻${attempt}`, inner);
+      // Same glyph-space-text spacing as the loop mark above it (`named()`),
+      // not the bare glyph+identifier the model/skill badges below use — this
+      // badge reads as the same loopback-fired channel as the mark, so it
+      // should sit like one, not clamp its number straight onto the glyph.
+      const badge = fit(`↻ ${attempt}`, inner);
       put(grid, box.x + box.w - 1 - badge.length, box.y + 2, badge, 'loopback-fired');
     } else if (modelBadge) {
       const badge = fit(modelBadge, inner);
