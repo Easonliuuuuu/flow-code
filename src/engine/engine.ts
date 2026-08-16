@@ -173,12 +173,34 @@ export class Engine {
     return node.type.id !== 'worktree-agent' && node.type.id !== 'approval-gate';
   }
 
-  private discussActive(): boolean {
+  /**
+   * True while any interactive node (Discuss, Plan) is running or waiting on
+   * the user. Keyed on the registry's `interactive` flag rather than a type
+   * id, the same way the gate invariant keys on a capability rather than
+   * `git-ops` — a future interactive type is covered the day it is added.
+   */
+  private interactiveSessionActive(): boolean {
     return this.wf.nodes.some((n) => {
-      if (n.type.id !== 'discuss') return false;
+      if (!n.type.interactive) return false;
       const status = this.store.node(n.id).status;
       return status === 'running' || status === 'waiting';
     });
+  }
+
+  /**
+   * A Plan node whose status is `done` now but was not at the top of this
+   * `run()` call — i.e. it completed during this call, as opposed to one
+   * inherited already-`done` from a prior pass (post-expansion, or a resumed
+   * run). Only the former means "the graph just grew and has not run yet";
+   * the latter is an ordinary completed node like any other.
+   */
+  private freshlyCompletedPlanNode(alreadyDoneAtStart: ReadonlySet<string>): string | undefined {
+    return this.wf.nodes.find(
+      (n) =>
+        n.type.id === 'plan' &&
+        !alreadyDoneAtStart.has(n.id) &&
+        this.store.node(n.id).status === 'done',
+    )?.id;
   }
 
   /**
@@ -545,8 +567,8 @@ export class Engine {
         continue;
       }
 
-      // A Discuss node holds the whole run: nothing new starts while one is active.
-      if (this.discussActive()) break;
+      // An interactive node holds the whole run: nothing new starts while one is active.
+      if (this.interactiveSessionActive()) break;
       const needsLock = this.takesMainTreeLock(node);
       if (needsLock && this.mainTreeLockHolder !== null) continue;
       if (needsLock) this.mainTreeLockHolder = id;
@@ -557,13 +579,21 @@ export class Engine {
       });
       this.running.set(id, promise);
 
-      // Starting a Discuss node freezes further starts this pass.
-      if (node.type.id === 'discuss') break;
+      // Starting an interactive node freezes further starts this pass.
+      if (node.type.interactive) break;
     }
   }
 
-  async run(): Promise<void> {
+  async run(): Promise<EngineRunOutcome> {
     this.runStartedAt = Date.now();
+    // Snapshot rather than a fresh `new Set()` inline below: a Plan node
+    // already `done` when this call begins (inherited via `resumeFrom`, or
+    // because its graph was already expanded in an earlier `run()` call on a
+    // different Engine instance) is not a completion *this* call witnessed,
+    // so it must never be mistaken for one — see `freshlyCompletedPlanNode`.
+    const alreadyDoneAtStart = new Set(
+      this.wf.nodes.filter((n) => this.store.node(n.id).status === 'done').map((n) => n.id),
+    );
     // Token counts live in the run-state, so every commit is the moment a
     // token budget can newly be exceeded.
     const unsubscribe = this.store.subscribe(() => this.checkBudgets());
@@ -574,6 +604,7 @@ export class Engine {
         : undefined;
     timer?.unref?.();
 
+    let outcome: EngineRunOutcome = { reason: 'finished' };
     try {
       while (!this.store.allTerminal()) {
         this.startEligible();
@@ -593,11 +624,32 @@ export class Engine {
           break;
         }
         await Promise.race(this.running.values());
+        // Checked right here — before the next `startEligible()` pass gets a
+        // chance to start whatever this Plan node's own edges point at, which
+        // is exactly what must not happen until the graph has been expanded.
+        // Draining `running` first (rather than returning immediately) means
+        // an unrelated node that happened to start in the same pass as Plan
+        // is allowed to finish rather than being abandoned mid-flight.
+        const planNodeId = this.freshlyCompletedPlanNode(alreadyDoneAtStart);
+        if (planNodeId !== undefined) {
+          await Promise.all(this.running.values());
+          outcome = { reason: 'awaiting-expansion', planNodeId };
+          break;
+        }
       }
     } finally {
       unsubscribe();
       if (timer) clearInterval(timer);
       this.store.markFinished(this.signal.aborted);
     }
+    if (outcome.reason === 'finished' && this.signal.aborted) outcome = { reason: 'interrupted' };
+    return outcome;
   }
 }
+
+/** Why `Engine.run()` returned. */
+export type EngineRunOutcome =
+  | { reason: 'finished' }
+  | { reason: 'interrupted' }
+  /** A Plan node completed; its successors have not run and must not until the graph is expanded. */
+  | { reason: 'awaiting-expansion'; planNodeId: string };

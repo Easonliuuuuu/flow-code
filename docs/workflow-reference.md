@@ -275,6 +275,51 @@ needs to change, and its recorded conclusion becomes the context `implement` ret
 with. Each rejection costs an agent session, which is why the scaffolded graph ships
 this commented out.
 
+### Every git-writing node must be gated
+
+The system SHALL validate — before execution, whether the workflow was hand-written or
+scaffolded — that any node holding the `git-write` capability (built in, that is only
+`git-ops`) is **dominated** by an `approval-gate`: every path from every root of the
+graph to that node passes through one. It is not enough for *a* gate to be upstream —
+a second path that reaches the git-writing node without passing any gate fails the
+check just as an absent gate does:
+
+```yaml
+# rejected: `ship` is reachable via `impl -> ship` without passing `gate`,
+# even though it's also reachable via `impl -> gate -> ship`.
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: ship }
+  - { from: impl, to: ship }
+```
+
+A `when:` on that bypass edge does not save it — a path that *may* carry is a path
+that may commit, so a conditional edge counts as present for this check. The check
+keys on the `git-write` capability rather than the `git-ops` type id, so any future
+node type granted that capability is covered automatically.
+
+**There is no opt-out** — no settings key, no run flag, no headless auto-approve. An
+unattended pipeline that needs to commit without a person answering a gate should
+leave `git-ops` out of the graph entirely and commit from the pipeline itself once
+`flow-code run` exits:
+
+```yaml
+# .flow-code/workflow.yaml — no git-ops node, so no gate is required
+nodes:
+  - { id: impl, type: implement, config: { instructions: ... } }
+  - { id: check, type: test, config: { commands: ["..."] } }
+edges:
+  - { from: impl, to: check }
+```
+
+```bash
+flow-code run && git add -A && git commit -m "..." && git push
+```
+
+An existing workflow file with a git-writing node that no gate dominates will fail to
+load. The error names the node and the specific path that bypasses every gate; add an
+`approval-gate` upstream of it, or remove the git-writing node as above.
+
 `on: success` is what makes the branch work. A loop-back fires when its source ends
 the way `on` names, and the default is `failure` — a failing test sends the run back,
 a passing one does not. A revision step is the inverse: **finishing** it is the signal
@@ -284,6 +329,49 @@ to retry, so a return path waiting for it to fail would wait forever. See
 The loop returns to `implement` rather than to `discuss` on purpose: `spec` then stays
 outside the reset segment, so every retry is judged against the same acceptance
 criteria the first attempt was.
+
+## Planning the graph
+
+Every graph so far is fixed before the run starts — the shape you read is the shape
+that executes. `flow-code init --preset planned` scaffolds a different kind of
+file: just a spine.
+
+```yaml
+nodes:
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: git-ops
+    type: git-ops
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: git-ops }
+```
+
+`plan` is interactive, like `discuss` — but where `discuss` settles what's being
+built, `plan` settles that *and* proposes a graph to build it, drawn from the same
+node types every other workflow uses. It doesn't complete until you accept a
+proposal: push back on a draft ("skip Validate, this is a typo fix") and it revises;
+end the session without accepting and the node errors, taking everything downstream
+of it with it.
+
+An accepted proposal is validated exactly as a hand-written file is — the same node
+type, config, and structural checks, including [gate dominance](#every-git-writing-node-must-be-gated)
+— before it's adopted. A proposal that fails is never spliced in; the failures go back
+into the conversation as the next turn, so a rejected draft is a visible exchange, not
+a silent retry. `plan` cannot propose a second `plan` node, or route a git-writing node
+around `gate` — both are the same checks a person writing the file by hand would hit.
+
+Once accepted, the proposed nodes are spliced in between `plan` and whatever it
+pointed at — `gate`, above — and the run continues into them. The canvas grows to
+show it; nothing about how those nodes execute differs from a node the file declared
+directly.
+
+At the end of a run that planned, you're offered the chance to keep the graph:
+accepting writes the negotiated shape back to `.flow-code/workflow.yaml`, with `plan`
+removed, as an ordinary static file. The next run skips planning — and spends no
+tokens on it — unless you put `plan` back.
 
 This is engine-path only. A run driven from a guest session records a rejection as a
 failure and stops there; the rejection branch is not walked.

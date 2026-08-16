@@ -4,7 +4,7 @@ import type { RunStateStore } from '../runstate/store.js';
 import type { RecordedGraph, RunState } from '../runstate/types.js';
 import { isAttached } from '../runstate/watch.js';
 import type { Workflow } from '../workflow/load.js';
-import { RecordedGraphError, rehydrateGraph } from '../workflow/record.js';
+import { RecordedGraphError, recordGraph, rehydrateGraph } from '../workflow/record.js';
 import { App, type ModelContext } from './App.js';
 import type { UiInteractionPorts } from './ports.js';
 import { Splash } from './splash.js';
@@ -24,19 +24,35 @@ interface WorkflowHostProps {
 }
 
 /**
+ * The part of a `RecordedGraph` worth re-rendering for: which nodes exist,
+ * their types, and how they're wired. A node's own `config` (model, skills,
+ * instructions, …) is deliberately excluded — `App` already reads current
+ * per-node values from the store directly, never from `workflow`, so an
+ * ordinary mid-run edit (`m`/`s`/`e`) replacing `state.graph` by reference
+ * must not be mistaken for a shape change and pay for a `rehydrateGraph` it
+ * gets no benefit from.
+ */
+function graphShapeKey(graph: RecordedGraph): string {
+  return JSON.stringify({
+    nodes: graph.nodes.map((n) => ({ id: n.id, type: n.type })),
+    edges: graph.edges,
+  });
+}
+
+/**
  * Bridges the store's recorded graph into `App`'s `workflow` prop, so `App`
  * itself never has to know where a graph came from.
  *
- * `run` mounts this with `watch` false: the effect below returns immediately,
- * so `workflow` never changes from `initialWorkflow` and the path is exactly
- * as it was before this existed — no new I/O, no new failure mode.
- *
- * `watch` mounts with `emptyWorkflow`'s placeholder and no run attached yet.
- * The effect re-derives `workflow` from whichever `RecordedGraph` the store's
- * current — or next — snapshot carries, by reference: unchanged on every
- * status/token update a run produces, and changing only when the graph itself
- * does (first attach, or a long-lived viewer later attaching to a *different*
- * run with a different recorded shape).
+ * Re-derives `workflow` from whichever `RecordedGraph` the store's current —
+ * or next — snapshot carries, whenever its *shape* changes: unchanged on
+ * every status/token update or field edit a run produces, and changing only
+ * when the graph itself grows or replaces (a Plan node's proposal spliced
+ * in; `watch` first attaching, or later attaching to a *different* run with
+ * a different recorded shape). Independent of `watch` — a Plan node can
+ * expand a graph `flow-code run` is driving directly, not only one `flow-code
+ * watch` is spectating, and both need the redraw. `watch` still separately
+ * governs read-only mode (see `AppProps.watch`), which is a different
+ * concern this effect does not touch.
  */
 export function WorkflowHost({
   initialWorkflow,
@@ -51,9 +67,11 @@ export function WorkflowHost({
   const [workflow, setWorkflow] = useState<Workflow>(initialWorkflow);
   const [graphIssue, setGraphIssue] = useState<string | null>(null);
   const lastGraphRef = useRef<RecordedGraph | undefined>(undefined);
+  const lastShapeKeyRef = useRef<string | undefined>(
+    watch ? undefined : graphShapeKey(recordGraph(initialWorkflow)),
+  );
 
   useEffect(() => {
-    if (!watch) return;
     const apply = (state: RunState): void => {
       // The reference-equality skip only applies once there is a graph to
       // compare by reference. `undefined === undefined` would otherwise make
@@ -66,9 +84,14 @@ export function WorkflowHost({
         // No fallback to `workflow.yaml`: keep showing whatever shape is
         // already up, and only say something when there is a run to blame it
         // on — the pre-attach placeholder isn't "unavailable", it's honest.
+        // Only reachable under `watch`: a run driven directly always records
+        // a graph before this component ever mounts.
         setGraphIssue(isAttached(state) ? 'shape unavailable — this run predates recorded graphs' : null);
         return;
       }
+      const shapeKey = graphShapeKey(state.graph);
+      if (shapeKey === lastShapeKeyRef.current) return;
+      lastShapeKeyRef.current = shapeKey;
       try {
         setWorkflow(rehydrateGraph(state.graph, { repoRoot }));
         setGraphIssue(null);
@@ -77,12 +100,15 @@ export function WorkflowHost({
         else throw err;
       }
     };
-    // Catch up on whatever the store already holds — `RunStateWatcher.start`
-    // runs its first check synchronously, which can land before this effect
-    // subscribes — then follow every snapshot after.
+    // Catch up on whatever the store already holds — under `watch`,
+    // `RunStateWatcher.start` runs its first check synchronously, which can
+    // land before this effect subscribes; driving a run directly, the store
+    // may already have moved (a Plan node can expand the graph before this
+    // component's first render commits) — either way, there is no gap to
+    // miss a change in.
     apply(store.snapshot());
     return store.subscribe(apply);
-  }, [watch, store, repoRoot]);
+  }, [store, repoRoot]);
 
   return React.createElement(App, {
     workflow,

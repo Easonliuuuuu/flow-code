@@ -126,6 +126,52 @@ export class Graph {
   }
 
   /**
+   * A path from some root (a node with no forward-edge dependency) to
+   * `targetId`, over forward edges only, that touches none of `blocking` —
+   * or `undefined` if every such path is blocked.
+   *
+   * Used to check whether `blocking` dominates `targetId`: dominance holds
+   * exactly when this returns `undefined`, i.e. there is no way to reach
+   * `targetId` from any root without passing through a blocking node. A
+   * conditional forward edge is traversed the same as an unconditional one —
+   * a path that may carry is a path that may reach the target.
+   */
+  findUnblockedPath(targetId: string, blocking: ReadonlySet<string>): string[] | undefined {
+    const visited = new Set<string>();
+    const predecessor = new Map<string, string>();
+    const queue: string[] = [];
+    for (const id of this.nodeIds) {
+      if (this.in_.get(id)!.length === 0 && !blocking.has(id)) {
+        visited.add(id);
+        queue.push(id);
+      }
+    }
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current === targetId) {
+        const path = [current];
+        let node = current;
+        while (predecessor.has(node)) {
+          node = predecessor.get(node)!;
+          path.unshift(node);
+        }
+        return path;
+      }
+      for (const next of this.out.get(current)!) {
+        // A blocking node is a dead end for this search — reaching it means
+        // the path is gated, which is exactly the kind of path this method
+        // is not looking for. The target is always a valid step regardless.
+        if (next !== targetId && blocking.has(next)) continue;
+        if (visited.has(next)) continue;
+        visited.add(next);
+        predecessor.set(next, current);
+        queue.push(next);
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Topological order. Throws with the nodes involved if the graph has a
    * cycle — callers surface this as a load-time validation error.
    */

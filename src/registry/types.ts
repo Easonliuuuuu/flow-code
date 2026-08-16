@@ -3,6 +3,7 @@ import type { Capability } from '../capabilities.js';
 
 export const NODE_TYPE_IDS = [
   'discuss',
+  'plan',
   'spec',
   'implement',
   'test',
@@ -30,10 +31,10 @@ export interface NodeTypeDefinition {
   agentDriven: boolean;
   /**
    * True when the type holds at `waiting` and consumes user turns during its
-   * session — Discuss and nothing else. Not a switch: it records which session
-   * API the executor uses (`openInteractive` vs `run`), and a non-interactive
-   * node is given no channel to block on, so it cannot wait for a user even if
-   * its instructions tell it to.
+   * session — Discuss and Plan, and nothing else. Not a switch: it records
+   * which session API the executor uses (`openInteractive` vs `run`), and a
+   * non-interactive node is given no channel to block on, so it cannot wait
+   * for a user even if its instructions tell it to.
    */
   interactive: boolean;
   /**

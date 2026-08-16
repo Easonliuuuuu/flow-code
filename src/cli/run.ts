@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { Engine } from '../engine/engine.js';
 import { preflight, PreflightError } from '../engine/preflight.js';
 import { builtinExecutors, SdkSessionRunner } from '../executors/index.js';
@@ -14,8 +15,15 @@ import {
 import { RunStateStore } from '../runstate/store.js';
 import { isRejectedGate, type RunState } from '../runstate/types.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
-import { declaredGraphs, type Workflow } from '../workflow/load.js';
-import { RecordedGraphError, recordGraph, rehydrateGraph } from '../workflow/record.js';
+import { declaredGraphs, WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
+import {
+  expandRecordedGraph,
+  RecordedGraphError,
+  recordGraph,
+  rehydrateGraph,
+} from '../workflow/record.js';
+import type { PlanProposal } from '../workflow/splice.js';
+import { writeKeptWorkflow } from '../workflow/write.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../worktrees/reconcile.js';
 import { splashEnabled } from './args.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
@@ -156,6 +164,44 @@ export async function resetInterruptedWorktrees(repoRoot: string, resumeState: R
   }
 }
 
+/**
+ * Runs `engine` to completion, expanding and constructing a fresh Engine
+ * each time a Plan node finishes negotiating — an Engine's topological order
+ * is fixed at construction, so a graph that grows needs a new one, not a
+ * mutation of the running instance (see design.md). Returns once the final
+ * Engine reports `finished` or `interrupted`, together with the `Workflow`
+ * that Engine ran — identical to `workflow` (by reference) when no
+ * expansion ever happened, which is how a caller tells whether there is
+ * anything to offer keeping.
+ *
+ * `newEngine` is a factory rather than a fixed instance because each pass
+ * needs one bound to that pass's (larger) `Workflow`; `store` is the single
+ * instance every pass shares, so a subscriber (the terminal UI, a
+ * persister) sees the whole sequence without re-attaching.
+ */
+export async function driveEngine(
+  engine: Engine,
+  workflow: Workflow,
+  deps: { store: RunStateStore; repoRoot: string; newEngine: (workflow: Workflow) => Engine },
+): Promise<Workflow> {
+  let currentWorkflow = workflow;
+  let current = engine;
+  for (;;) {
+    const outcome = await current.run();
+    if (outcome.reason !== 'awaiting-expansion') return currentWorkflow;
+    const proposal = deps.store.node(outcome.planNodeId).output as PlanProposal;
+    const { workflow: expanded, graph } = expandRecordedGraph(
+      currentWorkflow,
+      outcome.planNodeId,
+      proposal,
+      { repoRoot: deps.repoRoot },
+    );
+    deps.store.expandGraph(graph);
+    currentWorkflow = expanded;
+    current = deps.newEngine(currentWorkflow);
+  }
+}
+
 /** Node count by final status, e.g. `2 done, 1 error` — shared by the closing summary and `flow-code runs`. */
 export function tallyNodeStatuses(nodes: RunState['nodes']): string {
   const counts = Object.values(nodes).reduce<Record<string, number>>(
@@ -276,16 +322,19 @@ export async function cmdRun(args: string[]): Promise<void> {
 
   const abortController = new AbortController();
   const ports = new UiInteractionPorts(abortController.signal);
-  const engine = new Engine({
-    workflow,
-    store,
-    repoRoot,
-    baseline,
-    ports,
-    sessions: resolved ? buildRunner(resolved.provider) : new SdkSessionRunner(),
-    executors: builtinExecutors,
-    signal: abortController.signal,
-  });
+  const sessions = resolved ? buildRunner(resolved.provider) : new SdkSessionRunner();
+  const newEngine = (wf: Workflow): Engine =>
+    new Engine({
+      workflow: wf,
+      store,
+      repoRoot,
+      baseline,
+      ports,
+      sessions,
+      executors: builtinExecutors,
+      signal: abortController.signal,
+    });
+  const engine = newEngine(workflow);
 
   // ctrl+c (via the UI) or a real SIGINT/SIGTERM (piped stdin, `kill`, a
   // second ctrl+c once the terminal has left raw mode) both land here.
@@ -312,20 +361,27 @@ export async function cmdRun(args: string[]): Promise<void> {
   process.on('SIGINT', triggerInterrupt);
   process.on('SIGTERM', triggerInterrupt);
 
-  const enginePromise = engine.run().then(async () => {
-    // The run reached a terminal state: retained (converged) worktrees can
-    // go now; their branches keep the work reachable.
-    for (const wt of store.snapshot().worktrees) {
-      if (!wt.removed && existsSync(wt.dir)) {
-        try {
-          await removeWorktree(repoRoot, wt.dir);
-          store.updateWorktree(wt.dir, { removed: true });
-        } catch {
-          // leave it for doctor
+  // `runUi` stays mounted once for the whole sequence — possibly several
+  // Engine instances, see `driveEngine` — with `WorkflowHost` picking up
+  // each expansion reactively via `store.subscribe`, the same path an
+  // ordinary mid-run node edit already uses.
+  const enginePromise = driveEngine(engine, workflow, { store, repoRoot, newEngine }).then(
+    async (finalWorkflow) => {
+      // The run reached a terminal state: retained (converged) worktrees can
+      // go now; their branches keep the work reachable.
+      for (const wt of store.snapshot().worktrees) {
+        if (!wt.removed && existsSync(wt.dir)) {
+          try {
+            await removeWorktree(repoRoot, wt.dir);
+            store.updateWorktree(wt.dir, { removed: true });
+          } catch {
+            // leave it for doctor
+          }
         }
       }
-    }
-  });
+      return finalWorkflow;
+    },
+  );
 
   await runUi({
     workflow,
@@ -340,9 +396,22 @@ export async function cmdRun(args: string[]): Promise<void> {
       workflowSettingsModel,
     },
   });
-  await enginePromise;
+  const finalWorkflow = await enginePromise;
   process.off('SIGINT', triggerInterrupt);
   process.off('SIGTERM', triggerInterrupt);
+
+  // A Plan node negotiated this graph rather than the file declaring it —
+  // offer to make that shape the file's own, so a future run needs no
+  // negotiation. Reference-equal to `workflow` (never reassigned) whenever
+  // no expansion happened, which is the ordinary case for every workflow
+  // without a Plan node.
+  if (finalWorkflow !== workflow) {
+    const keep = await confirm('Keep this negotiated graph as .flow-code/workflow.yaml?');
+    if (keep) {
+      writeKeptWorkflow(join(repoRoot, WORKFLOW_RELATIVE_PATH), finalWorkflow);
+      console.log(`flow-code: wrote the negotiated graph to ${WORKFLOW_RELATIVE_PATH} — future runs won't plan.`);
+    }
+  }
 
   const nodes = store.snapshot().nodes;
   const interrupted = abortController.signal.aborted;

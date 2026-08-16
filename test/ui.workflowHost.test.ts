@@ -59,16 +59,17 @@ function lastFrame(stdout: FakeStdout): string {
 function mountHost(
   repoRoot: string,
   store: RunStateStore,
+  opts: { watch?: boolean; initialWorkflow?: ReturnType<typeof emptyWorkflow> } = {},
 ): { stdout: FakeStdout; unmount: () => void } {
   const stdout = fakeStdout();
   const stdin = fakeStdin();
   const instance = render(
     React.createElement(WorkflowHost, {
-      initialWorkflow: emptyWorkflow(repoRoot),
+      initialWorkflow: opts.initialWorkflow ?? emptyWorkflow(repoRoot),
       store,
       ports: new UiInteractionPorts(),
       modelContext: NO_MODEL_CONTEXT,
-      watch: true,
+      watch: opts.watch ?? true,
       repoRoot,
       onExit: () => {},
       onInterrupt: () => {},
@@ -190,6 +191,60 @@ describe('WorkflowHost', () => {
     // Still showing the last good graph, not a blank canvas or a crash.
     expect(frame).toContain('impl');
     expect(frame).toContain('cannot rebuild the graph');
+    unmount();
+  });
+});
+
+describe('WorkflowHost redraws reactively even when not watching', () => {
+  // `flow-code run` mounts with `watch: false` — this is what a Plan node
+  // expanding the graph mid-run relies on, see cli/run.ts and
+  // engine/engine.ts's `awaiting-expansion` outcome.
+  it('picks up a Plan node expanding the graph, on the same store instance, without `watch`', async () => {
+    const repo = makeTempGitRepo();
+    const initial = loadWorkflowFromString(GRAPH_A, { repoRoot: repo });
+    const store = new RunStateStore({ repoRoot: repo, graph: recordGraph(initial) });
+    const { stdout, unmount } = mountHost(repo, store, { watch: false, initialWorkflow: initial });
+    await settle();
+    expect(lastFrame(stdout)).toContain('impl');
+    expect(lastFrame(stdout)).not.toContain('review');
+
+    const expanded = loadWorkflowFromString(
+      `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: review
+    type: review
+edges:
+  - { from: impl, to: review }
+`,
+      { repoRoot: repo },
+    );
+    store.expandGraph(recordGraph(expanded));
+    await settle();
+
+    const frame = lastFrame(stdout);
+    expect(frame).toContain('impl');
+    expect(frame).toContain('review');
+    unmount();
+  });
+
+  it('does not re-render on an ordinary field edit that leaves the graph shape unchanged', async () => {
+    const repo = makeTempGitRepo();
+    const initial = loadWorkflowFromString(GRAPH_A, { repoRoot: repo });
+    const store = new RunStateStore({ repoRoot: repo, graph: recordGraph(initial) });
+    const { stdout, unmount } = mountHost(repo, store, { watch: false, initialWorkflow: initial });
+    await settle();
+    const before = lastFrame(stdout);
+
+    // Same node, same edges — only its config changes, as `m`/`s`/`e` do.
+    store.patchGraphNode('impl', { config: { instructions: 'a different instruction' } });
+    await settle();
+
+    // No crash, no graph re-derivation — the frame is stable across an edit
+    // that doesn't touch which nodes exist or how they're wired.
+    expect(lastFrame(stdout)).toBe(before);
     unmount();
   });
 });

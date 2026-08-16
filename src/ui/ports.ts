@@ -6,6 +6,7 @@ import type {
 } from '../engine/types.js';
 import { RunInterruptedError } from '../engine/types.js';
 import type { DiscussTranscriptEntry } from '../runstate/types.js';
+import type { PlanProposal } from '../workflow/splice.js';
 
 export type { DiscussTranscriptEntry } from '../runstate/types.js';
 
@@ -18,6 +19,16 @@ export interface DiscussUiState {
   active: boolean;
   /** Choices offered alongside the agent's last message; cleared once the user answers. */
   options: string[] | null;
+}
+
+export interface PlanUiState {
+  nodeId: string;
+  topic: string | undefined;
+  transcript: DiscussTranscriptEntry[];
+  awaitingUser: boolean;
+  active: boolean;
+  /** The most recently proposed graph, whether or not it has been accepted. */
+  proposal: PlanProposal | null;
 }
 
 interface PendingApproval {
@@ -59,7 +70,12 @@ export class UiInteractionPorts implements InteractionPorts {
    * in-place push would leave new messages invisible on screen.
    */
   discussState: DiscussUiState | null = null;
+  /** Same replace-wholesale rule as `discussState`, for the same reason. */
+  planState: PlanUiState | null = null;
   private nextMessageResolve: ((text: string | null) => void) | null = null;
+  private nextPlanTurnResolve:
+    | ((turn: { text: string } | { accept: true } | null) => void)
+    | null = null;
   private listeners = new Set<() => void>();
 
   /** Aborted when the run is interrupted (e.g. ctrl+c); rejects any pending wait on the user. */
@@ -234,5 +250,88 @@ export class UiInteractionPorts implements InteractionPorts {
     }
     this.notify();
     resolve(text);
+  }
+
+  plan = {
+    begin: (
+      nodeId: string,
+      topic: string | undefined,
+      seedTranscript: DiscussTranscriptEntry[] = [],
+    ): void => {
+      this.planState = {
+        nodeId,
+        topic,
+        transcript: [...seedTranscript],
+        awaitingUser: false,
+        active: true,
+        proposal: null,
+      };
+      this.notify();
+    },
+    postAssistant: (nodeId: string, text: string, proposal: PlanProposal | null): void => {
+      if (this.planState?.nodeId === nodeId) {
+        this.planState = {
+          ...this.planState,
+          transcript: [...this.planState.transcript, { role: 'assistant', text }],
+          // A reply with no block leaves the standing proposal as it was —
+          // the agent talking does not retract what it already proposed.
+          proposal: proposal ?? this.planState.proposal,
+        };
+        this.notify();
+      }
+    },
+    nextTurn: (nodeId: string): Promise<{ text: string } | { accept: true } | null> =>
+      new Promise((resolve, reject) => {
+        if (this.planState?.nodeId === nodeId) {
+          this.planState = { ...this.planState, awaitingUser: true };
+        }
+        this.nextPlanTurnResolve = resolve;
+        this.notify();
+        this.onInterrupt(reject, () => {
+          this.nextPlanTurnResolve = null;
+        });
+      }),
+    end: (nodeId: string): void => {
+      if (this.planState?.nodeId === nodeId) {
+        this.planState = { ...this.planState, active: false, awaitingUser: false };
+        this.notify();
+      }
+    },
+  };
+
+  /** Called by the App when the user sends a Plan-node chat message. */
+  submitPlanMessage(text: string): void {
+    const resolve = this.nextPlanTurnResolve;
+    if (!resolve) return;
+    this.nextPlanTurnResolve = null;
+    if (this.planState) {
+      this.planState = {
+        ...this.planState,
+        awaitingUser: false,
+        transcript: [...this.planState.transcript, { role: 'user', text }],
+      };
+    }
+    this.notify();
+    resolve({ text });
+  }
+
+  /** Called by the App when the user accepts the graph currently on the table. */
+  acceptPlan(): void {
+    const resolve = this.nextPlanTurnResolve;
+    if (!resolve) return;
+    this.nextPlanTurnResolve = null;
+    if (this.planState) this.planState = { ...this.planState, awaitingUser: false };
+    this.notify();
+    resolve({ accept: true });
+  }
+
+  /** Called by the App when the user ends the Plan session without accepting. */
+  abandonPlan(): void {
+    const resolve = this.nextPlanTurnResolve;
+    if (!resolve) return;
+    this.nextPlanTurnResolve = null;
+    if (this.planState) this.planState = { ...this.planState, awaitingUser: false };
+    this.notify();
+    resolve(null);
   }
 }

@@ -98,6 +98,28 @@ edges:
     expect(err()).toContain('graph structure');
   });
 
+  it('rejects an ungated git-writing node, without starting a run', async () => {
+    const repo = repoWithWorkflow(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: do the thing }
+  - id: ship
+    type: git-ops
+edges:
+  - { from: impl, to: ship }
+`);
+    process.chdir(repo);
+    const { exit, err } = captureOutput();
+
+    await expect(cmdValidate()).rejects.toThrow('process.exit called');
+
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(err()).toContain('ship');
+    expect(err()).toContain('Approval-Gate');
+    expect(existsSync(join(repo, '.flow-code', 'runs'))).toBe(false);
+  });
+
   it('reports a missing file as missing, pointing at `init`', async () => {
     const repo = tempRepo();
     process.chdir(repo);
@@ -191,6 +213,10 @@ edges:
 `,
     },
     { name: 'unparseable YAML', yaml: 'nodes: [oh: [dear' },
+    {
+      name: 'an ungated git-writing node',
+      yaml: 'nodes:\n  - { id: x, type: implement, config: { instructions: a } }\n  - { id: y, type: git-ops }\nedges:\n  - { from: x, to: y }\n',
+    },
   ];
 
   for (const { name, yaml } of fixtures) {

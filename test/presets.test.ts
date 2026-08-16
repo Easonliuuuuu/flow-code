@@ -49,6 +49,14 @@ describe('preset registry', () => {
     expect(getPreset('nope')).toBeUndefined();
   });
 
+  it('exposes the planned preset by name, with no skills and no CLI dependency', () => {
+    expect(presetNames()).toContain('planned');
+    const preset = getPreset('planned')!;
+    expect(preset.summary).toBe('plan → gate → git-ops');
+    expect(preset.requiredSkills).toEqual([]);
+    expect(preset.cli).toBeUndefined();
+  });
+
   it('keeps the default preset as the untouched default graph', () => {
     expect(DEFAULT_PRESET.yaml).toBe(DEFAULT_WORKFLOW_YAML);
     expect(DEFAULT_PRESET.requiredSkills).toEqual([]);
@@ -151,6 +159,35 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
     const wf = loadWorkflowFromString(preset.yaml);
 
     expect(wf.graph.directDependencies('validate').sort()).toEqual(['plan', 'test']);
+  });
+});
+
+describe('the planned preset scaffolds a valid workflow', () => {
+  const preset = getPreset('planned')!;
+
+  it('loads and validates like any hand-written workflow, with no skill fixtures needed', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.order).toEqual(['plan', 'gate', 'git-ops']);
+  });
+
+  it('is exactly the spine — a Plan node, at the root, with nothing to negotiate away yet', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    const plan = wf.nodes.find((n) => n.id === 'plan')!;
+    expect(plan.type.id).toBe('plan');
+    expect(wf.graph.directDependencies('plan')).toEqual([]);
+    expect(plan.type.interactive).toBe(true);
+    for (const node of wf.nodes.filter((n) => n.id !== 'plan')) {
+      expect(node.type.interactive).toBe(false);
+    }
+  });
+
+  it('gates the git-mutating step, and does not retry a rejected gate', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.graph.directDependencies('git-ops')).toEqual(['gate']);
+    expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
   });
 });
 

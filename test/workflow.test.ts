@@ -189,10 +189,14 @@ nodes:
   it('accepts commit-only git-ops with no config at all', () => {
     const wf = loadWorkflowFromString(`
 nodes:
+  - id: gate
+    type: approval-gate
   - id: ship
     type: git-ops
+edges:
+  - { from: gate, to: ship }
 `);
-    expect(wf.nodes[0]!.config).toEqual({});
+    expect(wf.nodes.find((n) => n.id === 'ship')!.config).toEqual({});
   });
 });
 
@@ -567,11 +571,12 @@ describe('default workflow template', () => {
 });
 
 describe('node type registry', () => {
-  it('registers all nine built-in types', () => {
+  it('registers all ten built-in types', () => {
     expect([...nodeTypeRegistry.keys()].sort()).toEqual(
       [
         'approval-gate',
         'discuss',
+        'plan',
         'spec',
         'git-ops',
         'implement',
@@ -615,5 +620,226 @@ describe('node type registry', () => {
     expect(prompt).toMatch(/tests/i);
     expect(prompt).toMatch(/cannot write/i);
     expect(nodeTypeRegistry.get('test')!.agentDriven).toBe(false);
+  });
+});
+
+describe('git-write nodes must be gated', () => {
+  it('rejects a git-writing node with no gate anywhere upstream', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: ship
+    type: git-ops
+edges:
+  - { from: impl, to: ship }
+`);
+    expect(problems.join('\n')).toContain('ship');
+    expect(problems.join('\n')).toContain('git-write');
+    expect(problems.join('\n')).toContain('Approval-Gate');
+  });
+
+  it('rejects a git-writing node reachable both through a gate and by a bypass', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: ship }
+  - { from: impl, to: ship }
+`);
+    expect(problems.join('\n')).toContain('ship');
+  });
+
+  it('rejects a bypass even when it carries a `when:` condition', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: gate }
+  - { from: gate, to: ship }
+  - { from: check, to: ship, when: "check.verdict == 'pass'" }
+`);
+    expect(problems.join('\n')).toContain('ship');
+  });
+
+  it('accepts a git-writing node dominated by a gate', () => {
+    const wf = loadWorkflowFromString(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: impl, to: gate }
+  - { from: gate, to: ship }
+`);
+    expect(wf.nodes.map((n) => n.id)).toEqual(['impl', 'gate', 'ship']);
+  });
+
+  it('accepts two independent branches, each gated by its own Approval-Gate', () => {
+    const wf = loadWorkflowFromString(`
+nodes:
+  - id: implA
+    type: implement
+    config: { instructions: x }
+  - id: gateA
+    type: approval-gate
+  - id: shipA
+    type: git-ops
+  - id: implB
+    type: implement
+    config: { instructions: x }
+  - id: gateB
+    type: approval-gate
+  - id: shipB
+    type: git-ops
+edges:
+  - { from: implA, to: gateA }
+  - { from: gateA, to: shipA }
+  - { from: implB, to: gateB }
+  - { from: gateB, to: shipB }
+`);
+    expect(wf.nodes.map((n) => n.id)).toEqual(['implA', 'gateA', 'shipA', 'implB', 'gateB', 'shipB']);
+  });
+
+  it('requires no gate at all when the graph writes to git nowhere', () => {
+    const wf = loadWorkflowFromString(`
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: test
+    config: { commands: ["true"] }
+edges:
+  - { from: impl, to: check }
+`);
+    expect(wf.nodes.map((n) => n.id)).toEqual(['impl', 'check']);
+  });
+
+  it('reports an ungated git-write node alongside an unrelated structural failure', () => {
+    const failure = failureOf(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: implement
+    config: { instructions: x }
+  - id: ship
+    type: git-ops
+edges:
+  - { from: a, to: b }
+  - { from: b, to: ship }
+  - { from: a, to: b, loopback: true }
+`);
+    expect(failure.stage).toBe('structure');
+    expect(failure.problems.join('\n')).toContain('ship');
+    expect(failure.problems.join('\n')).toContain('git-write');
+    expect(failure.problems.join('\n')).toContain('upstream');
+    expect(failure.problems.length).toBeGreaterThan(1);
+  });
+
+  it('has no opt-out: an unrecognized settings key meant to disarm the gate is rejected like any other unknown key', () => {
+    const problems = problemsOf(`
+settings:
+  allowUngatedGitWrite: true
+nodes:
+  - id: ship
+    type: git-ops
+`);
+    expect(problems.join('\n')).toMatch(/allowUngatedGitWrite|Unrecognized/i);
+  });
+
+  it('the default scaffold and both shipped presets satisfy the invariant', async () => {
+    const { DEFAULT_WORKFLOW_YAML } = await import('../src/defaultWorkflow.js');
+    const { listPresets } = await import('../src/presets.js');
+    expect(() => loadWorkflowFromString(DEFAULT_WORKFLOW_YAML)).not.toThrow();
+    for (const preset of listPresets()) {
+      expect(() => loadWorkflowFromString(preset.yaml), preset.name).not.toThrow();
+    }
+  });
+});
+
+describe('a graph declares at most one plan node, at its root', () => {
+  it('rejects a second plan node', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: plan1
+    type: plan
+  - id: plan2
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: plan1, to: gate }
+  - { from: plan2, to: gate }
+  - { from: gate, to: ship }
+`);
+    expect(problems.join('\n')).toContain('plan1');
+    expect(problems.join('\n')).toContain('plan2');
+    expect(problems.join('\n')).toContain('at most one');
+  });
+
+  it('rejects a plan node with an upstream dependency', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: talk
+    type: discuss
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: talk, to: plan }
+  - { from: plan, to: gate }
+  - { from: gate, to: ship }
+`);
+    expect(problems.join('\n')).toContain('plan');
+    expect(problems.join('\n')).toContain('root');
+  });
+
+  it('accepts a single plan node at the root', () => {
+    const wf = loadWorkflowFromString(`
+nodes:
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: ship }
+`);
+    expect(wf.nodes.map((n) => n.id)).toEqual(['plan', 'gate', 'ship']);
+  });
+
+  it('has nothing to enforce when the graph declares no plan node', () => {
+    expect(() => loadWorkflowFromString(VALID)).not.toThrow();
   });
 });

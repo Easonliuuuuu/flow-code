@@ -15,6 +15,7 @@ import type { DiscussTranscriptEntry, RunOwner, RunState } from '../src/runstate
 import { RunStateStore } from '../src/runstate/store.js';
 import { loadWorkflowFromString, type Workflow } from '../src/workflow/load.js';
 import { recordGraph } from '../src/workflow/record.js';
+import type { PlanProposal } from '../src/workflow/splice.js';
 
 /**
  * A pid no process can hold — well above every platform's maximum, so a run
@@ -76,6 +77,12 @@ export interface FakePortOptions {
   userMessages?: string[];
   /** What to answer a Test node asking what to run; null skips. */
   testCommands?: string[] | null | ((req: TestCommandsRequest) => Promise<string[] | null> | string[] | null);
+  /**
+   * Scripted Plan-node turns: a string is a chat message, the literal
+   * `'accept'` accepts whatever proposal is currently on the table. Running
+   * out (or an explicit `null` entry) ends the session without accepting.
+   */
+  planTurns?: Array<string | 'accept' | null>;
 }
 
 export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
@@ -86,6 +93,10 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
   /** Options offered alongside each assistant turn; null when it offered none. */
   assistantOptions: Array<string[] | null>;
   beginCalls: Array<{ nodeId: string; topic: string | undefined; seedTranscript: DiscussTranscriptEntry[] }>;
+  planAssistantTexts: string[];
+  planAssistantProposals: Array<PlanProposal | null>;
+  planBeginCalls: Array<{ nodeId: string; topic: string | undefined; seedTranscript: DiscussTranscriptEntry[] }>;
+  planEnded: string[];
 } {
   const approvalRequests: ApprovalRequest[] = [];
   const convergenceRequests: ConvergenceRequest[] = [];
@@ -98,6 +109,15 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
     seedTranscript: DiscussTranscriptEntry[];
   }> = [];
   const remainingMessages = [...(opts.userMessages ?? [])];
+  const planAssistantTexts: string[] = [];
+  const planAssistantProposals: Array<PlanProposal | null> = [];
+  const planBeginCalls: Array<{
+    nodeId: string;
+    topic: string | undefined;
+    seedTranscript: DiscussTranscriptEntry[];
+  }> = [];
+  const planEnded: string[] = [];
+  const remainingPlanTurns = [...(opts.planTurns ?? [])];
   return {
     approvalRequests,
     convergenceRequests,
@@ -105,6 +125,10 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
     assistantTexts,
     assistantOptions,
     beginCalls,
+    planAssistantTexts,
+    planAssistantProposals,
+    planBeginCalls,
+    planEnded,
     approval: {
       async request(req) {
         approvalRequests.push(req);
@@ -138,6 +162,23 @@ export function fakePorts(opts: FakePortOptions = {}): InteractionPorts & {
         return remainingMessages.shift() ?? null;
       },
       end() {},
+    },
+    plan: {
+      begin(nodeId, topic, seedTranscript = []) {
+        planBeginCalls.push({ nodeId, topic, seedTranscript });
+      },
+      postAssistant(_nodeId, text, proposal) {
+        planAssistantTexts.push(text);
+        planAssistantProposals.push(proposal);
+      },
+      async nextTurn() {
+        const turn = remainingPlanTurns.shift() ?? null;
+        if (turn === null) return null;
+        return turn === 'accept' ? { accept: true } : { text: turn };
+      },
+      end(nodeId) {
+        planEnded.push(nodeId);
+      },
     },
   };
 }

@@ -510,9 +510,53 @@ export function buildWorkflow(
       );
     }
   }
-  // The three structural checks above are independent of each other, so they
+  // Every node holding `git-write` must be dominated by an Approval-Gate: no
+  // path from any root may reach it without passing through one. This is
+  // independent of loop-back validity — it reads only the forward-edge
+  // subgraph — so it runs unconditionally rather than being gated on the
+  // checks above.
+  const gateProblems: string[] = [];
+  const gateIds = new Set(nodes.filter((n) => n.type.id === 'approval-gate').map((n) => n.id));
+  for (const node of nodes) {
+    if (!node.type.capabilities.includes('git-write')) continue;
+    const path = graph.findUnblockedPath(node.id, gateIds);
+    if (path) {
+      gateProblems.push(
+        `node \`${node.id}\` (${node.type.id}): holds git-write but is reachable via ` +
+          `${path.join(' -> ')} without passing an Approval-Gate — add an Approval-Gate node ` +
+          `upstream of it, or, for an unattended run, remove this node and commit from your ` +
+          `pipeline after \`flow-code run\` exits`,
+      );
+    }
+  }
+
+  // A graph may declare at most one Plan node, and it must be a root: the one
+  // point at which the graph is allowed to grow, with nothing having run
+  // before it.
+  const planProblems: string[] = [];
+  const planNodes = nodes.filter((n) => n.type.id === 'plan');
+  if (planNodes.length > 1) {
+    planProblems.push(
+      `nodes ${planNodes.map((n) => `\`${n.id}\``).join(', ')}: a graph may declare at most one plan node`,
+    );
+  }
+  for (const node of planNodes) {
+    if (graph.directDependencies(node.id).length > 0) {
+      planProblems.push(
+        `node \`${node.id}\` (plan): a plan node must be a root — it cannot depend on another node`,
+      );
+    }
+  }
+
+  // The five structural checks above are independent of each other, so they
   // are reported together rather than one build at a time.
-  const structureProblems = [...loopbackProblems, ...autoProblems, ...conditionProblems];
+  const structureProblems = [
+    ...loopbackProblems,
+    ...autoProblems,
+    ...conditionProblems,
+    ...gateProblems,
+    ...planProblems,
+  ];
   if (structureProblems.length > 0) throw new WorkflowValidationError(structureProblems, 'structure');
 
   return {
@@ -525,6 +569,25 @@ export function buildWorkflow(
     graph,
     order,
   };
+}
+
+/**
+ * Validates a flat-form raw file exactly as `loadWorkflowFromString` does for
+ * one — the file-schema stage (id format, edge shape, …) followed by
+ * `buildWorkflow`'s declaration and structure stages — for a file built in
+ * memory rather than read from YAML. This is what lets a Plan node's
+ * proposal be checked against the same rules a hand-written file is, without
+ * a second, looser implementation of what "valid" means.
+ */
+export function buildWorkflowFromRaw(
+  file: WorkflowFileRaw,
+  context: { repoRoot: string; skillRoots: SkillRoots },
+): Workflow {
+  const parsed = workflowFileSchema.safeParse(file);
+  if (!parsed.success) {
+    throw new WorkflowValidationError(formatFlatSchemaIssues(parsed.error, file), 'file-schema');
+  }
+  return buildWorkflow(parsed.data, context);
 }
 
 /**

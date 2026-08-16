@@ -28,6 +28,8 @@ nodes:
     config: { commands: ["npm test", "npm run lint"] }
   - id: rev
     type: review
+  - id: gate
+    type: approval-gate
   - id: ship
     type: git-ops
     config: { push: { remote: origin, branch: main } }
@@ -35,7 +37,8 @@ edges:
   - { from: talk, to: impl }
   - { from: impl, to: check }
   - { from: check, to: rev }
-  - { from: rev, to: ship }
+  - { from: rev, to: gate }
+  - { from: gate, to: ship }
 `);
 
 const node = (id: string) => WF.nodes.find((n) => n.id === id)!;
