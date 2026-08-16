@@ -149,16 +149,19 @@ function boxWidth(
     const content = Math.max(node.id.length + 2, MINI_MIN_BOX_CONTENT);
     return Math.min(content, MINI_MAX_BOX_CONTENT) + loopCols;
   }
+  // The badge shares the title row, so what it needs is room to the right of
+  // the title — hence a term of its own rather than a bump to the floor.
+  const titled = node.id.length + 4 + loopCols;
   if (density === 'compact') {
     // Border, title (glyph + id + denial bang) — no type-name or subtitle
     // row to size for, unlike full. +4 leaves room for the glyph and bang,
     // same as full's title row; +2 for the border.
-    const content = Math.max(node.id.length + 4, COMPACT_MIN_BOX_CONTENT);
+    const content = Math.max(titled, COMPACT_MIN_BOX_CONTENT);
     return Math.min(content, MAX_BOX_CONTENT) + 2;
   }
   // +4 on the title row leaves room for the status glyph and the denial bang.
   const content = Math.max(
-    node.id.length + 4,
+    titled,
     node.type.displayName.length + 2,
     // +1 for the leading space every content row is drawn with.
     plannedSummary(node).length + 1,
@@ -168,35 +171,51 @@ function boxWidth(
 }
 
 /**
- * Columns each node's loop-back badge occupies at its narrowest — one for
- * `↺` if the node returns somewhere, one for `↻` if something returns to it,
- * so a node that is both ends of some loop gets two — plus one for the gap
- * that keeps the badge off the end of the node's id.
+ * Columns to reserve on each node's card for its loop-back badge, at the
+ * form that density actually draws (see `renderGraph`'s ladder):
  *
- * This is the width of `renderGraph`'s shortest badge form, which is the one
- * a mini card always draws. Only mini needs it: a full or compact card is
- * floored well above its title's width and fits the badge in slack it
- * already has, dropping to a shorter form or none at all if it doesn't.
+ * - `mini` draws the bare glyphs, so one column per direction.
+ * - `compact` draws the counted form, `↻ ×3`.
+ * - `full` draws the named form, and has to fit the *longest* name it might
+ *   show — when a loop fires, the badge names that loop's own end, which can
+ *   be any of them. Reserving only the count is what let a fired `↻ validate`
+ *   fall back to a bare `↻` and say less than the `↻ ×3` it replaced.
+ *
+ * Plus one column for the gap that keeps the badge off the end of the id.
+ * Sized here rather than left to the card's slack for the same reason every
+ * other row is (see `boxWidth`): a box is sized for the content it means to
+ * show, not just for its title.
  */
-function loopBadgeColumns(workflow: Workflow): Map<string, number> {
-  const cols = new Map<string, number>();
-  const add = (id: string): void => {
-    cols.set(id, Math.min(2, (cols.get(id) ?? 0) + 1));
+function loopBadgeColumns(workflow: Workflow, density: Density): Map<string, number> {
+  const ends = new Map<string, { out: string[]; in: string[] }>();
+  const at = (id: string): { out: string[]; in: string[] } => {
+    const e = ends.get(id) ?? { out: [], in: [] };
+    ends.set(id, e);
+    return e;
   };
-  const seen = new Set<string>();
   for (const loop of workflow.graph.allLoopbacks()) {
-    // One column per *direction*, not per loop: three loops into the same
-    // node still render as a single `↻`.
-    if (!seen.has(`out:${loop.from}`)) {
-      seen.add(`out:${loop.from}`);
-      add(loop.from);
-    }
-    if (!seen.has(`in:${loop.to}`)) {
-      seen.add(`in:${loop.to}`);
-      add(loop.to);
-    }
+    at(loop.from).out.push(loop.to);
+    at(loop.to).in.push(loop.from);
   }
-  for (const [id, n] of cols) cols.set(id, n + 1);
+
+  // Width of one direction's badge at this density, 0 when absent.
+  const width = (names: string[]): number => {
+    if (names.length === 0) return 0;
+    if (density === 'mini') return 1;
+    if (density === 'compact' || names.length === 0) {
+      return names.length === 1 ? 1 : 2 + `×${names.length}`.length - 1;
+    }
+    // full: `↻ ` plus the longest name it may have to render.
+    return 2 + Math.max(...names.map((n) => n.length));
+  };
+
+  const cols = new Map<string, number>();
+  for (const [id, e] of ends) {
+    const total = width(e.out) + width(e.in);
+    // Two directions on one card need a separator between them too.
+    const separator = e.out.length > 0 && e.in.length > 0 ? 1 : 0;
+    cols.set(id, total + separator + 1);
+  }
   return cols;
 }
 
@@ -336,7 +355,7 @@ export function computeLayout(
     layers.get(l)!.push(id);
   }
 
-  const loopCols = loopBadgeColumns(workflow);
+  const loopCols = loopBadgeColumns(workflow, options.density ?? 'full');
   const widths = new Map<string, number>();
   for (const node of workflow.nodes) {
     widths.set(node.id, boxWidth(node, options.density ?? 'full', loopCols.get(node.id) ?? 0));

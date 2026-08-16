@@ -221,15 +221,27 @@ interface LoopMark {
 /**
  * One badge per node that a loop-back touches.
  *
- * A source names its target, because from a source there is exactly one
- * place execution goes. A target only counts its sources once there is more
- * than one, because naming all of `test, validate, review` never fits a card
- * and the count is the useful summary anyway — which of them fired is a run
- * event, and the `↻2` attempt badge already says it happened.
+ * A source names its target, because from a source there is exactly one place
+ * execution goes. A target names its source too, and falls back to a count
+ * only when several loops land on it — `↻ test, validate, review` never fits
+ * a card.
+ *
+ * Once a loop has *fired*, though, the badge stops describing the node's
+ * loops in general and describes that one: the useful fact at that moment is
+ * which loop just moved execution backwards, which is exactly what a count
+ * hides. So a target with three loops reading `↻ ×3` becomes `↻ test` when
+ * test is the one that sent the run back. That the text changes at all is the
+ * point — it means "which loop fired" survives on a washed-out palette and
+ * for a reader who can't separate two magentas, rather than resting on the
+ * brighter colour alone.
  */
 function loopMarks(loops: { loop: { from: string; to: string }; fired: boolean }[]): Map<string, LoopMark> {
-  const out = new Map<string, string[]>();
-  const inn = new Map<string, string[]>();
+  interface End {
+    id: string;
+    fired: boolean;
+  }
+  const out = new Map<string, End[]>();
+  const inn = new Map<string, End[]>();
   const fired = new Set<string>();
   const partners = new Map<string, Set<string>>();
   const link = (a: string, b: string): void => {
@@ -238,8 +250,8 @@ function loopMarks(loops: { loop: { from: string; to: string }; fired: boolean }
     partners.set(a, set);
   };
   for (const { loop, fired: didFire } of loops) {
-    out.set(loop.from, [...(out.get(loop.from) ?? []), loop.to]);
-    inn.set(loop.to, [...(inn.get(loop.to) ?? []), loop.from]);
+    out.set(loop.from, [...(out.get(loop.from) ?? []), { id: loop.to, fired: didFire }]);
+    inn.set(loop.to, [...(inn.get(loop.to) ?? []), { id: loop.from, fired: didFire }]);
     link(loop.from, loop.to);
     link(loop.to, loop.from);
     if (didFire) {
@@ -250,8 +262,15 @@ function loopMarks(loops: { loop: { from: string; to: string }; fired: boolean }
 
   const marks = new Map<string, LoopMark>();
   for (const id of new Set([...out.keys(), ...inn.keys()])) {
-    const targets = out.get(id) ?? [];
-    const sources = inn.get(id) ?? [];
+    const allTargets = (out.get(id) ?? []).map((e) => e.id);
+    const allSources = (inn.get(id) ?? []).map((e) => e.id);
+    // Narrow to the loops that fired, when any did — see the doc comment.
+    const live = (ends: End[]): string[] => {
+      const didFire = ends.filter((e) => e.fired);
+      return (didFire.length > 0 ? didFire : ends).map((e) => e.id);
+    };
+    const targets = live(out.get(id) ?? []);
+    const sources = live(inn.get(id) ?? []);
     // The glyph is a glyph, not a prefix — it needs air between it and
     // whatever it labels, or `↻review` reads as one word and `↻×3` as one
     // token. Only the bare form has nothing to separate it from.
@@ -260,10 +279,13 @@ function loopMarks(loops: { loop: { from: string; to: string }; fired: boolean }
     const counted = (glyph: string, ids: string[]): string =>
       ids.length === 0 ? '' : ids.length === 1 ? glyph : `${glyph} ×${ids.length}`;
     const join = (a: string, b: string): string => (a && b ? `${a} ${b}` : a || b);
+    // The ladder falls back through the *structural* view, not through a
+    // narrower view of the fired loop: dropping `↻ validate` straight to a
+    // bare `↻` would make a fired loop say less than the `↻ ×3` it replaced.
     const forms = [
       join(named(LOOP_OUT, targets), named(LOOP_IN, sources)),
-      join(counted(LOOP_OUT, targets), counted(LOOP_IN, sources)),
-      `${targets.length > 0 ? LOOP_OUT : ''}${sources.length > 0 ? LOOP_IN : ''}`,
+      join(counted(LOOP_OUT, allTargets), counted(LOOP_IN, allSources)),
+      `${allTargets.length > 0 ? LOOP_OUT : ''}${allSources.length > 0 ? LOOP_IN : ''}`,
     ];
     marks.set(id, {
       forms: forms.filter((f, i) => f.length > 0 && forms.indexOf(f) === i),

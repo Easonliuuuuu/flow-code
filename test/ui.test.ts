@@ -733,13 +733,18 @@ function renderText(
 }
 
 describe('loop-back rendering', () => {
-  it('lays out identically with and without a loop-back', () => {
+  it('leaves layer assignment and row order untouched by a loop-back', () => {
     const looped = computeLayout(LOOP_WF);
     const forward = computeLayout(FORWARD_WF);
     for (const id of ['impl', 'check']) {
-      expect(looped.boxes.get(id)!.x).toBe(forward.boxes.get(id)!.x);
-      expect(looped.boxes.get(id)!.y).toBe(forward.boxes.get(id)!.y);
+      // A loop-back never participates in layering, so neither the layer a
+      // node lands in nor its row within that layer can move. Its badge does
+      // claim columns on the two cards it touches, so width — and therefore
+      // the x of everything downstream — is allowed to differ; here the
+      // MIN_BOX_CONTENT floor absorbs it and nothing shifts at all.
       expect(looped.boxes.get(id)!.layer).toBe(forward.boxes.get(id)!.layer);
+      expect(looped.boxes.get(id)!.y).toBe(forward.boxes.get(id)!.y);
+      expect(looped.boxes.get(id)!.x).toBe(forward.boxes.get(id)!.x);
     }
   });
 
@@ -867,6 +872,40 @@ describe('loop-back rendering', () => {
       .flatMap((row) => row.slice(box.x, box.x + box.w))
       .find((c) => c.ch === '↺');
     expect(badge?.style).toBe('loopback');
+  });
+
+  it('names the loop that fired instead of counting, without relying on colour', () => {
+    const store = storeFor(FAN_WF, '/tmp');
+    const layout = computeLayout(FAN_WF);
+    // Before: three-way ambiguity on impl's badge, resolvable only by reading
+    // which source's badge is brighter.
+    const before = renderGraph(FAN_WF, layout, store.snapshot(), null);
+    expect(card(FAN_WF, layout, before, 'impl')).toContain('↻ ×2');
+
+    store.setStatus('check', 'error', 'Validate verdict: fail');
+    store.resetNode('check');
+    store.resetNode('impl');
+    const after = renderGraph(FAN_WF, layout, store.snapshot(), null);
+    // After: the badge text itself says which loop moved the run backwards,
+    // so stripping every escape sequence still answers it.
+    const implCard = card(FAN_WF, layout, after, 'impl');
+    expect(implCard).toContain('↻ check');
+    expect(implCard).not.toContain('↻ ×2');
+    // review's loop did not fire, so it is not the one being named.
+    expect(implCard).not.toContain('review');
+  });
+
+  it('falls back through the count, not past it, when the fired name will not fit', () => {
+    const store = storeFor(FAN_WF, '/tmp');
+    store.setStatus('check', 'error', 'Validate verdict: fail');
+    store.resetNode('check');
+    store.resetNode('impl');
+    // Compact never draws the named form, so this is the rung below it: a
+    // fired loop must still report the structural count rather than dropping
+    // to a bare glyph, which would say less than the `↻ ×2` it replaced.
+    const layout = computeLayout(FAN_WF, undefined, { density: 'compact' });
+    const grid = renderGraph(FAN_WF, layout, store.snapshot(), null);
+    expect(card(FAN_WF, layout, grid, 'impl')).toContain('↻ ×2');
   });
 
   it('shows no attempt badge on a first attempt', () => {

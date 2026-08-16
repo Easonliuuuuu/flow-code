@@ -7,7 +7,7 @@ Defines the terminal canvas that renders the workflow graph live during a run: n
 ## Requirements
 
 ### Requirement: Live graph rendering
-The system SHALL render the loaded workflow graph as boxes connected by edges in the terminal, updating each node's visual status (`idle`, `running`, `waiting`, `done`, `error`, `skipped`) as execution status events arrive. Loop-back edges SHALL be rendered as visually distinct return paths, and a node that has run more than once SHALL show how many attempts it has taken.
+The system SHALL render the loaded workflow graph as boxes connected by edges in the terminal, updating each node's visual status (`idle`, `running`, `waiting`, `done`, `error`, `skipped`) as execution status events arrive. Loop-back edges SHALL be rendered on the cards they connect rather than as drawn paths, and a node that has run more than once SHALL show how many attempts it has taken.
 
 #### Scenario: Node status changes during a run
 - **WHEN** a node transitions from `running` to `done` during execution
@@ -17,9 +17,23 @@ The system SHALL render the loaded workflow graph as boxes connected by edges in
 - **WHEN** nodes are set to `skipped` because an upstream node errored or an upstream gate was rejected
 - **THEN** the UI SHALL render them distinctly from `idle` nodes, so the user can tell "will not run" from "not yet started"
 
-#### Scenario: Loop-back edges are distinguishable from forward edges
+#### Scenario: Loop-back edges are carried by the cards, not drawn between them
 - **WHEN** the workflow declares a loop-back edge
-- **THEN** the UI SHALL render it as a return path that is visually distinguishable from a forward edge, and SHALL route it so it does not overlap the forward edges between the same two nodes
+- **THEN** the UI SHALL badge both of the nodes it connects, distinctly from any forward-edge rendering, and SHALL NOT draw a path between them
+- **AND** the graph SHALL occupy the same rows it would if that loop-back were not declared, however many loop-backs the workflow declares
+
+A loop-back is a long-range backward edge in a left-to-right layout, so drawing one means a run spanning most of the canvas plus risers crossing whatever lies between. That cost is paid per loop-back and grows with the graph, which is what made a workflow unreadable as its node count rose. Naming the node at the other end carries the same information at no spatial cost: the badge is read rather than traced.
+
+#### Scenario: A loop-back badge names the node at its other end
+- **WHEN** a node is one end of exactly one loop-back
+- **THEN** its badge SHALL name the node at the other end, and SHALL distinguish the direction the loop runs
+- **WHEN** a node is an end of several loop-backs and none has fired
+- **THEN** its badge MAY give their number in place of their names, which no card is wide enough to hold
+
+#### Scenario: A loop-back badge degrades before it truncates a node's identity
+- **WHEN** a card is too narrow to render a node's loop-back badge in full
+- **THEN** the UI SHALL fall back to a shorter form of the badge
+- **AND** the node's own identity SHALL NOT lose room to the badge at any card density
 
 #### Scenario: A node re-run by a loop-back shows its attempt count
 - **WHEN** a node has been executed more than once because of a loop-back
@@ -32,6 +46,13 @@ The system SHALL render the loaded workflow graph as boxes connected by edges in
 #### Scenario: The active loop is identifiable
 - **WHEN** a loop-back fires
 - **THEN** the UI SHALL indicate which loop-back edge fired and which node triggered it, so the user can tell why execution moved backwards
+- **AND** it SHALL do so in the badge's text rather than by colour alone, so the answer survives a washed-out terminal theme and a reader who cannot separate the two shades
+- **WHEN** a node is the target of several loop-backs and one of them fires
+- **THEN** its badge SHALL name that loop's source in place of counting them all, because which loop moved the run backwards is what a count hides
+
+#### Scenario: Focus identifies a loop's other end without drawing it
+- **WHEN** focus rests on a node that is an end of a loop-back
+- **THEN** the UI SHALL distinguish the badge on the node at the other end from the badges of nodes not on that loop, so the loop's reach is identifiable without a drawn path
 
 ### Requirement: Keyboard-first navigation
 The system SHALL support navigating between nodes and performing all node interactions (expand, approve, reject, choose the node's model) via keyboard alone, independent of mouse support.
@@ -118,7 +139,10 @@ The system SHALL arrange nodes automatically in a left-to-right layout derived f
 
 #### Scenario: Loop-back edges do not distort the layout
 - **WHEN** a workflow declares a loop-back edge from a node to one of its ancestors
-- **THEN** layer assignment SHALL be computed over the forward edges alone, so the presence of the loop-back does not change where any node is placed
+- **THEN** layer assignment SHALL be computed over the forward edges alone, so the presence of the loop-back changes neither the layer any node lands in nor its order within that layer
+- **AND** the loop-back SHALL claim no rows of its own, however many the workflow declares
+
+A loop-back's badge does occupy columns on the two cards it touches, which can widen them — that is a card-sizing effect, not a layout one, and it is bounded by the badge rather than growing with the graph. Layer assignment, ordering, and the graph's height are all untouched by a loop-back's presence.
 
 ### Requirement: Attempt history in the node detail view
 A node's detail view SHALL surface its attempt history when it has run more than once, so the user can compare what changed between attempts without leaving the UI.

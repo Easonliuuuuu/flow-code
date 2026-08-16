@@ -870,11 +870,18 @@ export function App({
     if (!focusedId) return [];
     return workflow.graph.allLoopbacks().flatMap((loop) => {
       const cap = loop.maxAttempts ? ` (max ${loop.maxAttempts})` : '';
-      if (loop.from === focusedId) return [`↺ returns to ${loop.to}${cap}`];
-      if (loop.to === focusedId) return [`↻ returns from ${loop.from}${cap}`];
+      // The badge names the one loop that fired; when several have, only this
+      // list can say which — so each one says so on its own row.
+      const fired =
+        (runState.nodes[loop.to]?.attempt ?? 1) > 1 &&
+        (runState.nodes[loop.from]?.priorAttempts?.length ?? 0) > 0
+          ? ' — fired'
+          : '';
+      if (loop.from === focusedId) return [`↺ returns to ${loop.to}${cap}${fired}`];
+      if (loop.to === focusedId) return [`↻ returns from ${loop.from}${cap}${fired}`];
       return [];
     });
-  }, [workflow, focusedId]);
+  }, [workflow, focusedId, runState]);
 
   // Wrapped transcript rows for the Discuss panel, and the scrollback window
   // into them (see tailWindow's doc comment for the follow/pin model).
