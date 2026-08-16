@@ -101,8 +101,12 @@ export const executeDiscuss: NodeExecutor = async function* (ctx) {
     const OPTIONS_PROTOCOL =
       ' When a question boils down to a short list of natural choices, offer them as tappable' +
       ' options: end that reply with a line reading exactly "<<<OPTIONS", then a JSON array of' +
-      ' 2-5 short option strings, then a line reading exactly ">>>", and nothing after it. Use this' +
-      ' only for genuine multiple-choice moments — open-ended questions should stay plain text.';
+      ' 2-5 short option strings, then a line reading exactly ">>>", and nothing after it. The' +
+      ' array must be valid JSON: escape any double quote inside an option (\\") rather than' +
+      ' writing it literally, or rephrase the option with single quotes to avoid the problem' +
+      ' entirely — a parse failure shows the raw block to the user instead of tappable choices.' +
+      ' Use this only for genuine multiple-choice moments — open-ended questions should stay' +
+      ' plain text.';
 
     if (!resuming) {
       const opening =
