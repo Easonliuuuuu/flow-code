@@ -575,7 +575,7 @@ edges:
     })
       .join('\n')
       .replace(/\x1b\[[0-9;]*m/g, '');
-    expect(after).toContain('↻2');
+    expect(after).toContain('↻ 2');
     expect(after).not.toContain('opus');
   });
 });
@@ -925,7 +925,7 @@ describe('loop-back rendering', () => {
     const grid = renderGraph(LOOP_WF, layout, store.snapshot(), null);
     const text = grid.map((row) => row.map((c) => c.ch).join('')).join('\n');
     // The attempt count is the record that it fired — no label row needed.
-    expect(text).toContain('↻2');
+    expect(text).toContain('↻ 2');
     // A fired loop outranks focus: both its badges read as fired, unfocused.
     const styles = new Set(grid.flat().map((c) => c.style));
     expect(styles.has('loopback-fired')).toBe(true);
