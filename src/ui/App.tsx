@@ -22,7 +22,14 @@ import {
   STATUS_GLYPHS,
   STATUS_ORDER,
 } from './canvas.js';
-import { ellipsis, formatDuration, formatTokens, spinnerFrame, totalTokens } from './nodeCard.js';
+import {
+  ellipsis,
+  formatDuration,
+  formatTokens,
+  outputDetailLines,
+  spinnerFrame,
+  totalTokens,
+} from './nodeCard.js';
 import { rateLimitSegments, type RateLimitTone } from './rateLimit.js';
 import { agentLabelsFor, formatActivityRow, needsAttribution } from './activityRow.js';
 import {
@@ -927,14 +934,26 @@ export function App({
   // mutates outside React state, so it has to be re-read on every render —
   // keying a memo to `frame` would only pick up new output on the next
   // animation tick instead of the render that actually revealed the panel.
+  //
+  // A node whose entire reply is a JSON object (spec, validate, review, and a
+  // discussion's closing turn) streamed that JSON live as its transcript —
+  // there is no prose to separate it from. Once the node is done and that
+  // JSON has parsed into `output`, the formatted breakdown replaces the raw
+  // blob rather than sitting below it; the parsed fields are strictly more
+  // readable than the text they came from, so keeping both is only clutter.
+  const nodePanelDetail = focusedNode
+    ? outputDetailLines(focusedNode, runState.nodes[focusedNode.id]?.output ?? null)
+    : null;
   const nodePanelLive = focusedNode ? store.liveOutputFor(focusedNode.id) : '';
   const nodePanelLiveLines =
-    nodePanelLive.length > 0
-      ? nodePanelLive
-          .trimEnd()
-          .split('\n')
-          .flatMap((line) => wrapText(line.replace(/\t/g, '    '), nodePanelOutputWidth))
-      : [];
+    nodePanelDetail !== null
+      ? nodePanelDetail.flatMap((line) => wrapText(line, nodePanelOutputWidth))
+      : nodePanelLive.length > 0
+        ? nodePanelLive
+            .trimEnd()
+            .split('\n')
+            .flatMap((line) => wrapText(line.replace(/\t/g, '    '), nodePanelOutputWidth))
+        : [];
   // Rows left for output + activity: the panel minus its borders, title,
   // config line, activity separator and footer — mirrors the panel render's
   // own bodyBudget math (kept in sync there rather than shared, since the
