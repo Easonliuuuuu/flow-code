@@ -35,7 +35,8 @@ wrong-typed field fails the load rather than being silently dropped.
 
 ## Edges
 
-An edge declares structure, never behavior:
+An edge routes, it does not judge — it says where the run goes, never whether a
+node succeeded:
 
 ```yaml
 edges:
