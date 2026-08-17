@@ -2053,8 +2053,8 @@ export function App({
                 <Text color="cyan">esc</Text>
                 <Text dimColor>
                   {inputBuffer.length > 0
-                    ? ': clear draft — /done to finish the discussion'
-                    : ' or /done: finish the discussion and continue the workflow'}
+                    ? ': clear draft · /done: finish the discussion'
+                    : ' or /done: finish the discussion'}
                 </Text>
               </Text>
             </Box>
@@ -2063,13 +2063,17 @@ export function App({
               {spinnerFrame(frame)} agent is thinking{ellipsis(frame)}
             </Text>
           )}
+          {/* No escape hint down here: the row above the caret already carries
+              it, and saying it twice costs a transcript row the docked panel
+              cannot spare (MIN_PANEL_HEIGHT is 8, and options eat a row each).
+              The footer keeps what the input area does not mention. */}
           <PanelFooter
             hint={
               !discussState.awaitingUser
                 ? 'tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
                 : discussState.options && discussState.options.length > 0
-                  ? '↑/↓: choose · enter: select · type: custom answer · esc: finish discussion'
-                  : 'enter: send · esc: finish discussion · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+                  ? '↑/↓: choose · enter: select · type: custom answer · tab: other nodes'
+                  : 'enter: send · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
             }
           />
         </Box>
