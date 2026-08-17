@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 318/324` tasks across 8 change(s)
+`██████████ 321/324` tasks across 8 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -19,11 +19,11 @@ flatter you.
 | Change | State | Tasks |
 | --- | --- | --- |
 | `agent-generated-graphs` | active | █████████░ 41/44 |
-| `route-rejected-gate-to-revision` | active | █████████░ 36/39 |
 | `2026-08-02-add-core-workflow-engine` | archived | ██████████ 65/65 |
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
 | `2026-08-02-add-per-node-model-picker` | archived | ██████████ 25/25 |
+| `2026-08-17-route-rejected-gate-to-revision` | archived | ██████████ 39/39 |
 
 ### BR-09 — A run is legible without reading a transcript
 
@@ -121,4 +121,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-11 archived change(s), 366 tasks. 17 modules under `src/`, 13 capability specs.
+12 archived change(s), 405 tasks. 17 modules under `src/`, 13 capability specs.
