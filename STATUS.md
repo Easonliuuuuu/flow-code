@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 321/324` tasks across 8 change(s)
+`██████████ 367/370` tasks across 10 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -23,6 +23,8 @@ flatter you.
 | `2026-08-02-add-iterative-control-flow` | archived | ██████████ 42/42 |
 | `2026-08-02-add-nvidia-session-runner` | archived | ██████████ 27/27 |
 | `2026-08-02-add-per-node-model-picker` | archived | ██████████ 25/25 |
+| `2026-08-10-add-per-task-workflow-graphs` | archived | ██████████ 34/34 |
+| `2026-08-17-correct-edge-routing-requirement` | archived | ██████████ 12/12 |
 | `2026-08-17-route-rejected-gate-to-revision` | archived | ██████████ 39/39 |
 
 ### BR-09 — A run is legible without reading a transcript
@@ -42,7 +44,7 @@ _No OpenSpec change serves this yet._
 
 ## M1 — Ship-ready
 
-`██████████ 13/13` tasks across 1 change(s)
+`██████████ 29/29` tasks across 2 change(s)
 
 ### BR-01 — A stranger succeeds on their first run
 
@@ -55,6 +57,7 @@ _No OpenSpec change serves this yet._
 | Change | State | Tasks |
 | --- | --- | --- |
 | `2026-08-08-wire-up-cicd-and-readme` | archived | ██████████ 13/13 |
+| `2026-08-17-flag-unattributed-archives` | archived | ██████████ 16/16 |
 
 ## M2 — Driver mode is trustworthy
 
@@ -121,4 +124,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-12 archived change(s), 405 tasks. 17 modules under `src/`, 13 capability specs.
+14 archived change(s), 433 tasks. 17 modules under `src/`, 13 capability specs.
