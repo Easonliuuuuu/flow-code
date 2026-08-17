@@ -63,6 +63,7 @@ function sections(watch: boolean): HelpSection[] {
       bindings: [
         ['a / r', 'approval gate: approve / reject'],
         ['↑↓, enter', 'discussion: pick an offered answer — or just type one'],
+        ['esc, /done', 'discussion: finish it — the agent writes up what was agreed'],
         ['space, a, d', 'test commands: select · add one · let flow-code find them'],
         ['space, enter', 'convergence: select branches · confirm'],
       ],
