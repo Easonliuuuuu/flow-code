@@ -54,6 +54,7 @@ scopes:
   runstate: [run-state]
   connect: [session-status-line]
   status: [project-documentation]   # scripts/status.mjs and the STATUS.md rollup
+  guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
@@ -75,6 +76,7 @@ modules:
   init: [workflow-graph, test-command-discovery]
   presets: [workflow-graph]
   runstate: [run-state]
+  guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
 
 # Which BR each capability serves — the BR -> ER edge. Exactly one BR per
 # capability (a strict tree, not many-to-many): if a capability's own purpose
@@ -126,6 +128,15 @@ capabilities:
   ci-pipeline: BR-02
   project-documentation: BR-02
   mcp-driver-connector: BR-06
+  # The guest surface, landed by add-guest-mode-reporter. Four capabilities
+  # rather than one because they are independently true: reporting is a
+  # contract an outside process writes against, instructions are what that
+  # process is told, enforcement is what holds regardless of what it was told,
+  # and reconciliation is the check that none of the first three are lying.
+  guest-run-reporting: BR-06
+  guest-agent-instructions: BR-06
+  host-session-harness: BR-06
+  run-state-reconciliation: BR-06
   # Reading a live run from a process that is not driving it — BR-03's outcome,
   # not BR-09's. terminal-canvas-ui keeps "legible on one screen"; this owns
   # "visible from somewhere flow-code does not own."
@@ -154,23 +165,6 @@ changes:
       an expansion have no dedicated tests, and none of this has been driven
       by hand in a real terminal against a real agent session.
 
-  add-guest-mode-reporter:
-    br: BR-06
-    note: >-
-      Unparked: the M2 blocker was specifically that guest mode adds a second
-      producer of run-state, and `add-run-state-ownership` closed that — a run
-      document now records its owner and refuses a second writer, which is what
-      the guest writer needed to exist safely. Delivered in three parts, two of
-      them done. Reporting (`guest-run-reporting`, `guest-agent-instructions`):
-      an outside agent walks the graph and every transition is validated
-      against it. Enforcement (`host-session-harness`): a PreToolUse hook
-      applies the current node's capability set to the host session through the
-      same policy function the engine uses, fails closed, and a run claims the
-      `hooks` tier only while a heartbeat the hook wrote is fresh.
-      Reconciliation (`run-state-reconciliation`): `flow-code reconcile` asks
-      the tree whether a run's claims are true, read-only and advisory, with
-      findings beside the run document rather than in it. All 54 tasks are
-      complete; ready to archive once the last PR merges.
   add-mcp-driver-connector:
     br: BR-06
     status: parked
@@ -227,6 +221,12 @@ archived:
   # now fails the check instead of vanishing from its BR table. It caught
   # add-per-task-workflow-graphs on its first run, unattributed since 2026-08-10.
   2026-08-17-flag-unattributed-archives: BR-02
+  # The guest surface in three parts: reporting (guest-run-reporting,
+  # guest-agent-instructions), enforcement (host-session-harness), and
+  # reconciliation (run-state-reconciliation). Unparked once
+  # add-run-state-ownership gave a run document one owner, which is what a
+  # second writer needed to exist safely. Closes GAP-13 and GAP-14.
+  2026-08-17-add-guest-mode-reporter: BR-06
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
@@ -244,33 +244,6 @@ registered_gaps:
       left open on purpose: still nothing describes how `watch` attaches, pins
       to a run id, refuses writes, or reports liveness.
     tracked_by: BR-03
-
-  - id: GAP-13
-    kind: module
-    subject: guest
-    reason: >-
-      `src/guest/` ships the surface an outside agent drives the graph through —
-      the writer, the transition validator, the generated instructions, the MCP
-      server, the host-session enforcement layer, and the reconciliation check.
-      It is specified, in
-      `add-guest-mode-reporter`'s `guest-run-reporting`,
-      `guest-agent-instructions`, `host-session-harness` and
-      `run-state-reconciliation` deltas, and every
-      requirement in all four is delivered; those specs are simply not in
-      `openspec/specs/` yet because the change has not been archived. Exactly
-      the shape GAP-02/05 had while
-      `src/runstate/` waited for the `run-state` spec to land, and it closes the
-      same way: when the change archives and its deltas sync.
-    tracked_by: BR-06
-
-  - id: GAP-14
-    kind: scope
-    subject: guest
-    reason: >-
-      The commit scope for the same code, open for the same reason and closing
-      at the same moment as GAP-13. Registered separately because the check
-      walks scopes and modules independently.
-    tracked_by: BR-06
 
   - id: GAP-06
     kind: scope

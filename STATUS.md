@@ -90,12 +90,12 @@ _No OpenSpec change serves this yet._
 
 ### BR-06 — An external agent can drive the graph
 
-**Capabilities:** `mcp-driver-connector`
+**Capabilities:** `guest-agent-instructions`, `guest-run-reporting`, `host-session-harness`, `mcp-driver-connector`, `run-state-reconciliation`
 
 | Change | State | Tasks |
 | --- | --- | --- |
-| `add-guest-mode-reporter` | active | ██████████ 54/54 |
 | `add-mcp-driver-connector` | parked | ░░░░░░░░░░ 0/24 |
+| `2026-08-17-add-guest-mode-reporter` | archived | ██████████ 54/54 |
 
 ## Parked
 
@@ -106,7 +106,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 7 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 5 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -115,8 +115,6 @@ Known debt, already decided about. Green on purpose — but still debt.
 | Gap | Subject | Tracked by |
 | --- | --- | --- |
 | GAP-01 | scope `watch` | BR-03 |
-| GAP-13 | module `guest` | BR-06 |
-| GAP-14 | scope `guest` | BR-06 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
 | GAP-12 | scope `testbed` | closed — non-issue |
 | GAP-10 | br `BR-01` | inbox |
@@ -124,4 +122,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-14 archived change(s), 433 tasks. 17 modules under `src/`, 13 capability specs.
+15 archived change(s), 487 tasks. 17 modules under `src/`, 17 capability specs.
