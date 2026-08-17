@@ -191,8 +191,12 @@ Every node execution SHALL emit a stream of status events drawn from `idle`, `ru
 - **THEN** the system SHALL emit an `error` status event, halt that node, and SHALL NOT start downstream nodes that depend on it
 
 #### Scenario: Downstream of a halted node
-- **WHEN** a node reaches `error` or its upstream Approval-Gate is rejected
+- **WHEN** a node reaches `error`
 - **THEN** every node downstream of it SHALL be set to `skipped` rather than left in `idle`, so the UI can distinguish "will not run" from "not yet started"
+
+#### Scenario: Downstream of a rejected gate
+- **WHEN** an Approval-Gate is rejected
+- **THEN** every node reachable only through an edge whose condition requires approval SHALL be set to `skipped` by condition evaluation rather than by the failure cascade, and the gate itself SHALL remain `done`
 
 ### Requirement: Serialized execution on the shared working tree
 Nodes that operate on the repository's main working tree SHALL run one at a time. Concurrent execution SHALL be permitted only between Worktree-Agent instances, each of which owns an isolated working directory.
@@ -232,7 +236,9 @@ The Discuss node type SHALL open an interactive sub-panel for direct back-and-fo
 - **THEN** the running node SHALL be allowed to run to completion, and no additional node SHALL be started until the discussion is signalled complete
 
 ### Requirement: Loop-back re-execution
-When a node fails and a loop-back edge declares that node as its source, the system SHALL reset the loop-back target and every node on a path from that target to the source, then re-execute that segment rather than terminating the run.
+When a node ends in the way a loop-back edge declaring it as its source is taken on, the system SHALL reset the loop-back target and every node on a path from that target to the source, then re-execute that segment rather than terminating the run. A rejected Approval-Gate SHALL count as a failure for this purpose even though its terminal status is `done`.
+
+Resetting a segment SHALL also return to `idle` every node below the loop-back target that was skipped because a routing condition sent the run elsewhere, since the segment being re-run is what decided that routing. A node skipped because something above it failed SHALL stay skipped.
 
 #### Scenario: A failed verification returns to implementation
 - **WHEN** a Validate node fails and a loop-back edge is declared from that Validate node to an upstream Implement node
@@ -252,7 +258,26 @@ When a node fails and a loop-back edge declares that node as its source, the sys
 
 #### Scenario: Loop-back after a rejected gate
 - **WHEN** an Approval-Gate is rejected and a loop-back edge declares that gate as its source
-- **THEN** the system SHALL reset and re-run the loop-back segment instead of marking the downstream nodes `skipped`
+- **THEN** the system SHALL reset and re-run the loop-back segment, and SHALL NOT additionally mark the nodes downstream of the gate `skipped` through the failure cascade
+
+#### Scenario: A branch routed around is reconsidered by the retry
+- **WHEN** a loop-back re-runs a segment, and a node below the loop-back target had been skipped because a condition reading that segment did not hold
+- **THEN** that node SHALL return to `idle` and be decided again on the new pass, so the re-run has somewhere to deliver its work
+
+### Requirement: A re-entered interactive node is told why it is running again
+When an interactive node is reset and re-executed by a loop-back, the system SHALL deliver that node's upstream context — including the retry reason — to its agent before handing control back to the user. Resuming a prior conversation SHALL NOT suppress that delivery.
+
+#### Scenario: A Discuss node re-entered by a loop-back
+- **WHEN** a Discuss node is reset by a loop-back and re-executed while a prior transcript and session for that node still exist
+- **THEN** the system SHALL deliver the retry reason and the recorded outputs of that node's upstream dependencies into the resumed session before waiting for the user's next message
+
+#### Scenario: A conversation interrupted rather than looped back
+- **WHEN** a Discuss node resumes a conversation that was cut short by an interruption, with no retry reason recorded for it
+- **THEN** the system SHALL replay the prior transcript and wait for the user without re-sending an opening prompt
+
+#### Scenario: Repeated re-entry
+- **WHEN** an interactive node is re-entered by a loop-back for a second or later time
+- **THEN** it SHALL receive the upstream context recorded for that attempt, and SHALL NOT continue on the context of an earlier attempt
 
 ### Requirement: Bounded loop attempts
 Every loop-back SHALL be bounded by a maximum attempt count, and the run SHALL terminate rather than loop indefinitely when that bound is reached.

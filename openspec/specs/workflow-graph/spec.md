@@ -19,9 +19,9 @@ The system SHALL provide an `init` command that scaffolds a default workflow def
 - **WHEN** the scaffolded default workflow is loaded
 - **THEN** the graph SHALL contain loop-back edges from Test, Validate, and Review back to Implement with a bounded attempt count, so a failing check returns to Implement with the failure as context instead of ending the run
 
-#### Scenario: Default graph does not retry a rejected gate
+#### Scenario: Default graph stops on a rejected gate
 - **WHEN** the scaffolded default workflow is loaded
-- **THEN** the Approval-Gate node SHALL have no loop-back edge, because a rejection is a user decision to stop rather than a failure to retry
+- **THEN** the Approval-Gate node SHALL have no loop-back edge and no rejection branch, so a rejection ends the run by default; the file SHALL document, without enabling, how to route a rejection to a revision step instead
 
 #### Scenario: Init in a repo that already has a workflow file
 - **WHEN** the user runs `flow-code init` in a repo that already has `.flow-code/workflow.yaml`
@@ -86,6 +86,44 @@ Edges in the workflow file SHALL declare only graph structure: `from`, `to`, and
 #### Scenario: An edge cannot decide success or failure
 - **WHEN** an edge attempts to declare a condition, predicate, or verdict governing whether its source node succeeded
 - **THEN** the system SHALL fail before starting execution, because that determination belongs to the node type
+
+### Requirement: Unconditional edges out of an Approval-Gate are conditioned on approval
+When a workflow declares a forward edge whose source is an Approval-Gate and which states no condition, the system SHALL evaluate that edge as though it required the gate's decision to be `approved`. The workflow file on disk SHALL NOT be rewritten, and an edge that states its own condition SHALL be left exactly as written.
+
+#### Scenario: An existing workflow with an unconditional gate edge
+- **WHEN** a workflow declares `gate → git-ops` with no condition and the gate is rejected
+- **THEN** the system SHALL skip `git-ops`, so a workflow written before rejection branches existed retains its original behavior with no edit
+
+#### Scenario: An explicitly conditioned edge is untouched
+- **WHEN** a workflow declares an edge out of an Approval-Gate that states its own condition
+- **THEN** the system SHALL evaluate exactly the stated condition and SHALL NOT add or replace one
+
+#### Scenario: Edges out of other node types are unaffected
+- **WHEN** a workflow declares an unconditional forward edge whose source is not an Approval-Gate
+- **THEN** the system SHALL evaluate it as unconditional
+
+#### Scenario: A loop-back out of a gate carries no condition
+- **WHEN** a workflow declares a loop-back edge whose source is an Approval-Gate
+- **THEN** the system SHALL NOT attach a condition to it, because a loop-back is a return path taken on how its source ended rather than a routed forward edge
+
+### Requirement: A loop-back declares which outcome takes it
+A loop-back edge SHALL declare whether it is taken when its source fails or when its source completes, defaulting to failure. Whether a node succeeded or failed SHALL remain the node type's call; the edge only says where each outcome routes.
+
+#### Scenario: The default is failure
+- **WHEN** a workflow declares a loop-back without stating which outcome takes it
+- **THEN** the system SHALL take that path only when the source fails, so an existing workflow behaves exactly as it did before the option existed
+
+#### Scenario: A revision step returns on completion
+- **WHEN** a loop-back declares that it is taken on success and its source completes
+- **THEN** the system SHALL reset and re-run the loop-back segment, carrying the source's recorded output as the reason for the retry
+
+#### Scenario: A success-triggered path ignores a failed source
+- **WHEN** a loop-back declares that it is taken on success and its source fails
+- **THEN** the system SHALL NOT take that path, and the failure SHALL be treated as any other failed node
+
+#### Scenario: The attempt bound is shared across triggers
+- **WHEN** several loop-backs point at the same target with different triggers
+- **THEN** the target's attempt bound SHALL be counted once across all of them, so a loop that never converges still terminates
 
 ### Requirement: Built-in node type registry
 The system SHALL expose a registry of built-in node types (Discuss, Implement, Test, Validate, Review, Git-ops, Worktree-Agent, Approval-Gate). Each type SHALL be defined by a capability set, a default role prompt, an output schema, and whether the type is interactive, in addition to its config schema. A type MAY additionally declare that it is context-transparent and MAY declare a failure predicate over its own output.

@@ -14,8 +14,12 @@ The system SHALL render the loaded workflow graph as boxes connected by edges in
 - **THEN** the terminal UI SHALL update that node's rendered status within one render cycle without requiring a manual refresh
 
 #### Scenario: Skipped nodes are visually distinct
-- **WHEN** nodes are set to `skipped` because an upstream node errored or an upstream gate was rejected
+- **WHEN** nodes are set to `skipped` because an upstream node errored, or because an edge condition that guards them did not hold
 - **THEN** the UI SHALL render them distinctly from `idle` nodes, so the user can tell "will not run" from "not yet started"
+
+#### Scenario: A rejected gate does not read as a success
+- **WHEN** an Approval-Gate reaches `done` with a recorded decision of `rejected`
+- **THEN** the UI SHALL render it distinctly from an approved gate, so its terminal status alone does not present the rejection as a successful outcome
 
 #### Scenario: Loop-back edges are carried by the cards, not drawn between them
 - **WHEN** the workflow declares a loop-back edge

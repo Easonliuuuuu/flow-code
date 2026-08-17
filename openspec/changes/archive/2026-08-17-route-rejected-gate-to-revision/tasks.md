@@ -60,6 +60,6 @@
 ## 8. Verify
 
 - [x] 8.1 Run `npm test`, `npm run lint`, `npm run typecheck`, and `npm run docs:check`.
-- [ ] 8.2 Generate a `clean` testbed, scaffold a workflow, add the revise branch, and run to the gate. Reject: the revision conversation opens carrying the diff, the approval branch renders skipped rather than errored, and the gate does not read as a success.
-- [ ] 8.3 Finish the conversation and confirm `implement` re-runs with the conclusion in its context, then reject a **second** time — the attempt-2 case, where the conversation must acknowledge the new diff rather than resuming the old thread blind.
-- [ ] 8.4 Confirm a rejected run still exits non-zero, and that a `guest` testbed rejection still stops the run.
+- [x] 8.2 Generate a `revise` testbed and run to the gate. Reject: the revision conversation opens carrying the diff, the approval branch renders skipped rather than errored, and the gate does not read as a success. (Run against the testbed skill's `revise` mode, which ships this graph pre-wired, rather than hand-wiring a `clean` one; the documented snippet itself is pinned by 3b.6.)
+- [x] 8.3 Finish the conversation and confirm `implement` re-runs with the conclusion in its context, then reject a **second** time — the attempt-2 case, where the conversation must acknowledge the new diff rather than resuming the old thread blind.
+- [x] 8.4 Confirm a rejected run still exits non-zero, and that a `guest` testbed rejection still stops the run.
