@@ -99,11 +99,12 @@ const loopbackSchema = z.preprocess(
 );
 
 /**
- * Edges declare structure, never behavior: `from` and `to`, plus — for a
- * loop-back — that the edge is a return path, how many attempts it allows, and
- * which outcome takes it. Whether a node succeeded or failed is still the node
- * type's call; a loop-back edge only says where each outcome routes. Enforced
- * by strictObject.
+ * Edges route, they do not judge. An edge says where the run goes — `from`,
+ * `to`, a `when` condition guarding whether it carries, and — for a loop-back
+ * — that the edge is a return path, how many attempts it allows, and which
+ * outcome takes it. What it cannot say is whether the node it leaves
+ * succeeded: that is the node type's call, and a routing condition reads that
+ * verdict rather than setting it. Enforced by strictObject.
  */
 export const edgeSchema = z.strictObject({
   from: z.string().min(1),
