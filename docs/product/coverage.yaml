@@ -53,6 +53,7 @@ scopes:
   record: [run-state, workflow-graph]
   runstate: [run-state]
   connect: [session-status-line]
+  status: [project-documentation]   # scripts/status.mjs and the STATUS.md rollup
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
@@ -153,15 +154,6 @@ changes:
       an expansion have no dedicated tests, and none of this has been driven
       by hand in a real terminal against a real agent session.
 
-  add-per-task-workflow-graphs:
-    br: BR-08
-    note: >-
-      The follow-on: readers use the recorded graph, and a file can declare
-      several named shapes a run selects among. Attributed to BR-08 — most of
-      it is the graph and how a run picks one — though the `watch` half also
-      serves BR-03. Blocked on one open decision recorded in its proposal: how
-      the UI receives a workflow it only learns on attaching to a run.
-
   add-guest-mode-reporter:
     br: BR-06
     note: >-
@@ -190,7 +182,13 @@ changes:
       what only it can do — per-node models, worktree fan-out, unattended runs.
 
 # Archived changes, mapped to the BR they closed. Used for the milestone rollup.
-# Unmapped archives are reported, not failed — the ledger postdates them.
+# Every archive must be here. An unmapped one fails the check, because it does
+# not render as a gap — it drops out of its BR table entirely while `Shipped`
+# keeps counting it, so the totals and the tables disagree and nothing says why.
+# Archiving renames the directory, so the usual cause is an entry left behind in
+# `changes:` under the pre-archive name; move it, do not copy it. If an archive
+# ever genuinely cannot be attributed, `registered_gaps` below is the escape
+# hatch — that is a decision to record, not a check to switch off.
 #
 # One BR per change, same as capabilities. Several of these archives predate the
 # roadmap and delivered across more than one requirement; each is attributed to
@@ -212,9 +210,23 @@ archived:
   2026-08-06-node-subagents: BR-07
   2026-08-08-wire-up-cicd-and-readme: BR-02
   2026-08-09-add-workflow-validation-and-recorded-graph: BR-04
+  # Attributed to BR-08 — most of it is the graph and how a run picks one —
+  # though the `watch` half also serves BR-03. This is the archive that proved
+  # the guard: it sat unattributed and invisible in BR-08's table until the
+  # check that flags it was written.
+  2026-08-10-add-per-task-workflow-graphs: BR-08
   2026-08-11-add-session-status-line: BR-03
   2026-08-11-add-run-state-ownership: BR-04
   2026-08-17-route-rejected-gate-to-revision: BR-08
+  # Spec correction, no behaviour change: "Edges carry no behavior" forbade the
+  # `when:` the loader has accepted since edge conditions shipped. The rule was
+  # mis-stated rather than changed — an edge may route, only a node type may
+  # judge — and the second half is untouched.
+  2026-08-17-correct-edge-routing-requirement: BR-08
+  # The guard that makes this map self-enforcing: an archive missing from here
+  # now fails the check instead of vanishing from its BR table. It caught
+  # add-per-task-workflow-graphs on its first run, unattributed since 2026-08-10.
+  2026-08-17-flag-unattributed-archives: BR-02
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.

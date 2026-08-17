@@ -283,6 +283,19 @@ function detectDrift(modules, scopes, changes, archived, milestones) {
   }
 
   for (const change of archived) {
+    // An unattributed archive does not render as a gap — it drops out of its BR
+    // table entirely while `Shipped` keeps counting it, so the totals and the
+    // tables disagree with nothing saying why. Archiving renames the directory,
+    // so the usual cause is an entry left behind in `changes:` under the name
+    // the change had while it was open.
+    if (!change.br) {
+      findings.push({
+        kind: 'archive',
+        subject: change.name,
+        detail:
+          'Archived change serves no business requirement, so it is counted in the totals but absent from every table. Add it to coverage.yaml `archived:` under this dated name — the entry is most likely still in `changes:` under the name it had before archiving.',
+      });
+    }
     if (change.total > 0 && change.done < change.total) {
       findings.push({
         kind: 'archive',
