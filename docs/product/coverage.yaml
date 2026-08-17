@@ -179,23 +179,6 @@ changes:
       the tree whether a run's claims are true, read-only and advisory, with
       findings beside the run document rather than in it. All 54 tasks are
       complete; ready to archive once the last PR merges.
-  route-rejected-gate-to-revision:
-    br: BR-08
-    note: >-
-      A rejected gate was a dead end: it failed the node, cascade-skipped
-      everything below it, and carried no reason, so the loop-back the
-      scaffolded workflow already documented could only retry knowing that a
-      human objected. A rejection now completes with its decision recorded, and
-      the branch is held by conditions on the gate's out-edges instead of by a
-      failure — which is what makes it routable, to a conversation that settles
-      what to change and sends that back as the retry's context. Attributed to
-      BR-08 rather than to "nothing escapes the gate" alone: the load-bearing
-      parts are graph-level (a synthesized approved-condition so existing files
-      stay safe unedited, and a loop-back trigger so a step that *completes*
-      can return), which is the seam this file's header already names as where
-      BR-08 would split if it ever needs to. Engine path only; a guest-driven
-      run still records a rejection as a failure and stops there.
-
   add-mcp-driver-connector:
     br: BR-06
     status: parked
@@ -231,6 +214,7 @@ archived:
   2026-08-09-add-workflow-validation-and-recorded-graph: BR-04
   2026-08-11-add-session-status-line: BR-03
   2026-08-11-add-run-state-ownership: BR-04
+  2026-08-17-route-rejected-gate-to-revision: BR-08
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
