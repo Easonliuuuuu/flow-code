@@ -917,7 +917,18 @@ export function App({
       }));
     });
   }, [discussState, discussTranscriptWidth]);
-  const discussWindow = tailWindow(discussRows.length, Math.max(1, panelHeight - 5), discussPin);
+  // Rows the input area claims below the transcript, which the transcript
+  // window has to leave free or the newest message is the thing that gets
+  // clipped: the caret line, the "how to finish" line under it, and one row per
+  // offered option. While the agent is replying it is a single spinner row.
+  const discussInputRows = discussState?.awaitingUser
+    ? 2 + (discussState.options?.length ?? 0)
+    : 1;
+  const discussWindow = tailWindow(
+    discussRows.length,
+    Math.max(1, panelHeight - 4 - discussInputRows),
+    discussPin,
+  );
 
   // Same tail/scroll treatment for the default node panel's two halves —
   // hoisted out of the panel's render (rather than computed inline like the
@@ -2030,6 +2041,22 @@ export function App({
                 {inputBuffer.slice(Math.max(0, inputBuffer.length - discussInputWidth))}
                 <Text inverse> </Text>
               </Text>
+              {/* How to get *out* of a discussion, on its own row directly under
+                  the caret. The footer already says it, but the footer is dim,
+                  truncates first on a narrow panel, and is the last place a
+                  reader looks. A discussion ends only when the user says so, so
+                  the way to say so has to sit where they are typing. The draft
+                  case is spelled out too: with text in the box escape clears the
+                  draft, and a user who pressed it once and saw the panel stay
+                  put has no way to know that was the intent. */}
+              <Text wrap="truncate-end">
+                <Text color="cyan">esc</Text>
+                <Text dimColor>
+                  {inputBuffer.length > 0
+                    ? ': clear draft — /done to finish the discussion'
+                    : ' or /done: finish the discussion and continue the workflow'}
+                </Text>
+              </Text>
             </Box>
           ) : (
             <Text dimColor>
@@ -2038,9 +2065,11 @@ export function App({
           )}
           <PanelFooter
             hint={
-              discussState.awaitingUser && discussState.options && discussState.options.length > 0
-                ? '↑/↓: choose · enter: select · type: custom answer · esc: end'
-                : 'enter: send · esc: end · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+              !discussState.awaitingUser
+                ? 'tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+                : discussState.options && discussState.options.length > 0
+                  ? '↑/↓: choose · enter: select · type: custom answer · esc: finish discussion'
+                  : 'enter: send · esc: finish discussion · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
             }
           />
         </Box>

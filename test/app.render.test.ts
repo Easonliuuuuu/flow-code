@@ -216,6 +216,62 @@ describe('App discuss panel rendering', () => {
     }
   });
 
+  it('says how to end the discussion right under the caret, draft or no draft', async () => {
+    const { ports, stdout, stdin, unmount } = mountDiscussApp();
+    try {
+      ports.discuss.begin('talk', 'colors', []);
+      ports.discuss.postAssistant('talk', 'what shade did you have in mind?');
+      const next = ports.discuss.nextUserMessage('talk');
+      await settle();
+
+      // Idle at the prompt: both ways out are spelled out, not just in the footer.
+      const idle = lastFrameLines(stdout).join('\n');
+      expect(idle).toContain('esc or /done: finish the discussion');
+
+      // Mid-draft escape clears the text rather than ending the conversation,
+      // so the hint has to stop advertising it as the way out.
+      stdin.write('make it blue');
+      await settle();
+      const drafting = lastFrameLines(stdout).join('\n');
+      expect(drafting).toContain('esc: clear draft');
+      expect(drafting).not.toContain('esc or /done');
+
+      // …and it really does only clear the draft.
+      stdin.write('\x1b');
+      await settle();
+      expect(lastFrameLines(stdout).join('\n')).toContain('esc or /done: finish the discussion');
+
+      // A second escape, with the box empty, ends it.
+      stdin.write('\x1b');
+      await expect(next).resolves.toBeNull();
+    } finally {
+      unmount();
+    }
+  });
+
+  it('keeps the newest message, the options and the hint on screen together', async () => {
+    const { ports, stdout, unmount } = mountDiscussApp();
+    try {
+      ports.discuss.begin('talk', 'colors', []);
+      for (let i = 0; i < 40; i++) ports.discuss.postAssistant('talk', `filler line ${i}`);
+      ports.discuss.postAssistant('talk', 'so: which shade?', ['blue', 'red', 'green']);
+      void ports.discuss.nextUserMessage('talk');
+      await settle();
+
+      const lines = lastFrameLines(stdout);
+      const frame = lines.join('\n');
+      expect(lines.length).toBeLessThanOrEqual(ROWS);
+      // The transcript window shrinks to fit the options and the hint, rather
+      // than pushing the tail of the conversation out of the panel.
+      expect(frame).toContain('agent: so: which shade?');
+      expect(frame).toContain('❯ blue');
+      expect(frame).toContain('green');
+      expect(frame).toContain('esc or /done: finish the discussion');
+    } finally {
+      unmount();
+    }
+  });
+
   it('renders the agent markdown, and echoes the user markers verbatim', async () => {
     const { ports, stdout, stdin, unmount } = mountDiscussApp();
     try {
