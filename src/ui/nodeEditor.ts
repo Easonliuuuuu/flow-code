@@ -28,14 +28,24 @@ export interface EditorField {
  * the point is to expose the two or three fields a user actually retypes
  * mid-run, not every field a schema happens to accept.
  */
-const EDITABLE_CONFIG: Record<string, Array<{ key: string; label: string }>> = {
+const EDITABLE_CONFIG: Record<
+  string,
+  Array<{ key: string; label: string; hiddenWhenSet?: string }>
+> = {
   discuss: [{ key: 'topic', label: 'topic' }],
   spec: [{ key: 'title', label: 'title' }],
   implement: [{ key: 'instructions', label: 'instructions' }],
   test: [{ key: 'instructions', label: 'instructions (optional agent step)' }],
   validate: [{ key: 'instructions', label: 'instructions' }],
   review: [{ key: 'instructions', label: 'instructions' }],
-  'git-ops': [{ key: 'commitMessage', label: 'commit message' }],
+  // Either/or, enforced by hiding rather than by rejecting: the schema refuses
+  // a node carrying both, and this editor writes one field at a time, so an
+  // editor that offered both at once could walk the user into a workflow.yaml
+  // that no longer loads. Set one and the other disappears until it is cleared.
+  'git-ops': [
+    { key: 'commitMessage', label: 'commit message (used verbatim)', hiddenWhenSet: 'instructions' },
+    { key: 'instructions', label: 'how to write the commit message', hiddenWhenSet: 'commitMessage' },
+  ],
   'approval-gate': [
     { key: 'title', label: 'title' },
     { key: 'instructions', label: 'instructions (optional agent step)' },
@@ -54,7 +64,8 @@ export function editableFields(node: WorkflowNode): EditorField[] {
       placeholder: 'unset — falls back to settings.budget.tokensPerNode',
     },
   ];
-  for (const { key, label } of EDITABLE_CONFIG[node.type.id] ?? []) {
+  for (const { key, label, hiddenWhenSet } of EDITABLE_CONFIG[node.type.id] ?? []) {
+    if (hiddenWhenSet !== undefined && typeof config[hiddenWhenSet] === 'string') continue;
     fields.push({
       key,
       label,

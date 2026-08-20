@@ -45,6 +45,38 @@ function failureOf(yaml: string): WorkflowValidationError {
 }
 
 describe('workflow loading', () => {
+  it('refuses a git-ops node given both a literal message and instructions', () => {
+    const problems = problemsOf(`
+nodes:
+  - id: ship
+    type: git-ops
+    config:
+      commitMessage: "chore: sync"
+      instructions: write a conventional commit from the diff
+`);
+    // Both together are contradictory orders, and nothing downstream can tell
+    // which was meant — so it fails at load, not silently at commit time.
+    expect(problems.join('\n')).toContain('ship');
+    expect(problems.join('\n')).toContain('cannot both be set');
+  });
+
+  it('accepts either one of them on its own', () => {
+    // git-write needs a gate upstream, hence the two-node graph either way.
+    const load = (config: string) =>
+      loadWorkflowFromString(`
+nodes:
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+    config: ${config}
+edges:
+  - { from: gate, to: ship }
+`);
+    expect(load('{ commitMessage: "chore: sync" }').nodes).toHaveLength(2);
+    expect(load('{ instructions: "conventional commits, scope required" }').nodes).toHaveLength(2);
+  });
+
   it('loads a valid workflow and applies documented settings defaults', () => {
     const wf = loadWorkflowFromString(VALID);
     expect(wf.nodes.map((n) => n.id)).toEqual(['impl', 'check']);

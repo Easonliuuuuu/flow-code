@@ -98,7 +98,11 @@ export function plannedSummary(node: WorkflowNode): string {
     case 'git-ops': {
       const push = c['push'] as { remote?: string; branch?: string } | undefined;
       if (push?.remote && push.branch) return `commit + push → ${push.remote}/${push.branch}`;
-      return firstLine(typeof c['commitMessage'] === 'string' ? `commit: ${c['commitMessage']}` : 'commit only');
+      if (typeof c['commitMessage'] === 'string') return firstLine(`commit: ${c['commitMessage']}`);
+      // A node told *how* to write the message is not the same as one left on
+      // the default, so it cannot read as the bare "commit only".
+      if (typeof c['instructions'] === 'string') return firstLine(`commit: ${c['instructions']}`);
+      return 'commit only';
     }
     case 'worktree-agent': {
       const instances = Array.isArray(c['instances']) ? c['instances'] : [];

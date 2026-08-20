@@ -731,3 +731,51 @@ edges:
     expect(diff).not.toContain('user-wip');
   });
 });
+
+describe('Git-ops node — how the commit message is decided', () => {
+  const yamlFor = (config: string) => `
+nodes:
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops${config}
+edges:
+  - { from: gate, to: ship }
+`;
+
+  /** The prompt the git-ops node actually handed its agent. */
+  async function gitOpsPrompt(config: string): Promise<string> {
+    const repo = makeTempGitRepo();
+    writeFileSync(join(repo, 'touched.txt'), 'something to commit\n');
+    const sessions = fakeSessions(() => 'committed');
+    await runReal(yamlFor(config), repo, { sessions, portOpts: { approve: 'approve' } });
+    const request = sessions.requests.find((r) => r.nodeId === 'ship');
+    return request?.prompt ?? '';
+  }
+
+  it('passes a configured commitMessage through verbatim', async () => {
+    const prompt = await gitOpsPrompt(`
+    config:
+      commitMessage: "chore(deps): bump vitest"`);
+    expect(prompt).toContain('"chore(deps): bump vitest"');
+    // A literal message is the whole instruction — it must not arrive alongside
+    // guidance telling the agent to write its own.
+    expect(prompt).not.toContain('Read the staged diff');
+  });
+
+  it('passes instructions through instead, leaving the wording to the agent', async () => {
+    const prompt = await gitOpsPrompt(`
+    config:
+      instructions: "Reference the ticket id in the subject line."`);
+    expect(prompt).toContain('Reference the ticket id in the subject line.');
+    expect(prompt).not.toContain('Read the staged diff');
+  });
+
+  it('falls back to describing the diff, never a fixed string', async () => {
+    const prompt = await gitOpsPrompt('');
+    expect(prompt).toContain('Read the staged diff');
+    expect(prompt).toContain('describes what actually changed');
+    // The old behaviour: the same message on every commit of every run.
+    expect(prompt).not.toContain('flow-code: apply workflow changes');
+  });
+});
