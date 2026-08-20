@@ -134,12 +134,29 @@ export const executeGitOps: NodeExecutor = async function* (ctx) {
     preHead = '';
   }
 
-  const steps: string[] = [
-    `Commit all pending changes in this working directory with the commit message: ${JSON.stringify(
-      config.commitMessage ?? 'flow-code: apply workflow changes',
-    )}.`,
-    'If there is nothing to commit, say so and stop.',
-  ];
+  // Three ways to arrive at a commit message, in precedence order. A literal
+  // `commitMessage` is used exactly as written — it is the escape hatch for a
+  // caller who has already decided the text. `instructions` says what shape to
+  // write in and leaves the words to the agent. With neither, the message is
+  // still derived from the diff rather than being a fixed string: a constant
+  // message repeated on every commit of every run records that flow-code ran,
+  // which the reflog already knows, and nothing about what changed.
+  const DERIVE_FROM_DIFF =
+    'Read the staged diff and write a commit message that describes what actually changed. ' +
+    'Conventional-commit style: a `<type>(<scope>): <summary>` subject line in the imperative ' +
+    'mood, under 72 characters, and — when the change is more than a one-liner — a blank line ' +
+    'and a body explaining why it was needed. Describe the change, not the fact that a workflow ran.';
+
+  const messageStep =
+    config.commitMessage !== undefined
+      ? `Commit all pending changes in this working directory with the commit message: ${JSON.stringify(
+          config.commitMessage,
+        )}.`
+      : `Commit all pending changes in this working directory. ${
+          config.instructions ?? DERIVE_FROM_DIFF
+        }`;
+
+  const steps: string[] = [messageStep, 'If there is nothing to commit, say so and stop.'];
   if (config.push) {
     steps.push(
       `After committing, push the current branch to remote \`${config.push.remote}\`, branch \`${config.push.branch}\` (git push ${config.push.remote} HEAD:${config.push.branch}).`,

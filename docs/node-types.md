@@ -102,7 +102,7 @@ without `edit` cannot write files, whatever its instructions say.
 - **Capabilities:** `read`, `git-read`, `git-write`
 - **Agent session:** yes, headless
 - **Model field:** yes — settable per node, or with `m` mid-run
-- **Config:** `commitMessage? (string), push? ({remote, branch} — both required to push), skills? (string[])`
+- **Config:** `commitMessage? (string, used verbatim), instructions? (string, how to write the message — mutually exclusive with commitMessage), push? ({remote, branch} — both required to push), skills? (string[])`
 - **Output:** `committed (boolean), commit? (sha), pushed (boolean), remote?, branch?`
 
 ## `worktree-agent`

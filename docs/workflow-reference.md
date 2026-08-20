@@ -385,3 +385,28 @@ failure and stops there; the rejection branch is not walked.
     config:
       push: { remote: origin, branch: my-branch }
 ```
+
+### The commit message
+
+With nothing configured, the node reads the staged diff and writes a
+conventional-commit message describing what actually changed. Two ways to override
+that, and they cannot be combined — a node carrying both fails to load:
+
+```yaml
+  - id: git-ops
+    type: git-ops
+    config:
+      commitMessage: "chore: sync generated files"   # used exactly as written
+```
+
+```yaml
+  - id: git-ops
+    type: git-ops
+    config:
+      instructions: "Reference the ticket id in the subject line."   # how to write it
+```
+
+`commitMessage` is for a message you have already decided. `instructions` is for a
+house style you want every commit to follow, with the wording left to the agent. For
+anything longer than a sentence or two, attach a skill instead — `skills` works on
+this node like any other, and a skill body is prepended ahead of the role prompt.

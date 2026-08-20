@@ -116,18 +116,32 @@ const reviewConfig = z.strictObject({
  * Git-ops config: commit-only by default. Pushing is opt-in and requires an
  * explicit remote and branch — a push node with either missing fails at load
  * time, not at the moment of pushing.
+ *
+ * `commitMessage` and `instructions` are the two ways to say what the commit
+ * message should be, and they are mutually exclusive: the first is the literal
+ * text to use, the second is the shape to derive one in. Together they are
+ * contradictory orders — "use exactly this" and "work it out from the diff" —
+ * and nothing downstream can tell which was meant, so the pair is refused here
+ * rather than resolved by a precedence rule nobody can see.
  */
-const gitOpsConfig = z.strictObject({
-  commitMessage: z.string().min(1).optional(),
-  model: z.string().min(1).optional(),
-  skills: skillsField,
-  push: z
-    .strictObject({
-      remote: z.string().min(1),
-      branch: z.string().min(1),
-    })
-    .optional(),
-});
+const gitOpsConfig = z
+  .strictObject({
+    commitMessage: z.string().min(1).optional(),
+    instructions: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    skills: skillsField,
+    push: z
+      .strictObject({
+        remote: z.string().min(1),
+        branch: z.string().min(1),
+      })
+      .optional(),
+  })
+  .refine((c) => c.commitMessage === undefined || c.instructions === undefined, {
+    message:
+      'commitMessage and instructions cannot both be set: commitMessage is the exact message to use, instructions is how to write one. Keep whichever you meant.',
+    path: ['instructions'],
+  });
 
 const worktreeAgentConfig = z.discriminatedUnion('mode', [
   z.strictObject({
@@ -485,7 +499,8 @@ const definitions: NodeTypeDefinition[] = [
     configSchema: gitOpsConfig,
     outputSchema: gitOpsOutput,
     configSummary:
-      'commitMessage? (string), push? ({remote, branch} — both required to push), skills? (string[])',
+      'commitMessage? (string, used verbatim), instructions? (string, how to write the message — ' +
+      'mutually exclusive with commitMessage), push? ({remote, branch} — both required to push), skills? (string[])',
     outputSummary: 'committed (boolean), commit? (sha), pushed (boolean), remote?, branch?',
   },
   {

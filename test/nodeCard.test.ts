@@ -83,6 +83,19 @@ describe('plannedSummary — what a node will do', () => {
   it('falls back to a description of the job for a node with nothing configured', () => {
     expect(plannedSummary(node('rev'))).toBe('critique the pending diff');
   });
+
+  it('tells a git-ops node given a message apart from one given a house style', () => {
+    const gitOps = (config: Record<string, unknown>) => ({
+      ...node('ship'),
+      config,
+    });
+    expect(plannedSummary(gitOps({ commitMessage: 'chore: sync' }))).toBe('commit: chore: sync');
+    expect(plannedSummary(gitOps({ instructions: 'conventional commits, scope required' }))).toBe(
+      'commit: conventional commits, scope required',
+    );
+    // Neither set is the only case that is really "commit only".
+    expect(plannedSummary(gitOps({}))).toBe('commit only');
+  });
 });
 
 describe('outcomeSummary — what a node produced', () => {

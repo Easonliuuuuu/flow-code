@@ -82,9 +82,13 @@ nodes:
 
   - id: git-ops
     type: git-ops
-    # Commits only. To push, add:
+    # Commits only, with a message written from the diff. To push, add:
     # config:
     #   push: { remote: origin, branch: my-branch }
+    # To fix the message, or the style it is written in (never both):
+    # config:
+    #   commitMessage: "chore: sync"            # used exactly as written
+    #   instructions: "Reference the ticket id" # or: how to write one
 
 edges:
   - { from: discuss, to: spec }
