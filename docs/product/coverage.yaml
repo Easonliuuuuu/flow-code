@@ -38,6 +38,7 @@ scopes:
   worktrees: [worktree-agent-node]
   worktree: [worktree-agent-node]
   discuss: [agent-execution, node-model-selection]
+  git-ops: [agent-execution]
   plan: [workflow-graph, agent-execution]
   preflight: [agent-execution]
   schema: [workflow-graph]
