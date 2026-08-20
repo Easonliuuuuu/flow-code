@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.4.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.3.0...flow-code-v0.4.0) (2026-08-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **git-ops:** a git-ops node with no `commitMessage` no longer commits the literal "flow-code: apply workflow changes". Anything matching on that string should set `commitMessage` explicitly to keep the old behaviour.
+* **plan:** graph validation now requires every node holding the `git-write` capability to be dominated by an Approval-Gate — every path from every root must pass through one, not merely have one somewhere upstream. This was already a real gap (a bypass edge around an existing gate loaded and committed silently); it becomes a hard requirement here because a Plan-authored graph must not be able to opt out of it. No setting or flag disarms this. A workflow file with an ungated git-writing node will fail to load; the error names the node and the path that misses a gate. An unattended pipeline that needs to commit without a person answering a gate should leave `git-ops` out of the graph and commit from the pipeline itself after `flow-code run` exits.
+* **gate:** a rejected Approval-Gate now terminates `done` with `decision: 'rejected'` rather than `error`. Workflow files need no edit — an unconditional edge out of a gate is loaded as requiring approval. Anything reading a rejection off run-state status must read the decision instead. Guest-driven runs still record `error`; the revision branch is engine-only.
+* `flow-code run --resume` now requires the interrupted run to have recorded its own graph — a run written before this change has no recorded graph and can no longer be resumed (start a new run instead). `RunStateWatcherOptions.nodeIds` and `reconcileRunState` are removed.
+
+### Features
+
+* **App.tsx:** add a keybind to turn band-wrap off ([efc4785](https://github.com/Easonliuuuuu/flow-code/commit/efc4785db8132213d6bd7d39e2e98f2817ab4ae0))
+* **cli:** summarize a run into a status bar with flow-code status ([064181b](https://github.com/Easonliuuuuu/flow-code/commit/064181b70d3b549cb36290d003492f6b650d3e25))
+* **connect:** install a status row into the host's own status line ([395e9f9](https://github.com/Easonliuuuuu/flow-code/commit/395e9f9f926a1bb6479c30a6bdd076ec4689fb10))
+* **discuss:** animate the thinking wait and let the agent offer tappable options ([6777741](https://github.com/Easonliuuuuu/flow-code/commit/6777741c434cb382058f1fdaffa0819f2d38b0b7))
+* **gate:** route a rejected gate to a revision branch ([b381bb3](https://github.com/Easonliuuuuu/flow-code/commit/b381bb33e1b7b686ea07e13a527169bdd333d6cf))
+* **git-ops:** write the commit message from the diff ([2c33ba9](https://github.com/Easonliuuuuu/flow-code/commit/2c33ba9edb00d1853758e879fc35aec1ed36208a))
+* **guest:** ask the repository whether a run's claims are true ([7dfc437](https://github.com/Easonliuuuuu/flow-code/commit/7dfc4374e2f2a93583c14d47203f626b3381ae55))
+* **guest:** enforce a node's capability envelope inside a host session ([2e80d6c](https://github.com/Easonliuuuuu/flow-code/commit/2e80d6c56daa841e65a2f36801c77e5cad478112))
+* **guest:** let an outside agent drive the graph and report it ([8e14cb6](https://github.com/Easonliuuuuu/flow-code/commit/8e14cb6ffe36823487a5bc5f186d0ef605cd0efe))
+* **plan:** add a Plan node that negotiates the graph before it runs ([418d133](https://github.com/Easonliuuuuu/flow-code/commit/418d1330d42d29d89ac09557245fcd6eea441a2f))
+* read the recorded graph in watch/resume, and add named graphs ([268448b](https://github.com/Easonliuuuuu/flow-code/commit/268448b5a52350be9940afdeb9c813530c483fe1))
+* **runstate:** enforce run-document ownership and stop guessing at liveness ([08cb789](https://github.com/Easonliuuuuu/flow-code/commit/08cb789677cedadf2873374a49e1416385c111dc))
+* **status:** fail when an archived change serves no requirement ([210ff2c](https://github.com/Easonliuuuuu/flow-code/commit/210ff2c0ce924fd15c479ac83e5a2e1ae4b14ec6))
+* **ui:** add a key map, and settle the keys and header it advertises ([3ed5f46](https://github.com/Easonliuuuuu/flow-code/commit/3ed5f4658136308734d5d4bddc2d4d0c15deac82))
+* **ui:** extend band-wrap to full density too ([07b826f](https://github.com/Easonliuuuuu/flow-code/commit/07b826f1fda38bf7c588dd455947d3a3ee253a10))
+* **ui:** replace drawn loop-back edges with badges on the cards ([a672a9f](https://github.com/Easonliuuuuu/flow-code/commit/a672a9f88f8b5aed57b7fb8fee07a5f4a466a349))
+* **ui:** wrap compact-density graphs into bands, not off-screen ([5c35e6f](https://github.com/Easonliuuuuu/flow-code/commit/5c35e6fde89f29adda82bdaa8190d02e6e996d9b))
+
+
+### Bug Fixes
+
+* **App.tsx:** give floating panels an opaque backdrop ([b21d828](https://github.com/Easonliuuuuu/flow-code/commit/b21d82827171e091af22fbf74658fc9639858535))
+* **App.tsx:** keep the elapsed-time ticker running while a node waits ([66f7183](https://github.com/Easonliuuuuu/flow-code/commit/66f718331e4fd0ac1ac4e61605cbcd58ff84bec2))
+* **App.tsx:** scope the approval-gate panel to the focused node ([afe3ca0](https://github.com/Easonliuuuuu/flow-code/commit/afe3ca06f9f420e8f1e509af23b5381f889f0f18))
+* **canvas.ts:** space the retry badge like the loop mark above it ([16e60ae](https://github.com/Easonliuuuuu/flow-code/commit/16e60ae3616fe1cafefd6e9f2c1406abdc2c8be3))
+* **canvas:** mark crossings instead of breaking wrap lanes under loop-backs ([04e1985](https://github.com/Easonliuuuuu/flow-code/commit/04e198526d5ce010fd1af0dbbcb29498107f584f))
+* **discuss.ts:** require valid JSON in tappable option strings ([ff5a0cf](https://github.com/Easonliuuuuu/flow-code/commit/ff5a0cfd014593723ec204633c6286c450260c6c))
+* **discuss:** parse every options block, not just a trailing one ([484813e](https://github.com/Easonliuuuuu/flow-code/commit/484813e6f140c161c2da64930c5e31cac40dc3b8))
+* **guest:** unblock commit messages, gate questions, and review context ([1e69608](https://github.com/Easonliuuuuu/flow-code/commit/1e696082175f5190ade4bae435b18a948e8e13a6))
+* **guest:** unblock the reporting tools, subagents, and node output ([6109acd](https://github.com/Easonliuuuuu/flow-code/commit/6109acdde643d4a6ad034a9a759887a01dc559fc))
+* **index.ts:** mount the app on the alternate screen after splash handoff ([bde3731](https://github.com/Easonliuuuuu/flow-code/commit/bde3731709d5761b333922d48ca29a459b338495))
+* **layout:** back off to a legal cut instead of abandoning wrapping ([e86a606](https://github.com/Easonliuuuuu/flow-code/commit/e86a606b743875cd483a241f650954971220c30b))
+* **make-testbed.sh:** seed a run so watch has a graph to draw ([ec1646c](https://github.com/Easonliuuuuu/flow-code/commit/ec1646c25fc857aa8a090539c3a5eb9c50fd3bea))
+* **nodeCard.ts:** show a readable breakdown instead of raw JSON ([d36221f](https://github.com/Easonliuuuuu/flow-code/commit/d36221f7a78ec8d3a8f98a53b1eaf653581a2f74))
+* **status.ts:** drop the jq dependency and the meter on an absent run ([28e2070](https://github.com/Easonliuuuuu/flow-code/commit/28e20707b7534b8763077cc84f3a999093c936c4))
+* **status:** map the connect scope to session-status-line ([e299b9b](https://github.com/Easonliuuuuu/flow-code/commit/e299b9b0dcba347763ad9e256fb6e7b5008b6f68))
+* **status:** register the plan scope and agent-generated-graphs change ([17e92cc](https://github.com/Easonliuuuuu/flow-code/commit/17e92ccd83edc2c33c3593dd81cea6a77a0341e8))
+* **ui:** name the loop that fired instead of leaving it to colour alone ([f3bb063](https://github.com/Easonliuuuuu/flow-code/commit/f3bb0630215b229135d931f8bd8be244ac96de58))
+* **ui:** show how to end a discussion where the user is typing ([bf171dc](https://github.com/Easonliuuuuu/flow-code/commit/bf171dc0cfd0cbfa7d1931fc7d847932c118d162))
+
+
+### Performance Improvements
+
+* **cli.ts:** load only the subcommand being run ([07e8730](https://github.com/Easonliuuuuu/flow-code/commit/07e8730f81af26cec460a918d078d04b1c4fc2d6))
+
 ## [0.3.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.2.0...flow-code-v0.3.0) (2026-08-10)
 
 
