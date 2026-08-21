@@ -90,6 +90,13 @@ interface PanelDrag {
 const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
 
+/**
+ * Longest a panel's key hint may be. An 80-column terminal is the floor we
+ * draw for; a docked panel spans it minus its border, padding and the resize
+ * grip sharing the row.
+ */
+export const HINT_BUDGET = 80 - 2 - 2 - 2;
+
 /** How often the viewer re-reads a run's reconciliation report, if one exists. */
 const RECONCILE_POLL_MS = 2000;
 
@@ -197,6 +204,12 @@ function PanelTitle({ children }: { children: React.ReactNode }): React.ReactEle
 /**
  * Bottom row of a panel: key hints on the left, and the resize grip sitting in
  * the very corner it grabs.
+ *
+ * The hint truncates rather than wrapping, so an over-long one does not push
+ * the panel out of shape — it collides with the grip instead, mid-word, which
+ * looks like the frame has sprung a leak. Keep each hint inside
+ * {@link HINT_BUDGET}, and leave the rest to `?`: the panel is on screen, so
+ * its ⠿ handle and ⇲ grip are already advertising themselves.
  */
 function PanelFooter({ hint }: { hint: string }): React.ReactElement {
   return (
@@ -2070,10 +2083,10 @@ export function App({
           <PanelFooter
             hint={
               !discussState.awaitingUser
-                ? 'tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+                ? 'tab: other nodes · PgUp/PgDn: scroll'
                 : discussState.options && discussState.options.length > 0
-                  ? '↑/↓: choose · enter: select · type: custom answer · tab: other nodes'
-                  : 'enter: send · tab: other nodes · PgUp/PgDn: scroll · drag ⠿/edge: move · ⇲: resize'
+                  ? '↑/↓: choose · enter: select · or type an answer'
+                  : 'enter: send · tab: other nodes · PgUp/PgDn: scroll'
             }
           />
         </Box>
@@ -2123,7 +2136,7 @@ export function App({
             hint={
               testCommandInput !== null
                 ? 'enter: add · esc: cancel'
-                : '↑/↓: move · space: select · a: add · d: let flow-code find them · enter: confirm · esc: skip'
+                : 'space: select · enter: confirm · a: add · d: detect · esc: skip'
             }
           />
         </Box>
@@ -2151,7 +2164,7 @@ export function App({
               </Text>
             ))}
           </Box>
-          <PanelFooter hint="↑/↓: move · space: select · enter: confirm · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="↑/↓: move · space: select · enter: confirm" />
         </Box>
       ) : pendingApprovalPanelOpen && pendingApproval ? (
         <Box {...panelBoxProps}>
@@ -2211,7 +2224,7 @@ export function App({
               return <DiffLines lines={lines} start={start} visible={visible} />;
             })()}
           </Box>
-          <PanelFooter hint="[a] approve · [r] reject · j/k/PgUp/PgDn: scroll diff · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="[a] approve · [r] reject · PgUp/PgDn: scroll diff" />
         </Box>
       ) : helpOpen ? (
         <Box {...panelBoxProps}>
@@ -2249,7 +2262,7 @@ export function App({
               );
             })}
           </Box>
-          <PanelFooter hint="↑/↓/PgUp/PgDn: scroll · ?/esc: close · drag ⠿/edge: move · ⇲: resize" />
+          <PanelFooter hint="↑/↓/PgUp/PgDn: scroll · ?/esc: close" />
         </Box>
       ) : pickerOpen && focusedNode ? (
         <Box {...panelBoxProps}>
@@ -2404,7 +2417,7 @@ export function App({
               );
             })()}
           </Box>
-          <PanelFooter hint="type: filter · ↑/↓: move · space: toggle · enter: confirm · esc: clear/cancel" />
+          <PanelFooter hint="type: filter · ↑/↓: move · space: toggle · enter: confirm · esc: cancel" />
         </Box>
       ) : editorOpen && focusedNode ? (
         <Box {...panelBoxProps}>
@@ -2485,7 +2498,7 @@ export function App({
                     <Box flexDirection="column" flexGrow={1} overflow="hidden">
                       <DiffLines lines={lines} start={start} visible={visible} />
                     </Box>
-                    <PanelFooter hint="j/k/PgUp/PgDn: scroll diff · enter/esc: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                    <PanelFooter hint="PgUp/PgDn: scroll diff · enter/esc: close · tab: focus" />
                   </>
                 );
               }
@@ -2598,25 +2611,24 @@ export function App({
                     </Text>
                   ))}
                 </Box>
-                <PanelFooter hint="PgUp/PgDn: scroll activity · shift+PgUp/PgDn: scroll output · enter/esc: close · tab: focus · drag ⠿/edge: move · ⇲: resize" />
+                <PanelFooter hint="PgUp/PgDn: activity · ⇧PgUp/PgDn: output · enter/esc: close · tab: focus" />
               </>
             );
           })()}
         </Box>
       ) : (
         // FOOTER_ROWS budgets one row for this too — see the header's note.
-        // Kept short so truncation stays a narrow-terminal fallback rather
-        // than the norm, and it lists only keys: the current zoom is reported
-        // in the header, which stays visible behind a docked panel.
+        // Only the keys you need before you have found `?`: everything else —
+        // o/c/w, e/m/s, the mouse — is in the map that `?` opens, and listing
+        // it here bought nothing but a row that truncated mid-word on any
+        // terminal narrower than the whole list. The state those keys toggle
+        // is reported in the header, which outlives this row anyway.
         //
         // `?` leads, then `q`: the row truncates from the right, and between
         // them they are the two you cannot discover any other way — one shows
         // the rest of the map, the other gets you out.
         <Text dimColor wrap="truncate-end">
-          ?: keys · q: quit · tab: focus · enter: details ·{' '}
-          {watch ? 'read-only' : 'e/m/s: settings/model/skills'} · ←→↑↓ (⇧ anywhere): pan · z/⌃wheel:
-          zoom · o: {density === 'mini' ? 'back' : 'overview'} · c: camera · w:{' '}
-          {wrapEnabled ? 'unwrap' : 'wrap'}
+          ?: keys · q: quit · tab: focus · enter: details · ←→↑↓: pan · z: zoom
         </Text>
       )}
     </Box>
