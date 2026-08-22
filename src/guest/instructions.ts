@@ -100,6 +100,23 @@ export interface InstructionOptions {
 }
 
 /**
+ * Why a step's `model:` is never repeated back to the agent.
+ *
+ * It is not merely unenforceable here — it is unusable. The field names a
+ * model from flow-code's own provider config, resolved when flow-code spawns
+ * the session. Nothing on the other side of this boundary can resolve that
+ * string, and a host that guessed at it would be overriding a model the user
+ * already chose for their session. So the field is dropped, and this says so:
+ * a silent drop reads as "my setting took effect" to whoever wrote it.
+ */
+const MODEL_NOTE = [
+  '',
+  'A step\'s `model:` is engine configuration and never reaches you: it names a model from',
+  'flow-code\'s own provider config, which says nothing about what your session can run. Choose',
+  'per step yourself — how each one is worked is described above.',
+];
+
+/**
  * The closing section, which is the only part that depends on anything beyond
  * the workflow file. An agent that is told nothing is enforced when calls are
  * in fact being denied will read a denial as a bug and work around it; one
@@ -114,6 +131,7 @@ function whatThisIsSection(enforced: boolean): string[] {
       'it does not restrict which tools you use, choose your model, or count your tokens. The run',
       'is recorded at the `reported` tier and is labelled that way wherever it is displayed, so do',
       'not treat a green graph as evidence that anything was checked.',
+      ...MODEL_NOTE,
     ];
   }
   return [
@@ -129,6 +147,7 @@ function whatThisIsSection(enforced: boolean): string[] {
     'what your session costs, the directory and environment you run in, which subagent types you',
     'delegate to, and routing you back along a return path. Those remain yours to get right. A',
     'subagent you spawn is still held to the step\'s capability set — its calls arrive here too.',
+    ...MODEL_NOTE,
   ];
 }
 
