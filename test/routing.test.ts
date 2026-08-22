@@ -305,7 +305,71 @@ describe('a rejection routed through a revision step', () => {
     expect(reviseRuns).toBe(2);
     expect(shipRuns).toBe(0);
     expect(store.node('ship').status).toBe('skipped');
+    // A revision step whose return path is spent did its work and delivered it
+    // nowhere. Reporting `done` there hides a run that stopped with nothing
+    // shipped behind a node that looks like it succeeded.
+    expect(store.node('revise').status).toBe('error');
+    expect(store.node('revise').statusDetail).toContain('nowhere left to send this back to');
     expect(store.node('revise').statusDetail).toContain('attempt limit reached');
+  });
+
+  it('still fires after a verification loop-back has already spent an attempt', async () => {
+    // The scaffolded shape: a failure-triggered loop and a success-triggered
+    // revision path pointing at the same node, sharing one attempt bound. The
+    // bound is counted on the target, so a revision path with a *lower*
+    // maxAttempts than the verification loop beside it dies first — one
+    // earlier check failure would be enough to hold the whole conversation and
+    // then discover it had nowhere to go. Matching them is what prevents that.
+    const shared = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x }
+  - id: check
+    type: validate
+  - id: gate
+    type: approval-gate
+  - id: revise
+    type: discuss
+    config: { topic: what to change }
+  - id: ship
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: impl, to: check }
+  - { from: check, to: gate }
+  - { from: gate, to: ship, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  - { from: check, to: impl, loopback: { maxAttempts: 3 } }
+  - { from: revise, to: impl, loopback: { maxAttempts: 3, on: success } }
+`;
+    let checkRuns = 0;
+    let reviseRuns = 0;
+    let shipRuns = 0;
+    const { engine, store } = engineWith(shared, {
+      impl: doneAfter(IMPL_OUT),
+      // Fails once, spending an attempt on `impl` before the gate is reached.
+      check: (ctx) =>
+        ++checkRuns === 1
+          ? (async function* (): AsyncGenerator<StatusEvent, void, void> {
+              yield { type: 'status', status: 'running' };
+              yield { type: 'status', status: 'error', detail: 'a criterion failed' };
+            })()
+          : doneAfter({ verdict: 'pass', notes: 'all criteria met' })(ctx),
+      gate: gateDeciding(['rejected', 'approved']),
+      revise: doneAfter(REVISE_OUT, async () => {
+        reviseRuns++;
+      }),
+      ship: doneAfter(IMPL_OUT, async () => {
+        shipRuns++;
+      }),
+    });
+    await engine.run();
+
+    expect(reviseRuns).toBe(1);
+    expect(shipRuns).toBe(1);
+    expect(store.node('impl').attempt).toBe(3);
+    expect(store.node('ship').status).toBe('done');
   });
 
   it('a success-triggered loop-back does not fire when its source fails', async () => {

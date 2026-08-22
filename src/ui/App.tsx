@@ -490,6 +490,26 @@ export function App({
     for (const command of testCommandExtra) add(command, 'typed');
     return out;
   }, [pendingTestCommands, pendingTestCommands?.proposals, testCommandExtra]);
+  /**
+   * Everything found starts checked, so confirming is one keypress and the
+   * work of the prompt is *un*checking what doesn't belong. Re-runs when the
+   * agent proposes more, adding those without disturbing what the user has
+   * already unchecked — the effect only ever adds, never re-checks.
+   */
+  const testCommandNodeId = pendingTestCommands?.req.nodeId ?? null;
+  const seededTestCommands = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (testCommandNodeId === null) {
+      seededTestCommands.current = new Set();
+      return;
+    }
+    const fresh = testCommandCandidates
+      .map((c) => c.command)
+      .filter((c) => !seededTestCommands.current.has(c));
+    if (fresh.length === 0) return;
+    for (const command of fresh) seededTestCommands.current.add(command);
+    setTestCommandSelected((prev) => new Set([...prev, ...fresh]));
+  }, [testCommandNodeId, testCommandCandidates]);
   const discussState = ports.discussState;
   const discussActive = discussState?.active ?? false;
   const focusedId = workflow.order[Math.min(focusIdx, workflow.order.length - 1)] ?? null;
@@ -1522,8 +1542,8 @@ export function App({
       return;
     }
 
-    // Test commands: a Test node reached execution still holding the
-    // scaffolded placeholder and is asking what it should actually run.
+    // Test commands: a Test node reached execution with no command list, and
+    // is confirming what it worked out before running any of it.
     if (pendingTestCommands) {
       const { resolve } = pendingTestCommands;
       if (testCommandInput !== null) {
@@ -1560,7 +1580,8 @@ export function App({
         return;
       }
       if (input === 'd') {
-        // Reading the repo costs a session, so it happens only when asked.
+        // Discovery already ran before this panel opened; another pass costs
+        // another session, so it happens only when asked for.
         void ports.discoverTestCommands();
         return;
       }
@@ -2172,12 +2193,12 @@ export function App({
           </PanelTitle>
           <Box flexDirection="column" flexGrow={1} overflow="hidden">
             <Text dimColor wrap="truncate-end">
-              This node has never been told what to run. Whatever you pick is saved to
-              .flow-code/workflow.yaml.
+              Worked out from this repo — nothing has been run. Whatever you confirm is saved to
+              .flow-code/workflow.yaml and used from then on.
             </Text>
             {testCommandCandidates.length === 0 && !pendingTestCommands.discovering ? (
               <Text dimColor wrap="truncate-end">
-                nothing detected by inspection — `d` to have flow-code read the repo, `a` to type one
+                nothing found in this repo — `a` to type a command, `d` to look again, esc to run none
               </Text>
             ) : null}
             {testCommandCandidates.map((candidate, i) => (
@@ -2192,7 +2213,7 @@ export function App({
             ))}
             {pendingTestCommands.discovering ? (
               <Text color="cyan" wrap="truncate-end">
-                reading the repository…
+                reading the repository again…
               </Text>
             ) : null}
             {pendingTestCommands.discoverError ? (
@@ -2208,7 +2229,7 @@ export function App({
             hint={
               testCommandInput !== null
                 ? 'enter: add · esc: cancel'
-                : 'space: select · enter: confirm · a: add · d: detect · esc: skip'
+                : 'space: toggle · enter: confirm · a: add · d: look again · esc: run none'
             }
           />
         </Box>

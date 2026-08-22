@@ -93,31 +93,55 @@ function mount(
   return { stdout, stdin, unmount: () => instance.unmount() };
 }
 
-function setup(discover?: () => Promise<Array<{ command: string; rationale: string }>>) {
+interface SetupOpts {
+  detected?: string[];
+  proposals?: Array<{ command: string; rationale: string }>;
+  discoverError?: string;
+  discover?: () => Promise<Array<{ command: string; rationale: string }>>;
+}
+
+function setup(opts: SetupOpts = {}) {
   const workflow = workflowFromYaml(WORKFLOW_YAML);
   const ports = new UiInteractionPorts();
   const store = storeFor(workflow, makeTempGitRepo());
   const answer = ports.testCommands.request({
     nodeId: 't',
-    detected: ['npm test'],
-    discover: discover ?? (async () => []),
+    detected: opts.detected ?? ['npm test'],
+    proposals: opts.proposals ?? [],
+    ...(opts.discoverError !== undefined ? { discoverError: opts.discoverError } : {}),
+    discover: opts.discover ?? (async () => []),
   });
   return { workflow, ports, store, answer };
 }
 
 describe('test-command panel', () => {
-  it('lists what was detected and returns the checked commands', async () => {
+  it('opens with everything found already checked, so confirming is one key', async () => {
     const { workflow, ports, store, answer } = setup();
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
       await settle();
       expect(lastFrame(stdout)).toContain('Test commands \u2014 t');
-      expect(lastFrame(stdout)).toContain('npm test');
+      expect(lastFrame(stdout)).toContain('[x] npm test');
 
-      stdin.write(' ');
-      await settle();
       stdin.write('\r');
       expect(await answer).toEqual(['npm test']);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('unchecks what does not belong, which is the work the prompt is for', async () => {
+    const { workflow, ports, store, answer } = setup();
+    const { stdout, stdin, unmount } = mount(workflow, store, ports);
+    try {
+      await settle();
+      stdin.write(' ');
+      await settle();
+      expect(lastFrame(stdout)).toContain('[ ] npm test');
+      stdin.write('\r');
+      // Confirming an empty selection reads as "run nothing here", the same
+      // answer escape gives — a project with no suite yet is a real project.
+      expect(await answer).toEqual([]);
     } finally {
       unmount();
     }
@@ -136,7 +160,7 @@ describe('test-command panel', () => {
   });
 
   it('confirming nothing checked is the same as skipping, from the executor\'s side', async () => {
-    const { workflow, ports, store, answer } = setup();
+    const { workflow, ports, store, answer } = setup({ detected: [] });
     const { stdin, unmount } = mount(workflow, store, ports);
     try {
       await settle();
@@ -161,17 +185,40 @@ describe('test-command panel', () => {
       await settle();
       expect(lastFrame(stdout)).toContain('make check');
       stdin.write('\r');
-      expect(await answer).toEqual(['make check']);
+      // Added alongside what was found, not instead of it.
+      expect(await answer).toEqual(['npm test', 'make check']);
     } finally {
       unmount();
     }
   });
 
-  it('spends a session on discovery only when asked, and shows the reasoning', async () => {
+  it('shows what the agent pass proposed, with its reasoning, already checked', async () => {
+    const { workflow, ports, store, answer } = setup({
+      proposals: [{ command: 'go test ./...', rationale: 'go.mod at the repo root' }],
+    });
+    const { stdout, stdin, unmount } = mount(workflow, store, ports);
+    try {
+      await settle();
+      // Both passes ran before the panel opened, so both are on screen and
+      // checked without a keypress.
+      expect(lastFrame(stdout)).toContain('[x] npm test');
+      expect(lastFrame(stdout)).toContain('[x] go test ./...');
+      expect(lastFrame(stdout)).toContain('go.mod at the repo root');
+
+      stdin.write('\r');
+      expect(await answer).toEqual(['npm test', 'go test ./...']);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('spends another session only when asked to look again', async () => {
     let discoverCalls = 0;
-    const { workflow, ports, store, answer } = setup(async () => {
-      discoverCalls++;
-      return [{ command: 'go test ./...', rationale: 'go.mod at the repo root' }];
+    const { workflow, ports, store, answer } = setup({
+      discover: async () => {
+        discoverCalls++;
+        return [{ command: 'go test ./...', rationale: 'go.mod at the repo root' }];
+      },
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
@@ -183,20 +230,38 @@ describe('test-command panel', () => {
       expect(discoverCalls).toBe(1);
       expect(frame).toContain('go.mod at the repo root');
 
-      stdin.write('j');
-      await settle();
-      stdin.write(' ');
-      await settle();
+      // What the second look turned up is checked too, without disturbing
+      // what was already on screen.
       stdin.write('\r');
-      expect(await answer).toEqual(['go test ./...']);
+      expect(await answer).toEqual(['npm test', 'go test ./...']);
     } finally {
       unmount();
     }
   });
 
-  it('surfaces a discovery failure instead of losing the panel', async () => {
-    const { workflow, ports, store, answer } = setup(async () => {
-      throw new Error('no provider configured');
+  it('surfaces a discovery failure carried in with the request', async () => {
+    // The executor's own agent pass failed before the panel opened. That is
+    // not a failed node: the panel still opens on what the heuristics found.
+    const { workflow, ports, store, answer } = setup({
+      discoverError: 'no provider configured',
+    });
+    const { stdout, stdin, unmount } = mount(workflow, store, ports);
+    try {
+      await settle();
+      expect(lastFrame(stdout)).toContain('no provider configured');
+      expect(lastFrame(stdout)).toContain('[x] npm test');
+      stdin.write('\r');
+      expect(await answer).toEqual(['npm test']);
+    } finally {
+      unmount();
+    }
+  });
+
+  it('surfaces a failure from a second look instead of losing the panel', async () => {
+    const { workflow, ports, store, answer } = setup({
+      discover: async () => {
+        throw new Error('no provider configured');
+      },
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
@@ -204,9 +269,7 @@ describe('test-command panel', () => {
       stdin.write('d');
       const frame = await settleUntil(stdout, 'no provider configured');
       expect(frame).toContain('no provider configured');
-      // Still usable: the heuristic hit is right there.
-      stdin.write(' ');
-      await settle();
+      // Still usable: the heuristic hit is right there, still checked.
       stdin.write('\r');
       expect(await answer).toEqual(['npm test']);
     } finally {

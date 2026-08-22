@@ -1,5 +1,4 @@
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
-import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 
 /**
  * A named starting workflow. A preset is a scaffolded file and nothing more —
@@ -75,11 +74,11 @@ nodes:
       instructions: Implement the tasks in the openspec change, including tests covering them.
       skills: [openspec-apply-change]
 
+  # No \`commands\`: this node works out how the project runs its tests on its
+  # first execution and asks you to confirm before running anything, then saves
+  # the answer here. \`config: { commands: [npm test] }\` skips that.
   - id: test
     type: test
-    config:
-      commands:
-        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate
@@ -88,6 +87,16 @@ nodes:
     type: approval-gate
     config:
       title: Review the pending diff before archiving the change
+
+  # Where a rejected diff goes: an ordinary Discuss node, reached only when
+  # \`gate\` is rejected. The gate itself cannot say *why* it was rejected —
+  # approve/reject carries no text — so without this the retry knows only that
+  # a human said no. Delete it and both conditioned edges below, leaving a bare
+  # \`- { from: gate, to: archive }\`, to make a rejection end the run instead.
+  - id: revise
+    type: discuss
+    config:
+      topic: What has to change about this diff before it can be approved?
 
   - id: archive
     type: git-ops
@@ -106,17 +115,26 @@ edges:
   # retry from rewriting the contract it is being judged against.
   - { from: propose, to: validate }
   - { from: validate, to: gate }
-  - { from: gate, to: archive }
+  # Both arms spelled out. An unconditional edge out of a gate already means
+  # \`when: "gate.decision == 'approved'"\`, but mixing the implicit form with
+  # the explicit one beside it reads badly even though it works.
+  - { from: gate, to: archive, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
 
   # Rejecting the proposal reopens the discussion that produced it, rather
   # than ending the run: a proposal is rejected to be rewritten, not
   # abandoned. \`loopback: true\` on a gate's edge means "on rejection" — a
   # rejected gate is reported to the engine as though it had failed,
   # specifically so this one edge can fire on it and only it (see
-  # \`defaultWorkflow.ts\` for the full explanation). This is not extended to
-  # \`gate\` below: work rejected there is finished work abandoned, not a
-  # proposal to be reconsidered.
+  # \`defaultWorkflow.ts\` for the full explanation).
   - { from: propose-gate, to: explore, loopback: true }
+
+  # The way back from a rejected diff. \`on: success\` because finishing the
+  # conversation is the signal to go back — a return path waiting for \`revise\`
+  # to fail would wait forever. maxAttempts matches the loop-backs below
+  # because all three point at \`apply\` and the bound is counted once on the
+  # target: a lower number here would starve the revision path first.
+  - { from: revise, to: apply, loopback: { maxAttempts: 3, on: success } }
 
   - { from: test, to: apply, loopback: { maxAttempts: 3 } }
   - { from: validate, to: apply, loopback: { maxAttempts: 3 } }
@@ -178,11 +196,11 @@ nodes:
         Implement the plan above: break it into the tasks needed to satisfy
         every acceptance criterion, including tests covering them.
 
+  # No \`commands\`: this node works out how the project runs its tests on its
+  # first execution and asks you to confirm before running anything, then saves
+  # the answer here. \`config: { commands: [npm test] }\` skips that.
   - id: test
     type: test
-    config:
-      commands:
-        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate
@@ -191,6 +209,16 @@ nodes:
     type: approval-gate
     config:
       title: Review the pending diff before git operations
+
+  # Where a rejected diff goes: an ordinary Discuss node, reached only when
+  # \`gate\` is rejected. The gate itself cannot say *why* it was rejected —
+  # approve/reject carries no text — so without this the retry knows only that
+  # a human said no. Delete it and both conditioned edges below, leaving a bare
+  # \`- { from: gate, to: git-ops }\`, to make a rejection end the run instead.
+  - id: revise
+    type: discuss
+    config:
+      topic: What has to change about this diff before it can be approved?
 
   - id: git-ops
     type: git-ops
@@ -210,16 +238,26 @@ edges:
   # rewriting the contract it is being judged against.
   - { from: plan, to: validate }
   - { from: validate, to: gate }
-  - { from: gate, to: git-ops }
+  # Both arms spelled out. An unconditional edge out of a gate already means
+  # \`when: "gate.decision == 'approved'"\`, but mixing the implicit form with
+  # the explicit one beside it reads badly even though it works.
+  - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
 
   # Rejecting the plan reopens the discussion that produced it, rather than
   # ending the run: a plan is rejected to be rewritten, not abandoned.
   # \`loopback: true\` on a gate's edge means "on rejection" — a rejected gate
   # is reported to the engine as though it had failed, specifically so this
   # one edge can fire on it and only it (see \`defaultWorkflow.ts\` for the
-  # full explanation). This is not extended to \`gate\` below: work rejected
-  # there is finished work abandoned, not a plan to be reconsidered.
+  # full explanation).
   - { from: plan-gate, to: specify, loopback: true }
+
+  # The way back from a rejected diff. \`on: success\` because finishing the
+  # conversation is the signal to go back — a return path waiting for \`revise\`
+  # to fail would wait forever. maxAttempts matches the loop-backs below
+  # because all three point at \`implement\` and the bound is counted once on
+  # the target: a lower number here would starve the revision path first.
+  - { from: revise, to: implement, loopback: { maxAttempts: 3, on: success } }
 
   - { from: test, to: implement, loopback: { maxAttempts: 3 } }
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }

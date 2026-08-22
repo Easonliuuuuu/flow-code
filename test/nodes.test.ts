@@ -1,10 +1,10 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { LEGACY_PLACEHOLDER_TEST_COMMAND } from '../src/registry/index.js';
 import { Engine } from '../src/engine/engine.js';
 import { builtinExecutors } from '../src/executors/index.js';
 import { recordBaseline } from '../src/git/ops.js';
-import { PLACEHOLDER_TEST_COMMAND } from '../src/registry/index.js';
 import type { TestOutput, ApprovalGateOutput } from '../src/registry/index.js';
 import { RunStateStore } from '../src/runstate/store.js';
 import { WORKFLOW_RELATIVE_PATH } from '../src/workflow/load.js';
@@ -115,16 +115,13 @@ nodes:
     expect((store.node('t').output as TestOutput).passed).toBe(false);
   });
 
-  it('asks what to run when it still holds the placeholder, then runs and saves the answer', async () => {
+  it('works out what to run when told nothing, then runs and saves the answer', async () => {
     const repo = makeTempGitRepo();
     const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
     const yaml = `
 nodes:
   - id: t
     type: test
-    config:
-      commands:
-        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
 `;
     mkdirSync(dirname(workflowPath), { recursive: true });
     writeFileSync(workflowPath, yaml);
@@ -149,9 +146,6 @@ nodes:
 nodes:
   - id: t
     type: test
-    config:
-      commands:
-        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
   - id: after
     type: test
     config: { commands: ["echo x"] }
@@ -172,6 +166,34 @@ edges:
     expect(readFileSync(workflowPath, 'utf8')).toBe(before);
   });
 
+  it('treats a pre-0.5 placeholder as never having been configured', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+    config:
+      commands:
+        - ${JSON.stringify(LEGACY_PLACEHOLDER_TEST_COMMAND)}
+`;
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(workflowPath, yaml);
+    const { store, ports } = await runReal(yaml, repo, {
+      portOpts: { testCommands: ['echo chosen'] },
+    });
+
+    // The placeholder is a command that runs and exits 0. Running it would
+    // report a passing suite for a node nobody ever configured.
+    expect(ports.testCommandRequests).toHaveLength(1);
+    expect(store.node('t').status).toBe('done');
+    expect((store.node('t').output as TestOutput).commands.map((c) => c.command)).toEqual([
+      'echo chosen',
+    ]);
+    expect(readFileSync(workflowPath, 'utf8')).toContain('echo chosen');
+    expect(readFileSync(workflowPath, 'utf8')).not.toContain('replace me');
+  });
+
   it('never asks once real commands are configured', async () => {
     const repo = makeTempGitRepo();
     const { ports } = await runReal(
@@ -187,7 +209,7 @@ nodes:
     expect(ports.testCommandRequests).toHaveLength(0);
   });
 
-  it('offers heuristics up front and spends a session only when the request asks', async () => {
+  it('runs both discovery passes before the user is asked anything', async () => {
     const repo = makeTempGitRepo();
     const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
     writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
@@ -195,9 +217,6 @@ nodes:
 nodes:
   - id: t
     type: test
-    config:
-      commands:
-        - ${JSON.stringify(PLACEHOLDER_TEST_COMMAND)}
 `;
     mkdirSync(dirname(workflowPath), { recursive: true });
     writeFileSync(workflowPath, yaml);
@@ -207,18 +226,49 @@ nodes:
     const { store } = await runReal(yaml, repo, {
       sessions,
       portOpts: {
-        testCommands: async (req) => {
-          // Detection is offline and free, so it is already in hand.
+        testCommands: (req) => {
+          // Both passes have already run: the picker opens on an answer to
+          // confirm, not an empty prompt with two keys to press first.
           expect(req.detected).toContain('npm test');
-          expect(sessions.requests).toHaveLength(0);
-          const proposals = await req.discover();
-          expect(proposals.map((p) => p.command)).toEqual(['echo found']);
+          expect(req.proposals.map((p) => p.command)).toEqual(['echo found']);
+          expect(sessions.requests).toHaveLength(1);
           return ['echo found'];
         },
       },
     });
 
+    // `discover` stays on the request for another look, but is not called
+    // again on its own.
     expect(sessions.requests).toHaveLength(1);
+    expect(store.node('t').status).toBe('done');
+  });
+
+  it('still asks, on what the heuristics found, when the agent pass fails', async () => {
+    const repo = makeTempGitRepo();
+    const workflowPath = join(repo, WORKFLOW_RELATIVE_PATH);
+    writeFileSync(join(repo, 'package.json'), JSON.stringify({ scripts: { test: 'vitest run' } }));
+    const yaml = `
+nodes:
+  - id: t
+    type: test
+`;
+    mkdirSync(dirname(workflowPath), { recursive: true });
+    writeFileSync(workflowPath, yaml);
+    const sessions = fakeSessions(() => {
+      throw new Error('provider unreachable');
+    });
+    const { store } = await runReal(yaml, repo, {
+      sessions,
+      portOpts: {
+        testCommands: (req) => {
+          // A discovery that fails is not a failed node.
+          expect(req.detected).toContain('npm test');
+          expect(req.proposals).toEqual([]);
+          expect(req.discoverError).toContain('provider unreachable');
+          return ['echo ok'];
+        },
+      },
+    });
     expect(store.node('t').status).toBe('done');
   });
 

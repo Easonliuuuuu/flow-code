@@ -78,25 +78,39 @@ const implementConfig = z.strictObject({
 });
 
 /**
- * Either an explicit command list or `auto`. `auto` opts the node into
- * rediscovering its commands at the start of each execution, trading the
- * deterministic-verdict guarantee for convenience; the loader rejects it in
- * combination with a loop-back that can re-run the node, which is the
- * combination that lets a retry loop shop for an easier suite.
+ * `auto` opts the node into rediscovering its commands at the start of *each*
+ * execution, trading the deterministic-verdict guarantee for convenience; the
+ * loader rejects it in combination with a loop-back that can re-run the node,
+ * which is the combination that lets a retry loop shop for an easier suite.
+ *
+ * Distinct from omitting `commands` entirely, which discovers once, confirms,
+ * and persists — that stays deterministic across attempts, so it carries no
+ * such restriction. `auto` is for a workflow pointed at repositories that
+ * differ from run to run, where persisting an answer would be wrong.
  */
 export const TEST_COMMANDS_AUTO = 'auto';
 
 /**
- * The single command every scaffolded Test node starts with, before a real
- * one is filled in. Exported rather than duplicated as a literal in
- * defaultWorkflow.ts/presets.ts (which use it verbatim in their YAML) and in
- * `cmdRun` (which matches on it to know a node was never actually
- * configured, and offers to resolve it there instead of failing on it).
+ * The command every Test node was scaffolded with before determination moved
+ * into the node itself. Kept only to recognise a pre-0.5 workflow file: such a
+ * node was never actually configured, so it is treated as unresolved rather
+ * than run — otherwise upgrading turns it into a Test node that echoes a
+ * sentence, exits 0, and reports a passing suite.
  */
-export const PLACEHOLDER_TEST_COMMAND = 'echo "replace me with your project\'s test command"';
+export const LEGACY_PLACEHOLDER_TEST_COMMAND =
+  'echo "replace me with your project\'s test command"';
 
 const testConfig = z.strictObject({
-  commands: z.union([z.array(z.string().min(1)).min(1), z.literal(TEST_COMMANDS_AUTO)]),
+  /**
+   * Omitted is the scaffolded default and means "not settled yet": the node
+   * works its commands out on its first execution and asks the user to confirm
+   * them, then writes the answer back to the workflow file so it is asked once
+   * per project rather than once per run. An explicit list is the opt-out —
+   * deterministic from the first run, no session, no confirmation.
+   */
+  commands: z
+    .union([z.array(z.string().min(1)).min(1), z.literal(TEST_COMMANDS_AUTO)])
+    .optional(),
   ...agentStepFields,
 });
 
@@ -434,7 +448,9 @@ const definitions: NodeTypeDefinition[] = [
     id: 'test',
     displayName: 'Test',
     description:
-      'Deterministic command runner: executes configured shell commands with no agent session and no API cost. ' +
+      'Deterministic command runner: executes shell commands and reports their exit codes — the verdict is ' +
+      'never a model\'s opinion. With no `commands` it works them out on its first execution and asks you to ' +
+      'confirm, then saves them to the workflow file; an explicit list skips that entirely. ' +
       'It runs tests; it never writes them (the Implement step does). ' +
       'Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent pass ' +
       'after the commands finish, for analysis alongside the verdict — it can never change `passed`.',
@@ -447,7 +463,8 @@ const definitions: NodeTypeDefinition[] = [
     configSchema: testConfig,
     outputSchema: testOutput,
     configSummary:
-      "commands (string[] min 1, or 'auto' to rediscover each run), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
+      "commands? (string[] min 1 — omit to discover and confirm once, or 'auto' to rediscover every run), " +
+      "agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
     outputSummary: 'passed (boolean), commands ({command, exitStatus, output}[]), analysis? (string)',
   },
   {
