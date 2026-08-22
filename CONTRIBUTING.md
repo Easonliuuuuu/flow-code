@@ -21,6 +21,13 @@ npm test            # vitest run
 npm run status      # regenerate STATUS.md
 ```
 
+`npm install` does not build: the build hook is `prepack`, so it runs when the
+package is packed rather than during anyone's install — a `prepare` hook would
+run inside consumers' installs too, where the published package has no source
+to compile. Run `npm run build` yourself before anything that reads `dist/`
+(`npm run docs:check`, the demo scripts, the `testbed` skill). `npm test`,
+`npm run lint`, and `npm run typecheck` all read `src/` and need no build.
+
 ## Knowing what you're building
 
 [`STATUS.md`](STATUS.md) is the rollup of where the product is — generated, never hand-edited. What it is measured against lives in [`docs/product/`](docs/product/README.md): the brief, the roadmap of business requirements, and `coverage.yaml`, the ledger mapping commit scopes and `src/` modules to the capability specs that own them.
