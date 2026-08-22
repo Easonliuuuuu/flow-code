@@ -8,7 +8,13 @@ import {
   discoverTestCommandsWithAgent,
   type TestCommandProposal,
 } from '../init/testDiscoverAgent.js';
-import { nodeWantsAgentStep, PLACEHOLDER_TEST_COMMAND, TEST_COMMANDS_AUTO, type TestConfig } from '../registry/index.js';
+import type { TestCommandsFindings } from '../engine/types.js';
+import {
+  LEGACY_PLACEHOLDER_TEST_COMMAND,
+  nodeWantsAgentStep,
+  TEST_COMMANDS_AUTO,
+  type TestConfig,
+} from '../registry/index.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { editRunningNode } from '../workflow/write.js';
 import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
@@ -50,7 +56,7 @@ function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<
  * re-run the node, so a retry loop can never shop for an easier suite.
  */
 async function commandsFor(ctx: ExecuteContext, config: TestConfig): Promise<string[]> {
-  if (config.commands !== TEST_COMMANDS_AUTO) return config.commands;
+  if (config.commands !== TEST_COMMANDS_AUTO) return config.commands ?? [];
 
   const release = await ctx.acquireSessionSlot();
   try {
@@ -70,17 +76,25 @@ function discoverWithAgent(ctx: ExecuteContext): Promise<TestCommandProposal[]> 
   });
 }
 
-/** True while this node still carries exactly the command `init` scaffolded. */
-function isPlaceholder(config: TestConfig): boolean {
+/**
+ * True while this node has never been told what to run — no `commands` key, or
+ * a pre-0.5 file still carrying the placeholder that used to stand in for one.
+ * The placeholder is a command that runs, so without this a workflow upgraded
+ * from that era would echo a sentence and report a passing test suite.
+ */
+function isUnresolved(config: TestConfig): boolean {
   const { commands } = config;
+  if (commands === undefined) return true;
   return (
-    Array.isArray(commands) && commands.length === 1 && commands[0] === PLACEHOLDER_TEST_COMMAND
+    Array.isArray(commands) &&
+    commands.length === 1 &&
+    commands[0] === LEGACY_PLACEHOLDER_TEST_COMMAND
   );
 }
 
 /**
- * Ask the user what this node should run, the first time it actually reaches
- * execution still holding the scaffolded placeholder.
+ * Work out what this node should run, the first time it reaches execution
+ * without a command list, and put the answer in front of the user to confirm.
  *
  * Deliberately here and not in `flow-code run`'s startup: asking before the
  * run has begun means asking before the Discuss node has established what is
@@ -88,21 +102,61 @@ function isPlaceholder(config: TestConfig): boolean {
  * screen. By the time a Test node executes, the discussion has happened and
  * the agent doing the looking has that context.
  *
+ * Both sources run before the user is asked anything — the free heuristics
+ * first, then a `read`-only agent session — so what opens is a filled-in
+ * answer to accept rather than an empty prompt to work through. Confirmation
+ * is not skippable: these commands run through `sh -c` outside the capability
+ * harness, so no unreviewed command string ever reaches the workflow file.
+ *
  * The answer is written back to `workflow.yaml`, so this is asked once per
  * project rather than once per run.
  */
-async function resolvePlaceholder(ctx: ExecuteContext): Promise<string[] | null> {
+function agentDiscovery(ctx: ExecuteContext): () => Promise<TestCommandProposal[]> {
+  return async () => {
+    const release = await ctx.acquireSessionSlot();
+    try {
+      return await discoverWithAgent(ctx);
+    } finally {
+      release();
+    }
+  };
+}
+
+/**
+ * Both sources, before the user is asked anything: the free heuristics, then a
+ * `read`-only agent session. A discovery that throws is not a failed node —
+ * the picker still opens on whatever the heuristics found, carrying the reason
+ * the agent pass produced nothing, and the user can type a command or retry.
+ */
+async function discoverCommands(ctx: ExecuteContext): Promise<TestCommandsFindings> {
+  const detected = detectTestCommands(ctx.repoRoot);
+  try {
+    return { detected, proposals: await agentDiscovery(ctx)() };
+  } catch (err) {
+    return {
+      detected,
+      proposals: [],
+      discoverError: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Put what was found in front of the user, and persist what they accept.
+ *
+ * Confirmation is not skippable: these commands run through `sh -c` outside
+ * the capability harness, so no unreviewed command string reaches the workflow
+ * file. What the picker opens on is a filled-in answer to accept rather than
+ * an empty prompt to work through.
+ */
+async function confirmCommands(
+  ctx: ExecuteContext,
+  findings: TestCommandsFindings,
+): Promise<string[] | null> {
   const chosen = await ctx.ports.testCommands.request({
     nodeId: ctx.node.id,
-    detected: detectTestCommands(ctx.repoRoot),
-    discover: async () => {
-      const release = await ctx.acquireSessionSlot();
-      try {
-        return await discoverWithAgent(ctx);
-      } finally {
-        release();
-      }
-    },
+    ...findings,
+    discover: agentDiscovery(ctx),
   });
   if (chosen === null || chosen.length === 0) return null;
 
@@ -125,9 +179,11 @@ export const executeTest: NodeExecutor = async function* (ctx) {
   let config = ctx.node.config as TestConfig;
   const results: CommandResult[] = [];
 
-  if (isPlaceholder(config)) {
-    yield { type: 'status', status: 'waiting', detail: 'no test command set yet' };
-    const resolved = await resolvePlaceholder(ctx);
+  if (isUnresolved(config)) {
+    yield { type: 'status', status: 'running', detail: 'working out what to run' };
+    const findings = await discoverCommands(ctx);
+    yield { type: 'status', status: 'waiting', detail: 'confirm what this node runs' };
+    const resolved = await confirmCommands(ctx, findings);
     if (resolved === null) {
       // Not a failure: a project with no test command yet is a real project,
       // and the alternative is failing every run until one exists.

@@ -344,36 +344,18 @@ describe('end-to-end: iterating on a failed verdict', () => {
 });
 
 describe('end-to-end: a rejection routed to a revision step', () => {
-  it('loads the documented revise branch and drives it to a commit', async () => {
-    // The exact wiring `defaultWorkflow.ts` and the workflow reference document,
-    // applied to the scaffolded graph. If this drifts from the comment, the
-    // comment is telling users to write something that does not work.
-    const yaml = DEFAULT_WORKFLOW_YAML.replace(
-      '  - { from: gate, to: git-ops }',
-      [
-        '  - { from: gate, to: git-ops, when: "gate.decision == \'approved\'" }',
-        '  - { from: gate, to: revise, when: "gate.decision == \'rejected\'" }',
-        '  - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }',
-      ].join('\n'),
-    ).replace(
-      '  - id: git-ops',
-      [
-        '  - id: revise',
-        '    type: discuss',
-        '    config: { topic: what to change }',
-        '  - id: git-ops',
-      ].join('\n'),
-    );
-
+  it('drives the scaffolded revise branch to a commit', async () => {
+    // The scaffolded graph, unedited: the revision branch ships enabled, so
+    // this is what a user gets from `flow-code init` and rejects once.
     const repo = makeTempGitRepo();
-    const workflow = workflowFromYaml(yaml);
+    const workflow = workflowFromYaml(DEFAULT_WORKFLOW_YAML);
     const store = storeFor(workflow, repo);
     const baseline = await recordBaseline(repo, false);
     store.setBaseline(baseline);
 
-    // The scaffolded spec gate now sits ahead of this branch and must clear
-    // on its own — this test is about the documented revise branch on the
-    // *final* gate, so only that gate's decisions are scripted to reject.
+    // The scaffolded spec gate sits ahead of this branch and must clear on its
+    // own — this test is about the revision branch on the *final* gate, so
+    // only that gate's decisions are scripted to reject.
     let decisions = 0;
     const ports = fakePorts({
       approve: (req) => (req.nodeId === 'gate' ? (++decisions === 1 ? 'reject' : 'approve') : 'approve'),

@@ -378,14 +378,20 @@ export class Engine {
         .join(', ');
       const current = this.store.node(sourceId);
       const detail = current.statusDetail;
-      // A rejected gate is a loop-back source that did not fail, so it keeps its
-      // own terminal status and only gains the reason the loop stopped. Its
-      // branch is already held by the approved-conditions on its out-edges.
-      this.store.setStatus(
-        sourceId,
-        current.status === 'done' ? 'done' : 'error',
-        `${detail ? `${detail} — ` : ''}loop-back attempt limit reached: ${exhausted}`,
-      );
+      // A node whose loop-back is taken *because it succeeded* exists only to
+      // send the work back — a revision step is the case. When its return path
+      // is spent it has done its work and delivered it nowhere, so it fails,
+      // loudly, rather than reporting `done` over a run that quietly stops.
+      // A rejected gate is the other kind of source that did not fail: it keeps
+      // its own terminal status and only gains the reason the loop stopped,
+      // because its branch is already held by the approved-conditions on its
+      // out-edges and the run already reports the rejection.
+      const status = trigger === 'success' || current.status !== 'done' ? 'error' : 'done';
+      const reason =
+        trigger === 'success'
+          ? `nowhere left to send this back to: loop-back attempt limit reached: ${exhausted}`
+          : `loop-back attempt limit reached: ${exhausted}`;
+      this.store.setStatus(sourceId, status, `${detail ? `${detail} — ` : ''}${reason}`);
       return false;
     }
 

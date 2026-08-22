@@ -16,7 +16,7 @@ without `edit` cannot write files, whatever its instructions say.
 | [`plan`](#plan) | Interactive negotiation of both the task and the graph that carries it out | yes, interactive (can wait for you) |
 | [`spec`](#spec) | Writes the durable spec — requirements and acceptance criteria — that the rest of the run implements and is verified against | yes, headless |
 | [`implement`](#implement) | Agent session that writes code for the configured task | yes, headless |
-| [`test`](#test) | Deterministic command runner: executes configured shell commands with no agent session and no API cost | no — deterministic, with an optional read-only agent step |
+| [`test`](#test) | Deterministic command runner: executes shell commands and reports their exit codes — the verdict is never a model's opinion | no — deterministic, with an optional read-only agent step |
 | [`validate`](#validate) | Agent-driven conformance check: does the work satisfy the task intent? Cannot edit, so it cannot fix its way to passing | yes, headless |
 | [`review`](#review) | Agent-driven quality critique: findings only, no edit, no exec | yes, headless |
 | [`git-ops`](#git-ops) | Commits (and optionally pushes) what exists | yes, headless |
@@ -65,12 +65,12 @@ without `edit` cannot write files, whatever its instructions say.
 
 ## `test`
 
-**Test.** Deterministic command runner: executes configured shell commands with no agent session and no API cost. It runs tests; it never writes them (the Implement step does). Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent pass after the commands finish, for analysis alongside the verdict — it can never change `passed`.
+**Test.** Deterministic command runner: executes shell commands and reports their exit codes — the verdict is never a model's opinion. With no `commands` it works them out on its first execution and asks you to confirm, then saves them to the workflow file; an explicit list skips that entirely. It runs tests; it never writes them (the Implement step does). Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent pass after the commands finish, for analysis alongside the verdict — it can never change `passed`.
 
 - **Capabilities:** `read`, `exec`
 - **Agent session:** no — deterministic, with an optional read-only agent step
 - **Model field:** no
-- **Config:** `commands (string[] min 1, or 'auto' to rediscover each run), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])`
+- **Config:** `commands? (string[] min 1 — omit to discover and confirm once, or 'auto' to rediscover every run), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])`
 - **Output:** `passed (boolean), commands ({command, exitStatus, output}[]), analysis? (string)`
 
 ## `validate`

@@ -148,9 +148,11 @@ export class UiInteractionPorts implements InteractionPorts {
       new Promise((resolve, reject) => {
         this.pendingTestCommands = {
           req,
-          proposals: [],
+          // Seeded from the discovery the executor already ran, so the panel
+          // opens on a filled-in answer instead of an empty list.
+          proposals: req.proposals,
           discovering: false,
-          discoverError: null,
+          discoverError: req.discoverError ?? null,
           resolve: (commands) => {
             this.pendingTestCommands = null;
             this.notify();
@@ -165,11 +167,12 @@ export class UiInteractionPorts implements InteractionPorts {
   };
 
   /**
-   * Runs the request's agent discovery and folds the proposals into the
-   * pending request, so the panel can offer them alongside what the offline
-   * heuristics found. Called by the App, which owns the decision to spend a
-   * session on it; failures surface as `discoverError` rather than throwing
-   * into a keypress handler.
+   * Re-runs the request's agent discovery and folds the proposals into the
+   * pending request, alongside what the offline heuristics found. The first
+   * pass already ran before the panel opened; this is the user asking for
+   * another look, so the App owns the decision to spend a second session on
+   * it. Failures surface as `discoverError` rather than throwing into a
+   * keypress handler.
    */
   async discoverTestCommands(): Promise<void> {
     const pending = this.pendingTestCommands;

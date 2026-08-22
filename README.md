@@ -22,10 +22,14 @@ Instead of scrolling a chat log, a coding task runs as a graph you can watch: ea
 
 ```
   Discuss ─→ Spec ─→ Gate ─→ Implement ─→ Test ─→ Validate ─→ Review ─→ Gate ─→ Git-ops
-  ↑                  │       ↑            │       │           │
-  └──────────────────┘       └────────────┴───────┴───────────┘
+     ↑                 │         ↑         │         │          │         │
+     └─────────────────┘         └─────────┴─────────┴──────────┘         ↓
+                                 ↑                                      Revise
+                                 └───────────────────────────────────────┘
+
   a rejected spec loops back to Discuss
-                             a failing verdict loops back to Implement
+  a failing verdict loops back to Implement
+  a rejected diff opens Revise, and what you settle there goes back to Implement
 ```
 
 | Node | What it does |
@@ -34,10 +38,11 @@ Instead of scrolling a chat log, a coding task runs as a graph you can watch: ea
 | **Spec** | Turns that discussion into acceptance criteria, written to `.flow-code/specs/<runId>.md`. |
 | **Gate** (first) | Pauses for an explicit yes or no on the spec before any code is written; a rejection reopens Discuss with your reason. |
 | **Implement** | Writes the code and the tests covering it. |
-| **Test** | Runs your test commands. The verdict is an exit code, never a model's opinion. |
+| **Test** | Runs your test commands, working them out from the repo the first time and asking you to confirm. The verdict is an exit code, never a model's opinion. |
 | **Validate** | Checks the result against the spec's acceptance criteria, one by one. |
 | **Review** | Reviews the pending diff. |
-| **Gate** (second) | Pauses for an explicit yes or no before anything touches git; a rejection here ends the run. |
+| **Gate** (second) | Pauses for an explicit yes or no before anything touches git; a rejection opens Revise. |
+| **Revise** | A second conversation, reached only when you turn a diff down — a gate records your decision but not your reasoning, so this is what carries the *why* back to Implement. |
 | **Git-ops** | Commits, and pushes if you configured a remote. |
 
 Every node is optional and rewireable — the graph above is just what `flow-code init` scaffolds.
@@ -69,7 +74,7 @@ flow-code init   # scaffold the workflow, pick a provider and model
 flow-code run    # execute the graph
 ```
 
-`init` walks you through provider and credential setup. Test commands are settled later, during the run itself: the Test node asks what it should run the first time it executes — after Discuss has established what is being built — and saves the answer to `.flow-code/workflow.yaml`.
+`init` walks you through provider and credential setup. Test commands are settled later, during the run itself: the first time the Test node executes it works out how your project runs its tests — package scripts and Makefile targets first, then a read-only agent pass — and shows you what it found to confirm. Nothing is run before you confirm it, and the answer is saved to `.flow-code/workflow.yaml`, so you are asked once per project rather than once per run.
 
 To run from source instead:
 

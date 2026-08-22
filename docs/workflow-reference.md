@@ -79,6 +79,14 @@ at it, whatever their triggers. Three loop-backs into `implement` at `maxAttempt
 give you three retries in total, not nine — so a loop that never converges still
 terminates. After that the outcome stands and downstream nodes are skipped.
 
+Because the bound is shared, **give every loop-back into the same target the same
+`maxAttempts`** unless you mean otherwise. A lower number on one of them does not
+throttle that path — it makes that path the first to die, once the others have spent
+the budget. This bites hardest on an `on: success` path: the node runs, reaches its
+conclusion, and then discovers there is nowhere to send it. When that happens the
+source node fails and names the bound that stopped it, rather than reporting `done`
+over a run that quietly stopped.
+
 When a loop-back fires, any branch that was skipped because a routing condition sent
 the run elsewhere is put back in play: the segment re-running is what decided that
 routing, so the skip no longer stands. A branch skipped because something above it
@@ -297,33 +305,44 @@ states no `when` is read as if it said `when: "<gate>.decision == 'approved'"`.*
 never write that yourself, and an edge that states its own condition is left alone. It
 is why `- { from: gate, to: git-ops }` is safe exactly as written.
 
-A rejected gate stops the run by default: no means stop. To send a rejection back for
-another pass instead, either loop straight back:
-
-```yaml
-  - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
-```
-
-...which retries carrying nothing but "a human said no" — or route the rejection
-through a conversation first, so the retry knows what to change:
+A rejection routes into another pass rather than ending the run. The scaffolded graph
+ships this wiring:
 
 ```yaml
 nodes:
   - id: revise
     type: discuss
-    config: { topic: what to change before this can be approved }
+    config: { topic: What has to change about this diff before it can be approved? }
 edges:
   - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
   - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
-  - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }
+  - { from: revise, to: implement, loopback: { maxAttempts: 3, on: success } }
 ```
 
 `revise` is an ordinary Discuss node — the same type the graph already starts with,
 placed a second time. Node **ids** must be unique; types may repeat. It receives the
 rejected diff through the gate (which is context-transparent), settles with you what
 needs to change, and its recorded conclusion becomes the context `implement` retries
-with. Each rejection costs an agent session, which is why the scaffolded graph ships
-this commented out.
+with.
+
+The gate does not loop back on its own, and the reason is worth knowing: approve/reject
+carries no text, so a return path straight out of a gate retries on nothing but the
+fact that a human said no. `revise` exists to hold the *why*. Where a gate's loop-back
+target is already interactive there is no need for it — the spec gate loops directly to
+`discuss`, which reopens the same conversation to ask.
+
+**`maxAttempts` here matches the verification loop-backs on purpose.** The bound is
+counted on the *target* and shared across every loop-back pointing at it, so a lower
+number would not mean "fewer revisions" — it would mean the revision path starves
+first. One earlier test failure would be enough to spend an attempt, and the rejection
+would then run the whole conversation and find it had nowhere to go. When a
+success-triggered loop-back finds its bound spent, the source node fails and says so;
+it does not report `done` over a run that stopped with nothing shipped.
+
+Each rejection costs an agent session. To go back to a rejection that simply ends the
+run, delete `revise` and both conditioned edges, leaving `- { from: gate, to: git-ops }`
+— which is safe bare, per the approval condition above. To retry with no conversation
+at all, loop the gate straight back: `- { from: gate, to: implement, loopback: { maxAttempts: 3 } }`.
 
 ### Every git-writing node must be gated
 

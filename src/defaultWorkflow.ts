@@ -1,5 +1,3 @@
-import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
-
 /**
  * The scaffolded default workflow: Discuss → Spec → Approval-Gate →
  * Implement → Test → Validate → Review → Approval-Gate → Git-ops. The second
@@ -8,6 +6,14 @@ import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
  * Implement so the contract everything downstream is judged against is fixed
  * with a human's sign-off, not adopted the moment an agent finishes writing
  * it — the run no longer completes unattended end to end.
+ *
+ * Both gates route a rejection back into a conversation rather than ending the
+ * run, because "no" is nearly always the start of another pass rather than the
+ * end of the work. Both loop-backs carry the same attempt bound as the
+ * verification loops that share their target: the bound is counted once per
+ * target across every loop-back pointing at it, so a lower number here would
+ * mean the revision path starves first, after one failed test has already
+ * spent an attempt.
  */
 export const DEFAULT_WORKFLOW_YAML = `# flow-code workflow — checked into your repo, edit as needed.
 # Run \`flow-code node-types\` to see every node type's capabilities and config.
@@ -52,9 +58,9 @@ nodes:
     #       - Running \`foo --bar\` prints the parsed config and exits 0
 
   # A gate with nothing configured: it reads the spec from the Spec node it
-  # depends on directly and needs no pointer to a path. See \`gate\` below for
-  # why the gate before Git-ops looks different — a diff instead of a
-  # document, and no loop-back scaffolded.
+  # depends on directly and needs no pointer to a path. The gate before Git-ops
+  # shows a diff instead of a document, and routes its rejection through a
+  # second conversation rather than straight back — see \`revise\` below.
   - id: spec-gate
     type: approval-gate
     config:
@@ -72,11 +78,22 @@ nodes:
   # \`instructions\`/\`skills\`) for a read-only-by-default agent pass that runs
   # once after the commands finish and adds analysis alongside the verdict —
   # it can never change \`passed\`.
+  #
+  # No \`commands\`: the first time this node runs it works out how this project
+  # runs its tests — package scripts and Makefile targets first, then a
+  # read-only agent pass — and shows you what it found to confirm. Nothing is
+  # executed before you confirm it, and your answer is written back into this
+  # file, so it is asked once per project rather than once per run.
+  #
+  # To skip that entirely, say what to run:
+  #   config:
+  #     commands: [npm test]
+  # Or \`commands: auto\` to rediscover on *every* execution and never persist —
+  # for a workflow pointed at repositories that differ from run to run. That
+  # one cannot be combined with a loop-back that re-runs this node, since a
+  # node that picks and grades its own commands could pick easier ones.
   - id: test
     type: test
-    config:
-      commands:
-        - ${PLACEHOLDER_TEST_COMMAND}
 
   - id: validate
     type: validate
@@ -90,6 +107,25 @@ nodes:
     type: approval-gate
     config:
       title: Review the pending diff before git operations
+
+  # Where a rejected diff goes. An ordinary Discuss node — the same type as
+  # \`discuss\` above, placed a second time — reached only when \`gate\` is
+  # rejected. It sees the diff you turned down, settles with you what should
+  # change, and its conclusion becomes the context \`implement\` retries with.
+  #
+  # It exists because the gate itself has no way to say *why*: approve/reject
+  # carries no text. Without this node the retry knows only that a human said
+  # no, which is the same prompt again. The spec gate needs no equivalent —
+  # its loop-back lands on \`discuss\`, which is already interactive and already
+  # holds the conversation to reopen.
+  #
+  # To turn it off, delete this node and the two conditioned edges below, and
+  # put back a single \`- { from: gate, to: git-ops }\`. A rejection then ends
+  # the run. That costs nothing per rejection; this costs one agent session.
+  - id: revise
+    type: discuss
+    config:
+      topic: What has to change about this diff before it can be approved?
 
   - id: git-ops
     type: git-ops
@@ -117,7 +153,12 @@ edges:
   - { from: spec, to: validate }
   - { from: validate, to: review }
   - { from: review, to: gate }
-  - { from: gate, to: git-ops }
+  # Both arms of the gate's decision, spelled out. An unconditional edge out of
+  # a gate is read as \`when: "<gate>.decision == 'approved'"\` — so the first
+  # line could be left bare, but mixing an implicit condition with the explicit
+  # one beside it reads badly even though it works.
+  - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
 
   # Rejecting the spec reopens the discussion that produced it, rather than
   # ending the run — a spec is rejected in order to be rewritten, not
@@ -128,12 +169,24 @@ edges:
   # it. \`discuss\` is where it goes rather than \`spec-gate\` itself because the
   # gate has no way to say *why* it was rejected — only \`discuss\` can ask you,
   # and it resumes the same conversation to do it rather than starting cold.
-  #
-  # This is deliberately not extended to the gate before Git-ops below: that
-  # one keeps to the documented-but-not-enabled pattern its own comment
-  # explains, because finished work rejected there is finished work abandoned,
-  # not reconsidered.
   - { from: spec-gate, to: discuss, loopback: true }
+
+  # The way back from a rejected diff. \`on: success\` is the part worth reading
+  # twice: a loop-back normally fires when its source *fails*, which is what a
+  # verification loop wants. Here the opposite is true — finishing the
+  # conversation is the signal to go back, so a return path waiting for
+  # \`revise\` to fail would wait forever.
+  #
+  # It returns to \`implement\`, not to \`discuss\`: \`spec\` stays outside the
+  # segment, so every retry is still judged against the criteria the first
+  # attempt was.
+  #
+  # maxAttempts matches the verification loop-backs below because they all
+  # point at \`implement\` and the bound is counted once on the target. A lower
+  # number here would not mean "fewer revisions" — it would mean the revision
+  # path dies first, and a single earlier test failure would be enough to have
+  # you hold the whole conversation and then find it had nowhere to go.
+  - { from: revise, to: implement, loopback: { maxAttempts: 3, on: success } }
 
   # Loop-backs: when the \`from\` node fails, execution returns to \`to\` and
   # re-runs everything between them, with the failure passed in as context —
@@ -145,44 +198,17 @@ edges:
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
   - { from: review, to: implement, loopback: { maxAttempts: 3 } }
 
-  # A rejected gate stops the run by default: "no" means stop. The gate itself
-  # still finishes — it got its answer — and what holds \`git-ops\` back is that
-  # an edge out of a gate is read as \`when: "gate.decision == 'approved'"\`
-  # unless it says otherwise. You never have to write that; it is why the edge
-  # above is safe as it stands.
+  # Rejection is wired to reconsider, above — but nothing forces that shape.
+  # To retry with nothing but "a human said no" as context, skip \`revise\` and
+  # loop the gate straight back:
   #
-  # To send a rejection back for another pass instead, either loop straight
-  # back:
+  #   - { from: gate, to: implement, loopback: { maxAttempts: 3 } }
   #
-  #   - { from: gate, to: implement, loopback: { maxAttempts: 2 } }
-  #
-  # ...which retries with nothing but "a human said no" as context — or route
-  # it through a conversation first, so the retry knows what to change:
-  #
-  #   nodes:
-  #     - id: revise
-  #       type: discuss
-  #       config: { topic: what to change before this can be approved }
-  #   edges:
-  #     - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
-  #     - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
-  #     - { from: revise, to: implement, loopback: { maxAttempts: 2, on: success } }
-  #
-  # \`revise\` is an ordinary Discuss node — the same type as \`discuss\` above,
-  # placed second. It sees the rejected diff, settles what to fix with you, and
-  # its conclusion becomes the context \`implement\` retries with. Each rejection
-  # then costs an agent session, which is why this is off by default.
-  #
-  # \`on: success\` is the part worth reading twice. A loop-back normally fires
-  # when its source *fails* — that is what a verification loop wants. Here the
-  # opposite is true: finishing the conversation is the signal to go back, so a
-  # return path that waited for \`revise\` to fail would wait forever.
-  #
-  # Note the loop returns to \`implement\`, not to \`discuss\`: \`spec\` stays
-  # outside the segment, so every retry is still judged against the criteria the
-  # first attempt was. Spell out the approved edge once you add the rejected
-  # one — mixing an implicit condition with an explicit one reads badly even
-  # though it works.
+  # To make a rejection end the run instead, delete \`revise\` and both
+  # conditioned edges, leaving \`- { from: gate, to: git-ops }\`. Nothing
+  # downstream of the gate runs after a rejection either way: the halt is
+  # carried by the recorded decision and the conditions on these edges, never
+  # by an execution failure — the gate that was answered did not fail.
 
   # Conditional edges route; they don't just sequence. An edge with a \`when\`
   # still waits for its source, but only carries when the condition holds —

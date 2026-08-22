@@ -80,6 +80,7 @@ describe('the openspec preset scaffolds a valid workflow', () => {
       'validate',
       'gate',
       'archive',
+      'revise',
     ]);
   });
 
@@ -102,7 +103,12 @@ describe('the openspec preset scaffolds a valid workflow', () => {
 
     const explore = wf.nodes.find((n) => n.id === 'explore')!;
     expect(explore.type.interactive).toBe(true);
-    for (const node of wf.nodes.filter((n) => n.id !== 'explore')) {
+    // `revise` is the second interactive node, and deliberately carries no
+    // skill: it exists to ask why a diff was rejected, not to run a method.
+    const revise = wf.nodes.find((n) => n.id === 'revise')!;
+    expect(revise.type.interactive).toBe(true);
+    expect((revise.config as { skills?: unknown }).skills).toBeUndefined();
+    for (const node of wf.nodes.filter((n) => n.id !== 'explore' && n.id !== 'revise')) {
       expect(node.type.interactive).toBe(false);
     }
   });
@@ -153,6 +159,7 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
       'validate',
       'gate',
       'git-ops',
+      'revise',
     ]);
   });
 
@@ -161,7 +168,10 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
 
     const specify = wf.nodes.find((n) => n.id === 'specify')!;
     expect(specify.type.interactive).toBe(true);
-    for (const node of wf.nodes.filter((n) => n.id !== 'specify')) {
+    // `revise` is the second interactive node, by design: a rejected diff is
+    // routed into a conversation so the retry knows what to change.
+    expect(wf.nodes.find((n) => n.id === 'revise')!.type.interactive).toBe(true);
+    for (const node of wf.nodes.filter((n) => n.id !== 'specify' && n.id !== 'revise')) {
       expect(node.type.interactive).toBe(false);
     }
   });
@@ -210,13 +220,15 @@ describe('the planned preset scaffolds a valid workflow', () => {
 });
 
 describe('every preset', () => {
-  it('produces a workflow whose test node still runs explicit commands', () => {
+  it('leaves every test node to work its own commands out and confirm them', () => {
     for (const preset of listPresets()) {
       const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
       const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
       const test = wf.nodes.find((n) => n.type.id === 'test');
       if (!test) continue;
-      expect((test.config as { commands: unknown }).commands).toBeInstanceOf(Array);
+      // Not `auto`: that rediscovers on every execution and never persists,
+      // which the loader rejects alongside the retry loops these presets ship.
+      expect((test.config as { commands?: unknown }).commands).toBeUndefined();
     }
   });
 });

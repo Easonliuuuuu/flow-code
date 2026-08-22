@@ -309,6 +309,7 @@ describe('canvas badge clicks', () => {
       void ports.testCommands.request({
         nodeId: 'rev',
         detected: ['npm test'],
+        proposals: [],
         discover: () => Promise.resolve([]),
       });
       await settle();
@@ -448,6 +449,7 @@ describe('canvas zoom', () => {
       void ports.testCommands.request({
         nodeId: 'rev',
         detected: ['npm test'],
+        proposals: [],
         discover: () => Promise.resolve([]),
       });
       await settle();

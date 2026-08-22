@@ -477,6 +477,10 @@ export function buildWorkflow(
   // several attempts to choose an easier one. Reject the combination, not
   // either half of it.
   //
+  // Only `auto` — a node with no `commands` at all resolves once, persists the
+  // answer, and runs the same commands on every later attempt, so it grades
+  // each retry against the exam the first attempt sat.
+  //
   // Gated on the loop-backs being sound: this check reads `nodesBetween` over
   // them, so running it against a loop-back already known to point the wrong
   // way would report a second problem about the same broken edge.

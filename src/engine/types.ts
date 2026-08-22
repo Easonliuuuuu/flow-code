@@ -134,18 +134,31 @@ export interface PlanPort {
 }
 
 /**
- * A Test node that reached execution still carrying the scaffolded
- * placeholder command, asking what it should actually run.
- *
- * `discover` is handed over as a callback rather than run by the UI: reading
- * the repo costs an agent session, and the executor is what holds the session
- * runner. The UI decides *whether* to spend it; the executor knows how.
+ * What both discovery passes turned up, run before the user is asked anything
+ * so the picker opens on an answer rather than an empty list.
  */
-export interface TestCommandsRequest {
-  nodeId: string;
+export interface TestCommandsFindings {
   /** Commands found by offline heuristics — free, instant, usually right. */
   detected: string[];
-  /** Ask an agent to read the repo and propose commands, with its reasoning. */
+  /** What the `read`-only agent pass proposed, each with its evidence. */
+  proposals: Array<{ command: string; rationale: string }>;
+  /** Why the agent pass produced nothing, when it failed rather than declined. */
+  discoverError?: string;
+}
+
+/**
+ * A Test node that reached execution with no command list, presenting what it
+ * worked out for confirmation. Nothing here has been executed: these commands
+ * run through `sh -c` outside the capability harness, so the confirmation is
+ * the only thing standing between a proposal and a shell.
+ *
+ * `discover` is handed over as a callback rather than run by the UI: re-reading
+ * the repo costs another agent session, and the executor is what holds the
+ * session runner. The UI decides *whether* to spend it; the executor knows how.
+ */
+export interface TestCommandsRequest extends TestCommandsFindings {
+  nodeId: string;
+  /** Run the agent pass again, when the user asks for another look. */
   discover(): Promise<Array<{ command: string; rationale: string }>>;
 }
 

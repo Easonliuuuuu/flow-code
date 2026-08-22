@@ -9,6 +9,8 @@ The system SHALL provide an `init` command that scaffolds a default workflow def
 
 The scaffolded graph SHALL gate the spec as well as the push. The spec is the contract every downstream node is judged against and is fixed before any code is written, so the run SHALL NOT adopt it without an explicit human decision.
 
+Both gates SHALL route a rejection back into a conversation rather than ending the run, because a rejection is nearly always the start of another pass. Where the gate's loop-back target is already an interactive node the graph SHALL reuse it; where the target is headless the graph SHALL place a Discuss node on the rejection branch to carry the reason, since a gate records a decision and no explanation of it.
+
 #### Scenario: Init in a repo with no existing workflow file
 - **WHEN** the user runs `flow-code init` in a git repo that has no `.flow-code/workflow.yaml`
 - **THEN** the system creates `.flow-code/workflow.yaml` with a valid default graph and reports the file was created
@@ -31,7 +33,7 @@ The scaffolded graph SHALL gate the spec as well as the push. The spec is the co
 
 #### Scenario: Default graph stops on a rejected final gate
 - **WHEN** the scaffolded default workflow is loaded
-- **THEN** the Approval-Gate node before Git-ops SHALL have no loop-back edge and no rejection branch, so rejecting the finished work ends the run by default; the file SHALL document, without enabling, how to route that rejection to a revision step instead. This SHALL NOT apply to the spec gate, whose loop-back is scaffolded rather than documented, because a spec is rejected to be rewritten whereas finished work is rejected to be abandoned.
+- **THEN** the Approval-Gate node before Git-ops SHALL route a rejection to a Discuss node placed on its rejection branch, which loops back to the Implement node on success — so rejecting the diff opens a conversation about what to change and sends that conclusion into another pass, rather than ending the run. The gate SHALL NOT loop back directly: it has no channel for *why* it was rejected, so a return path straight out of it would retry on nothing but the fact that a human said no. The file SHALL document how to remove the branch and restore a rejection that ends the run, since the branch costs an agent session per rejection.
 
 #### Scenario: A scaffolded run is no longer unattended end to end
 - **WHEN** a run executes a newly scaffolded default workflow
@@ -149,6 +151,14 @@ A loop-back edge SHALL declare whether it is taken when its source fails or when
 - **WHEN** several loop-backs point at the same target with different triggers
 - **THEN** the target's attempt bound SHALL be counted once across all of them, so a loop that never converges still terminates
 
+#### Scenario: A success-triggered path finds its bound already spent
+- **WHEN** a loop-back declares that it is taken on success, its source completes, and the shared attempt bound on its target has been consumed by another loop-back
+- **THEN** the source SHALL be reported as failed, naming the bound that stopped it — a node whose whole purpose is to send work back has delivered nothing when it cannot, and reporting it as completed would present a run that stopped with nothing shipped as a run that succeeded
+
+#### Scenario: A rejected gate finds its bound already spent
+- **WHEN** the source whose loop-back is spent is an Approval-Gate that was rejected
+- **THEN** it SHALL keep its terminal status and gain only the reason the loop stopped, because a gate that received its answer did not fail and its branch is already held by the conditions on its out-edges
+
 ### Requirement: Built-in node type registry
 The system SHALL expose a registry of built-in node types (Discuss, Implement, Test, Validate, Review, Git-ops, Worktree-Agent, Approval-Gate). Each type SHALL be defined by a capability set, a default role prompt, an output schema, and whether the type is interactive, in addition to its config schema. A type MAY additionally declare that it is context-transparent and MAY declare a failure predicate over its own output.
 
@@ -189,7 +199,7 @@ The system SHALL expose a registry of built-in node types (Discuss, Implement, T
 - **THEN** it SHALL accept a `skills` list if and only if the type is agent-driven
 
 ### Requirement: Test node runs deterministic commands
-The Test node type SHALL execute a configured list of shell commands and report their results without invoking an agent session, distinguishing it from Validate (agent-driven conformance check against the task intent) and Review (agent-driven quality critique). A Test node MAY instead be configured to rediscover its commands at the start of each execution, which is opt-in and constrained by the test-command-discovery capability.
+The Test node type SHALL execute a list of shell commands and report their results without invoking an agent session to decide the verdict, distinguishing it from Validate (agent-driven conformance check against the task intent) and Review (agent-driven quality critique). A Test node with no configured commands SHALL determine them on its first execution and confirm them with the user, and a Test node MAY instead be configured to rediscover them at the start of every execution; both are governed by the test-command-discovery capability.
 
 #### Scenario: Test node executes configured commands
 - **WHEN** a Test node whose config lists one or more commands is started
@@ -203,9 +213,9 @@ The Test node type SHALL execute a configured list of shell commands and report 
 - **WHEN** the Implement node type's role prompt is composed
 - **THEN** it SHALL state that Implement owns the tests covering its change and that the downstream Test node only runs commands and cannot author a test, so no test the change needs is left unwritten on the assumption that a later node will write it
 
-#### Scenario: Test config accepts a rediscovery marker
+#### Scenario: Test config accepts a command list, a rediscovery marker, or neither
 - **WHEN** a Test node's config is validated
-- **THEN** the schema SHALL accept either a non-empty list of command strings or the `auto` marker, and nothing else
+- **THEN** the schema SHALL accept a non-empty list of command strings, the `auto` marker, or no `commands` key at all — and nothing else. An absent key SHALL mean the node determines its commands on first execution, confirms them, and persists them; it SHALL NOT be treated as an empty list
 
 ### Requirement: Git-ops node configuration
 The Git-ops node type SHALL declare an explicit config schema covering which git operations it performs, and pushing SHALL be opt-in rather than implied by the node's presence in the graph.
@@ -246,6 +256,8 @@ The `init` command SHALL accept a named preset that scaffolds a workflow other t
 
 Every preset that contains a Spec node SHALL gate it on the same terms as the default graph. A methodology changes which skills write the spec, not whether a human agrees to it.
 
+Every preset whose gate before the git-mutating step has an Implement node to send work back to SHALL carry the same rejection branch as the default graph, for the same reason. A preset whose graph is negotiated at run time has no such node in the scaffolded file and SHALL NOT be required to carry one.
+
 #### Scenario: Init with no preset
 - **WHEN** the user runs `flow-code init` without naming a preset
 - **THEN** the system SHALL scaffold the default Discuss → Spec → Approval-Gate → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph
@@ -261,6 +273,10 @@ Every preset that contains a Spec node SHALL gate it on the same terms as the de
 #### Scenario: A preset with no Spec node
 - **WHEN** a preset scaffolds a graph containing no Spec node
 - **THEN** it SHALL NOT be required to contain a spec gate, and its shape SHALL otherwise be unchanged
+
+#### Scenario: A preset whose implementation nodes do not exist yet
+- **WHEN** a preset scaffolds only the invariant spine of a graph whose middle is negotiated at run time
+- **THEN** its gate SHALL NOT be required to carry a rejection branch, because the scaffolded file holds no node for that branch to return the work to
 
 #### Scenario: A preset's skills are not installed
 - **WHEN** a preset attaches skills that do not resolve in any discovery root

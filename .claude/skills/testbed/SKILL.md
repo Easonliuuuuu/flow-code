@@ -168,9 +168,12 @@ and `splash`.
 
 Mention this gotcha once per conversation: `maxAttempts` is counted on the
 loop-back **target** (`implement`) and shared across every loop-back pointing
-at it. This graph has 3 and only one loop-back, so there is room to reject
-twice and still ship — add another return path into `implement` and that
-budget is shared, not doubled.
+at it — this graph's two paths back both say 6, and that is one budget of 6,
+not two. Matching them is deliberate: a lower number on the `on: success` path
+would make it the first to starve, so a couple of failing `unit` runs would be
+enough for a rejection to hold the whole conversation and then find it had
+nowhere to go. When that does happen, `revise` errors and names the bound
+rather than reporting `done` over a run that shipped nothing.
 
 ### `guest` mode
 

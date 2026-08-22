@@ -574,6 +574,7 @@ describe('default workflow template', () => {
       'validate',
       'review',
       'approval-gate',
+      'discuss',
       'git-ops',
     ]);
     const gitOps = wf.nodes.find((n) => n.type.id === 'git-ops')!;
@@ -590,8 +591,13 @@ describe('default workflow template', () => {
     // final gate's `gate -> git-ops` edge.
     const [implementCondition] = wf.graph.conditionsInto('implement');
     expect(implementCondition!.condition.source).toBe("spec-gate.decision == 'approved'");
+    // The final gate states both arms of its decision explicitly, because a
+    // rejection now routes somewhere rather than only ending the run — and an
+    // implicit approval condition beside an explicit rejection one reads badly.
     const [gitOpsCondition] = wf.graph.conditionsInto(gitOps.id);
     expect(gitOpsCondition!.condition.source).toBe("gate.decision == 'approved'");
+    const [reviseCondition] = wf.graph.conditionsInto('revise');
+    expect(reviseCondition!.condition.source).toBe("gate.decision == 'rejected'");
     // The loop-back is a return path, not a forward edge, so it is exempt
     // from that synthesis — `discuss` carries no approval condition.
     expect(wf.graph.conditionsInto('discuss')).toHaveLength(0);
@@ -608,15 +614,27 @@ describe('default workflow template', () => {
     // fires it is a rejection: `wasRejectedGate` reports a rejected gate to
     // the engine as though it had failed, specifically so a bare
     // `loopback: true` on its edge fires on rejection and nothing else.
+    // `revise` is the exception: its loop-back is taken *because it finished*.
+    // A conversation about what to change signals the retry by concluding, so
+    // a return path waiting for it to fail would wait forever.
     expect(wf.graph.allLoopbacks()).toEqual([
       { from: 'spec-gate', to: 'discuss', maxAttempts: 3, on: 'failure' },
+      { from: 'revise', to: 'implement', maxAttempts: 3, on: 'success' },
       { from: 'test', to: 'implement', maxAttempts: 3, on: 'failure' },
       { from: 'validate', to: 'implement', maxAttempts: 3, on: 'failure' },
       { from: 'review', to: 'implement', maxAttempts: 3, on: 'failure' },
     ]);
-    // A rejected *final* gate still means stop: "no" is a decision, not a
-    // retry — only the spec gate loops back.
+    // The final gate itself never loops back: it routes forward to `revise`,
+    // which is what carries the work back. A gate has no way to say *why* it
+    // was rejected, so looping straight from it would retry on nothing but
+    // "a human said no".
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
+    // Every loop-back into `implement` shares one attempt bound, counted on
+    // the target. `revise` matching the verification loops is load-bearing: a
+    // lower number would let one earlier test failure spend the budget and
+    // leave the revision path dead, after the conversation had already run.
+    const intoImplement = wf.graph.allLoopbacks().filter((l) => l.to === 'implement');
+    expect(new Set(intoImplement.map((l) => l.maxAttempts))).toEqual(new Set([3]));
     // Loop-backs are return paths, not dependencies: implement must not wait
     // on the nodes that can send work back to it, and discuss must not wait
     // on spec-gate.
