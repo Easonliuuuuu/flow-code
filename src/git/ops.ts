@@ -24,9 +24,45 @@ export async function headCommit(dir: string): Promise<string> {
   return git(['rev-parse', 'HEAD'], dir);
 }
 
-export async function isDirty(dir: string): Promise<boolean> {
+/**
+ * Every uncommitted path as a `git status --porcelain` line (`XY path`),
+ * tracked and untracked alike. One definition of "dirty", so what preflight
+ * refuses and what the prompt lists can never disagree.
+ */
+export async function dirtyEntries(dir: string): Promise<string[]> {
   const out = await git(['status', '--porcelain'], dir);
-  return out.length > 0;
+  return out.length === 0 ? [] : out.split('\n');
+}
+
+export async function isDirty(dir: string): Promise<boolean> {
+  return (await dirtyEntries(dir)).length > 0;
+}
+
+/** The stash stack's top commit, or null when the repo has never stashed. */
+async function stashTop(dir: string): Promise<string | null> {
+  try {
+    return await git(['rev-parse', '--verify', '--quiet', 'refs/stash'], dir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Stash everything uncommitted — tracked and untracked alike — leaving the
+ * tree at HEAD. Returns the new stash commit, or null when git found nothing
+ * to save after all.
+ *
+ * Deliberately a plain `git stash push -u` with no pathspec: the prompt that
+ * offers this lists exactly what it is about to stash, so cleverness about
+ * which paths to spare would only make the listing lie. Nothing pops this
+ * automatically either — by the time a run ends the agent has edited the same
+ * files, so restoring is a decision only the user can make.
+ */
+export async function stashAll(dir: string, message: string): Promise<string | null> {
+  const before = await stashTop(dir);
+  await git(['stash', 'push', '--include-untracked', '--message', message], dir);
+  const after = await stashTop(dir);
+  return after !== null && after !== before ? after : null;
 }
 
 /**
