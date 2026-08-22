@@ -119,9 +119,8 @@ describe('test-command panel', () => {
     const { workflow, ports, store, answer } = setup();
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
-      expect(lastFrame(stdout)).toContain('Test commands \u2014 t');
-      expect(lastFrame(stdout)).toContain('[x] npm test');
+      const frame = await settleUntil(stdout, '[x] npm test');
+      expect(frame).toContain('Test commands \u2014 t');
 
       stdin.write('\r');
       expect(await answer).toEqual(['npm test']);
@@ -134,10 +133,12 @@ describe('test-command panel', () => {
     const { workflow, ports, store, answer } = setup();
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
+      // Waiting for the seeded box specifically: space against an unseeded
+      // panel checks it rather than clearing it, so this would not just be
+      // slow to assert — it would assert the opposite thing.
+      await settleUntil(stdout, '[x] npm test');
       stdin.write(' ');
-      await settle();
-      expect(lastFrame(stdout)).toContain('[ ] npm test');
+      await settleUntil(stdout, '[ ] npm test');
       stdin.write('\r');
       // Confirming an empty selection reads as "run nothing here", the same
       // answer escape gives — a project with no suite yet is a real project.
@@ -175,15 +176,13 @@ describe('test-command panel', () => {
     const { workflow, ports, store, answer } = setup();
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
+      await settleUntil(stdout, '[x] npm test');
       stdin.write('a');
       await settle();
       stdin.write('make check');
-      await settle();
-      expect(lastFrame(stdout)).toContain('command: make check');
+      await settleUntil(stdout, 'command: make check');
       stdin.write('\r');
-      await settle();
-      expect(lastFrame(stdout)).toContain('make check');
+      await settleUntil(stdout, '[x] make check');
       stdin.write('\r');
       // Added alongside what was found, not instead of it.
       expect(await answer).toEqual(['npm test', 'make check']);
@@ -198,12 +197,12 @@ describe('test-command panel', () => {
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
       // Both passes ran before the panel opened, so both are on screen and
-      // checked without a keypress.
-      expect(lastFrame(stdout)).toContain('[x] npm test');
-      expect(lastFrame(stdout)).toContain('[x] go test ./...');
-      expect(lastFrame(stdout)).toContain('go.mod at the repo root');
+      // checked without a keypress — one seeding pass, so waiting for either
+      // is waiting for both.
+      const frame = await settleUntil(stdout, '[x] go test ./...');
+      expect(frame).toContain('[x] npm test');
+      expect(frame).toContain('go.mod at the repo root');
 
       stdin.write('\r');
       expect(await answer).toEqual(['npm test', 'go test ./...']);
@@ -222,11 +221,14 @@ describe('test-command panel', () => {
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
+      await settleUntil(stdout, '[x] npm test');
       expect(discoverCalls).toBe(0);
 
       stdin.write('d');
-      const frame = await settleUntil(stdout, 'go test ./...');
+      // The checked box, not just the text: what the second look turns up is
+      // seeded by the same effect, so confirming on the bare text would race
+      // it and answer without the new command.
+      const frame = await settleUntil(stdout, '[x] go test ./...');
       expect(discoverCalls).toBe(1);
       expect(frame).toContain('go.mod at the repo root');
 
@@ -247,9 +249,8 @@ describe('test-command panel', () => {
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
-      expect(lastFrame(stdout)).toContain('no provider configured');
-      expect(lastFrame(stdout)).toContain('[x] npm test');
+      const frame = await settleUntil(stdout, '[x] npm test');
+      expect(frame).toContain('no provider configured');
       stdin.write('\r');
       expect(await answer).toEqual(['npm test']);
     } finally {
@@ -265,7 +266,7 @@ describe('test-command panel', () => {
     });
     const { stdout, stdin, unmount } = mount(workflow, store, ports);
     try {
-      await settle();
+      await settleUntil(stdout, '[x] npm test');
       stdin.write('d');
       const frame = await settleUntil(stdout, 'no provider configured');
       expect(frame).toContain('no provider configured');
