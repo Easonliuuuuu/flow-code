@@ -28,9 +28,10 @@ Usage:
                               Scaffold .flow-code/workflow.yaml with the default graph, set up
                               its test command(s), and pick the provider/model for the project
                               (re-run any time — already-configured steps ask before redoing)
-  flow-code run [--allow-dirty] [--no-splash]
+  flow-code run [--allow-dirty] [--no-splash] [--no-notify] [--no-bell] [--no-alerts]
                               Run the workflow (refuses a dirty tree unless overridden)
                               —no-splash skips the startup animation (or set FLOW_CODE_NO_SPLASH)
+                              —no-notify / --no-bell / --no-alerts control OS popups & terminal bell
   flow-code run --resume, -r [runId]
                               Resume a run interrupted by ctrl+c/SIGTERM (defaults to the
                               most recent one); completed nodes are kept, the rest re-run,

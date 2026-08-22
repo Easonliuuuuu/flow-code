@@ -55,6 +55,7 @@ scopes:
   record: [run-state, workflow-graph]
   runstate: [run-state]
   connect: [session-status-line]
+  notify: [approval-gate, terminal-canvas-ui]
   status: [project-documentation]   # scripts/status.mjs and the STATUS.md rollup
   guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
 
@@ -77,6 +78,7 @@ modules:
   git: [approval-gate]
   init: [workflow-graph, test-command-discovery]
   presets: [workflow-graph]
+  notify: [approval-gate, terminal-canvas-ui]
   runstate: [run-state]
   guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
 

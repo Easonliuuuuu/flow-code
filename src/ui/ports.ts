@@ -5,6 +5,7 @@ import type {
   TestCommandsRequest,
 } from '../engine/types.js';
 import { RunInterruptedError } from '../engine/types.js';
+import type { Notifier } from '../notify/index.js';
 import type { DiscussTranscriptEntry } from '../runstate/types.js';
 import type { PlanProposal } from '../workflow/splice.js';
 
@@ -79,7 +80,10 @@ export class UiInteractionPorts implements InteractionPorts {
   private listeners = new Set<() => void>();
 
   /** Aborted when the run is interrupted (e.g. ctrl+c); rejects any pending wait on the user. */
-  constructor(private readonly signal?: AbortSignal) {}
+  constructor(
+    private readonly signal?: AbortSignal,
+    private readonly notifier?: Notifier,
+  ) {}
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
@@ -119,6 +123,12 @@ export class UiInteractionPorts implements InteractionPorts {
           },
         };
         this.notify();
+        this.notifier?.notify({
+          kind: 'gate-waiting',
+          title: 'Approval Required',
+          message: req.title ?? `Approve changes at ${req.nodeId}`,
+          subtitle: req.nodeId,
+        });
         this.onInterrupt(reject, () => {
           this.pendingApproval = null;
         });
@@ -137,6 +147,12 @@ export class UiInteractionPorts implements InteractionPorts {
           },
         };
         this.notify();
+        this.notifier?.notify({
+          kind: 'convergence-waiting',
+          title: 'Branch Selection Required',
+          message: `Select branches to converge for ${req.nodeId}`,
+          subtitle: req.nodeId,
+        });
         this.onInterrupt(reject, () => {
           this.pendingConvergence = null;
         });
@@ -160,6 +176,12 @@ export class UiInteractionPorts implements InteractionPorts {
           },
         };
         this.notify();
+        this.notifier?.notify({
+          kind: 'test-discovery-waiting',
+          title: 'Confirm Test Commands',
+          message: `Confirm test commands for ${req.nodeId}`,
+          subtitle: req.nodeId,
+        });
         this.onInterrupt(reject, () => {
           this.pendingTestCommands = null;
         });
@@ -223,6 +245,12 @@ export class UiInteractionPorts implements InteractionPorts {
         }
         this.nextMessageResolve = resolve;
         this.notify();
+        this.notifier?.notify({
+          kind: 'turn-waiting',
+          title: 'Input Needed',
+          message: `Discussion waiting for your reply at ${nodeId}`,
+          subtitle: nodeId,
+        });
         this.onInterrupt(reject, () => {
           this.nextMessageResolve = null;
         });
@@ -290,6 +318,12 @@ export class UiInteractionPorts implements InteractionPorts {
         }
         this.nextPlanTurnResolve = resolve;
         this.notify();
+        this.notifier?.notify({
+          kind: 'turn-waiting',
+          title: 'Input Needed',
+          message: `Plan negotiation waiting for your reply at ${nodeId}`,
+          subtitle: nodeId,
+        });
         this.onInterrupt(reject, () => {
           this.nextPlanTurnResolve = null;
         });

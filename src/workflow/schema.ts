@@ -46,6 +46,21 @@ export const nodeBudgetSchema = z.strictObject({
 
 export type NodeBudget = z.infer<typeof nodeBudgetSchema>;
 
+/**
+ * Configuration for run-time notifications (terminal bell and OS desktop alerts).
+ * Accepts either boolean shorthand (`notifications: false` to disable both) or
+ * granular object shape `{ bell?: boolean, desktop?: boolean }`.
+ */
+export const notificationSettingsSchema = z.preprocess(
+  (v) => (typeof v === 'boolean' ? { bell: v, desktop: v } : v),
+  z.strictObject({
+    bell: z.boolean().default(true),
+    desktop: z.boolean().default(true),
+  }),
+);
+
+export type NotificationSettings = z.infer<typeof notificationSettingsSchema>;
+
 export const settingsSchema = z.strictObject({
   concurrency: z.number().int().min(1).max(16).default(2),
   model: z.string().min(1).optional(),
@@ -57,6 +72,7 @@ export const settingsSchema = z.strictObject({
    * delegation off on a misbehaving workflow without downgrading.
    */
   subagents: z.boolean().default(true),
+  notifications: notificationSettingsSchema.optional(),
 });
 
 export type RunSettings = z.infer<typeof settingsSchema>;
