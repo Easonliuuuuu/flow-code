@@ -35,6 +35,7 @@ scopes:
   test: [test-command-discovery]
   gate: [approval-gate]
   approval: [approval-gate]
+  approval-gate: [approval-gate]
   worktrees: [worktree-agent-node]
   worktree: [worktree-agent-node]
   discuss: [agent-execution, node-model-selection]
@@ -228,6 +229,12 @@ archived:
   # add-run-state-ownership gave a run document one owner, which is what a
   # second writer needed to exist safely. Closes GAP-13 and GAP-14.
   2026-08-17-add-guest-mode-reporter: BR-06
+  # Extends the same "nothing reaches without explicit approval" guarantee
+  # BR-08 already claims for git-ops one step earlier: the spec Validate later
+  # checks the run against is now itself gated, with a bare `loopback: true`
+  # back to Discuss on rejection — the mechanism 2026-08-17-route-rejected-
+  # gate-to-revision documented for the final gate, now used directly.
+  2026-08-22-add-spec-approval-gate: BR-08
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
