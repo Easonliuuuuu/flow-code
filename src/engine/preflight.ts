@@ -1,10 +1,8 @@
-import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import { isDirty, worktreeSupported } from '../git/ops.js';
 import { nodeWantsAgentStep } from '../registry/index.js';
 import { skillPortabilityWarnings } from '../skills/report.js';
 import type { Workflow } from '../workflow/load.js';
+import { hasCredential } from './credentialDetect.js';
 import { providerInfo, type ProviderId } from './providers.js';
 
 export type PreflightFailureKind = 'credentials' | 'worktree-support' | 'dirty-tree';
@@ -19,31 +17,25 @@ export class PreflightError extends Error {
   }
 }
 
-export function defaultCredentialsResolver(): boolean {
-  if (process.env['ANTHROPIC_API_KEY']) return true;
-  if (process.env['CLAUDE_CODE_OAUTH_TOKEN']) return true;
-  return existsSync(join(homedir(), '.claude', '.credentials.json'));
-}
-
-/**
- * Codex SDK's own resolution order is apiKey option, then OPENAI_API_KEY,
- * then CODEX_API_KEY, then an existing `codex` CLI login — this mirrors that
- * last-resort check (CODEX_HOME defaults to ~/.codex) so preflight can fail
- * fast with a clear message instead of letting the subprocess fail later.
+/*
+ * These three are thin named wrappers over credentialDetect.ts rather than
+ * their own checks. They used to each hold their own copy of the rules, which
+ * is fine while preflight is the only caller — but the init wizard now reports
+ * the same thing to the user, and a wizard that finds nothing in front of a
+ * run that starts fine (or the reverse) is worse than either being wrong.
  */
-export function defaultCodexCredentialsResolver(): boolean {
-  if (process.env['OPENAI_API_KEY']) return true;
-  if (process.env['CODEX_API_KEY']) return true;
-  const codexHome = process.env['CODEX_HOME'] || join(homedir(), '.codex');
-  return existsSync(join(codexHome, 'auth.json'));
+
+export function defaultCredentialsResolver(): boolean {
+  return hasCredential('claude');
 }
 
-/** Checks the env var for whichever provider is configured to back the project. */
+export function defaultCodexCredentialsResolver(): boolean {
+  return hasCredential('codex');
+}
+
+/** Whether whichever provider is configured to back the project has credentials. */
 export function defaultProviderCredentialsResolver(provider: ProviderId): boolean {
-  if (provider === 'claude') return defaultCredentialsResolver();
-  if (provider === 'codex') return defaultCodexCredentialsResolver();
-  const envVar = providerInfo(provider).apiKeyEnvVar!;
-  return Boolean(process.env[envVar]);
+  return hasCredential(provider);
 }
 
 export interface PreflightOptions {
