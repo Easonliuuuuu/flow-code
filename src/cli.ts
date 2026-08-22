@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { realpathSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fail } from './cli/context.js';
 
@@ -69,7 +69,24 @@ Usage:
   flow-code node-types        List built-in node types, capabilities, config and output shapes
   flow-code skills            List skills attachable to a node, and where each was found
   flow-code doctor [--yes]    List/remove orphaned worktrees from crashed runs
+  flow-code --version, -v     Print the installed version
 `;
+
+/**
+ * The version this build was published as, read from the package manifest
+ * rather than baked in by the build — release-please bumps package.json and
+ * nothing else, so anything baked in would drift the moment it did.
+ *
+ * `../package.json` resolves to the package root from `dist/cli.js` and to the
+ * repo root from `src/cli.ts`, so the same expression is right compiled or not.
+ */
+export function packageVersion(): string {
+  const manifest: unknown = JSON.parse(
+    readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+  );
+  const version = (manifest as { version?: unknown }).version;
+  return typeof version === 'string' ? version : 'unknown';
+}
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
@@ -102,6 +119,15 @@ async function main(): Promise<void> {
       return (await import('./cli/skills.js')).cmdSkills();
     case 'doctor':
       return (await import('./cli/doctor.js')).cmdDoctor(args);
+    // The first thing anyone types after `npx @easonliuuuuu/flow-code`, to
+    // find out what they just fetched. Reading the manifest costs one small
+    // synchronous file read and pulls in no command module, so it stays off
+    // the hot paths this file's dynamic imports exist to protect.
+    case '--version':
+    case '-v':
+    case 'version':
+      console.log(packageVersion());
+      return;
     case undefined:
     case 'help':
     case '--help':
