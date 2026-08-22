@@ -28,6 +28,7 @@ import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../worktrees/rec
 import { Notifier } from '../notify/index.js';
 import { resolveNotificationConfig, splashEnabled } from './args.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
+import { resolveDirtyTree } from './dirtyTree.js';
 import { buildRunner, resolveProvider } from './provider.js';
 
 export interface ResumeArg {
@@ -233,7 +234,7 @@ export function runExitCode(nodes: RunState['nodes'], interrupted: boolean): num
 }
 
 export async function cmdRun(args: string[]): Promise<void> {
-  const allowDirty = args.includes('--allow-dirty');
+  let allowDirty = args.includes('--allow-dirty');
   const splash = splashEnabled(args, process.env);
   const { resuming, runId: resumeRunId } = parseResumeArg(args);
   const explicitGraph = parseGraphArg(args);
@@ -289,6 +290,9 @@ export async function cmdRun(args: string[]): Promise<void> {
     }
   }
 
+  // Set when the user's own work went into a stash to clear the way for this
+  // run; repeated once the run is over, where they'll be looking for it.
+  let restoreNotice: string | undefined;
   try {
     // A resumed tree is expected to carry the interrupted work's uncommitted
     // changes — the normal dirty-tree refusal doesn't apply here.
@@ -298,8 +302,19 @@ export async function cmdRun(args: string[]): Promise<void> {
       onWarning: (message) => console.warn(`flow-code: ${message}`),
     });
   } catch (err) {
-    if (err instanceof PreflightError) fail(err.message);
-    throw err;
+    // A dirty tree is the one preflight failure the user can resolve from
+    // here, so it's asked about rather than refused outright. Every other
+    // kind still ends the process — and it's caught after preflight rather
+    // than before it so a missing credential is still what fails first.
+    if (err instanceof PreflightError && err.kind === 'dirty-tree') {
+      const resolution = await resolveDirtyTree(repoRoot, err.message);
+      allowDirty = resolution.allowDirty;
+      restoreNotice = resolution.restoreNotice;
+    } else if (err instanceof PreflightError) {
+      fail(err.message);
+    } else {
+      throw err;
+    }
   }
 
   ensureGitExclude(repoRoot);
@@ -422,6 +437,7 @@ export async function cmdRun(args: string[]): Promise<void> {
   const exitCode = runExitCode(nodes, interrupted);
   const summary = formatRunSummary(store.runId, nodes, interrupted);
   console.log(summary);
+  if (restoreNotice) console.log(`flow-code: ${restoreNotice}`);
 
   if (interrupted) {
     notifier.notify({

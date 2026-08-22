@@ -29,7 +29,8 @@ Usage:
                               its test command(s), and pick the provider/model for the project
                               (re-run any time — already-configured steps ask before redoing)
   flow-code run [--allow-dirty] [--no-splash] [--no-notify] [--no-bell] [--no-alerts]
-                              Run the workflow (refuses a dirty tree unless overridden)
+                              Run the workflow (a dirty tree is asked about, not refused;
+                              --allow-dirty skips the question and snapshots it as the baseline)
                               —no-splash skips the startup animation (or set FLOW_CODE_NO_SPLASH)
                               —no-notify / --no-bell / --no-alerts control OS popups & terminal bell
   flow-code run --resume, -r [runId]
