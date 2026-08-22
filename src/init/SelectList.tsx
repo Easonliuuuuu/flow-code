@@ -11,6 +11,13 @@ export interface SelectListProps<T> {
   prompt: string;
   /** How many rows to show at once. Defaults to 12 — long lists (OpenRouter) scroll. */
   windowSize?: number;
+  /**
+   * Where the cursor starts. Lets a caller point at the most likely answer
+   * without reordering the list to put it first — the order of a menu should
+   * not change with the state of the machine it renders on, or the same
+   * keystrokes pick different things in different checkouts.
+   */
+  initialIndex?: number;
   onSelect: (value: T) => void;
   onCancel: () => void;
 }
@@ -36,10 +43,15 @@ export function SelectList<T>({
   items,
   prompt,
   windowSize = 12,
+  initialIndex = 0,
   onSelect,
   onCancel,
 }: SelectListProps<T>): React.ReactElement {
-  const [cursor, setCursor] = useState(0);
+  // Clamped rather than trusted: an out-of-range start would render no
+  // highlighted row and make Enter select nothing.
+  const [cursor, setCursor] = useState(() =>
+    Math.min(Math.max(0, initialIndex), Math.max(0, items.length - 1)),
+  );
   const count = items.length;
 
   useInput((input, key) => {
@@ -86,7 +98,7 @@ export function SelectList<T>({
 /** Mounts a SelectList and resolves with the chosen value, or undefined on cancel. */
 export function selectFromList<T>(
   items: SelectListItem<T>[],
-  opts: { prompt: string; windowSize?: number },
+  opts: { prompt: string; windowSize?: number; initialIndex?: number },
 ): Promise<T | undefined> {
   return new Promise((resolve) => {
     const instance = render(
@@ -94,6 +106,7 @@ export function selectFromList<T>(
         items,
         prompt: opts.prompt,
         ...(opts.windowSize !== undefined ? { windowSize: opts.windowSize } : {}),
+        ...(opts.initialIndex !== undefined ? { initialIndex: opts.initialIndex } : {}),
         onSelect: (value: T) => {
           instance.unmount();
           resolve(value);

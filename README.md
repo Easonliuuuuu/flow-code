@@ -86,7 +86,7 @@ node dist/cli.js run
 
 ## Providers and credentials
 
-`flow-code init` configures a provider interactively. To skip the wizard (headless, CI), set any standard API key:
+`flow-code init` configures a provider interactively. It looks for credentials you already have first — every row of the table below is checked, and the picker labels each provider with what it found and starts on the first one that already works. If you are logged into `claude` or `codex`, or already export an API key, there is nothing to paste. To skip the wizard entirely (headless, CI), set any standard API key:
 
 | Provider | Environment variable | Fallback |
 | --- | --- | --- |
