@@ -52,6 +52,15 @@ export function isAttached(state: RunState): boolean {
   return state.runId.length > 0;
 }
 
+/** Whether `path` holds a run document, for callers choosing between files. */
+function holdsRun(path: string): boolean {
+  try {
+    return isRunDocument(JSON.parse(readFileSync(path, 'utf8')) as RunState);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Path of the most recently *written* run file, or undefined if there are
  * none.
@@ -60,8 +69,14 @@ export function isAttached(state: RunState): boolean {
  * one case that would otherwise be wrong: `--resume` continues a run under
  * its original id and `createdAt`, so a resumed older run is the live one
  * even though a newer run exists. Whichever file is being written is the one
- * worth watching. It also costs a readdir and a stat each, instead of parsing
- * every run in the repo.
+ * worth watching.
+ *
+ * Candidates are stat'd, then parsed newest-first only until one turns out to
+ * be a run — normally the very first, and a file the caller was about to read
+ * anyway. Picking by mtime alone was cheaper but wrong: `runs/` holds whatever
+ * anyone drops in it, and a stray `.json` written in the same millisecond as a
+ * real run would win the tie on nothing better than readdir order, leaving
+ * every viewer resolving to a file that is not a run at all.
  */
 export function newestRunFile(repoRoot: string): string | undefined {
   let files: string[];
@@ -70,17 +85,17 @@ export function newestRunFile(repoRoot: string): string | undefined {
   } catch {
     return undefined;
   }
-  let newest: { path: string; mtimeMs: number } | undefined;
+  const candidates: { path: string; mtimeMs: number }[] = [];
   for (const file of files) {
     const path = join(runsDir(repoRoot), file);
     try {
-      const { mtimeMs } = statSync(path);
-      if (!newest || mtimeMs > newest.mtimeMs) newest = { path, mtimeMs };
+      candidates.push({ path, mtimeMs: statSync(path).mtimeMs });
     } catch {
       // Vanished between readdir and stat (a `.tmp` mid-rename): skip it.
     }
   }
-  return newest?.path;
+  candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return candidates.find(({ path }) => holdsRun(path))?.path;
 }
 
 /** The run a viewer attaches to by default — see {@link newestRunFile}. */

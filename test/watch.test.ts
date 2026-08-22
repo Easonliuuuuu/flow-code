@@ -146,6 +146,35 @@ describe('newestRunFile', () => {
     expect(newestRunFile(repo)).toBe(join(runsDir(repo), 'old.json'));
     expect(latestRunState(repo)!.runId).toBe('old');
   });
+
+  it('skips a stray file that is not a run, however recently it was written', () => {
+    const repo = makeTempGitRepo();
+    mkdirSync(runsDir(repo), { recursive: true });
+    writeFileSync(runFilePath(repo, 'run-1'), JSON.stringify(stateFixture()));
+    // Valid JSON, wrong shape: `runs/` holds whatever anyone drops in it, and
+    // a reconcile report used to be exactly this.
+    writeFileSync(join(runsDir(repo), 'notes.json'), '{"hello":"world"}');
+    // Strictly newer, so picking by mtime alone lands on it. Set rather than
+    // left to write order for the same reason as above — two back-to-back
+    // writes share a millisecond, and the tie then turns on readdir order,
+    // which is how this passed on one machine and failed on another.
+    const now = Date.now() / 1000;
+    utimesSync(runFilePath(repo, 'run-1'), now - 60, now - 60);
+    utimesSync(join(runsDir(repo), 'notes.json'), now, now);
+
+    expect(newestRunFile(repo)).toBe(runFilePath(repo, 'run-1'));
+    expect(latestRunState(repo)!.runId).toBe('run-1');
+  });
+
+  it('is undefined when the directory holds nothing but strays', () => {
+    const repo = makeTempGitRepo();
+    mkdirSync(runsDir(repo), { recursive: true });
+    writeFileSync(join(runsDir(repo), 'notes.json'), '{"hello":"world"}');
+    writeFileSync(join(runsDir(repo), 'broken.json'), 'not json at all');
+
+    expect(newestRunFile(repo)).toBeUndefined();
+    expect(latestRunState(repo)).toBeUndefined();
+  });
 });
 
 describe('RunStateWatcher', () => {
