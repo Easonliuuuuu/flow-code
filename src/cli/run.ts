@@ -25,7 +25,8 @@ import {
 import type { PlanProposal } from '../workflow/splice.js';
 import { writeKeptWorkflow } from '../workflow/write.js';
 import { findOrphanedWorktrees, removeOrphanedWorktrees } from '../worktrees/reconcile.js';
-import { splashEnabled } from './args.js';
+import { Notifier } from '../notify/index.js';
+import { resolveNotificationConfig, splashEnabled } from './args.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
 import { buildRunner, resolveProvider } from './provider.js';
 
@@ -320,8 +321,11 @@ export async function cmdRun(args: string[]): Promise<void> {
   store.attachPersister(new FileRunStatePersister(repoRoot));
   store.setBaseline(baseline);
 
+  const notifyConfig = resolveNotificationConfig(args, process.env, workflow.settings.notifications);
+  const notifier = new Notifier(notifyConfig);
+
   const abortController = new AbortController();
-  const ports = new UiInteractionPorts(abortController.signal);
+  const ports = new UiInteractionPorts(abortController.signal, notifier);
   const sessions = resolved ? buildRunner(resolved.provider) : new SdkSessionRunner();
   const newEngine = (wf: Workflow): Engine =>
     new Engine({
@@ -415,6 +419,29 @@ export async function cmdRun(args: string[]): Promise<void> {
 
   const nodes = store.snapshot().nodes;
   const interrupted = abortController.signal.aborted;
-  console.log(formatRunSummary(store.runId, nodes, interrupted));
-  process.exit(runExitCode(nodes, interrupted));
+  const exitCode = runExitCode(nodes, interrupted);
+  const summary = formatRunSummary(store.runId, nodes, interrupted);
+  console.log(summary);
+
+  if (interrupted) {
+    notifier.notify({
+      kind: 'run-failed',
+      title: 'Run Interrupted',
+      message: `Run ${store.runId.slice(0, 8)} was interrupted by user.`,
+    });
+  } else if (exitCode === 0) {
+    notifier.notify({
+      kind: 'run-finished',
+      title: 'Run Finished',
+      message: `Run ${store.runId.slice(0, 8)} completed successfully (${tallyNodeStatuses(nodes)}).`,
+    });
+  } else {
+    notifier.notify({
+      kind: 'run-failed',
+      title: 'Run Completed with Failures',
+      message: `Run ${store.runId.slice(0, 8)} finished with failures (${tallyNodeStatuses(nodes)}).`,
+    });
+  }
+
+  process.exit(exitCode);
 }

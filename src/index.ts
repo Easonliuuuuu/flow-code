@@ -25,3 +25,4 @@ export { loadWorkflow, loadWorkflowFromString, WorkflowValidationError } from '.
 export type { Workflow, WorkflowNode } from './workflow/load.js';
 export { findOrphanedWorktrees, removeOrphanedWorktrees } from './worktrees/reconcile.js';
 export { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
+export { Notifier, type NotifyEvent, type ResolvedNotificationConfig } from './notify/index.js';
