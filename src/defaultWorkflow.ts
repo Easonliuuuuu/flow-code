@@ -22,6 +22,13 @@ export const DEFAULT_WORKFLOW_YAML = `# flow-code workflow — checked into your
 # team-specific instructions on top of its built-in role. \`flow-code skills\`
 # lists what is attachable. A skill governs *how* a node works; the node type
 # still owns what it must return and what it is allowed to touch.
+#
+# Most of those nodes can also carry \`model: <name>\`, and \`settings.model\` sets
+# one for all of them (\`flow-code node-types\` says which types take the field).
+# Both are resolved when flow-code starts the session, so they apply to
+# \`flow-code run\` and nothing else: a run driven from your own Claude Code or
+# Codex session (\`flow-code connect\`) never sees them, and that session picks
+# its own model per step.
 
 settings:
   # Max concurrently running agent sessions (only Worktree-Agent instances
