@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 367/370` tasks across 10 change(s)
+`██████████ 397/400` tasks across 11 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -26,6 +26,7 @@ flatter you.
 | `2026-08-10-add-per-task-workflow-graphs` | archived | ██████████ 34/34 |
 | `2026-08-17-correct-edge-routing-requirement` | archived | ██████████ 12/12 |
 | `2026-08-17-route-rejected-gate-to-revision` | archived | ██████████ 39/39 |
+| `2026-08-22-add-spec-approval-gate` | archived | ██████████ 30/30 |
 
 ### BR-09 — A run is legible without reading a transcript
 
@@ -122,4 +123,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-15 archived change(s), 487 tasks. 17 modules under `src/`, 17 capability specs.
+16 archived change(s), 517 tasks. 17 modules under `src/`, 17 capability specs.
