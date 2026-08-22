@@ -52,9 +52,33 @@ function fakeStdin(): NodeJS.ReadStream {
   return stream;
 }
 
-const settle = (ms = 60): Promise<void> => new Promise((r) => setTimeout(r, ms));
+const CURSOR = '❯';
 
-/** The label the cursor (`❯`) is sitting on, with ANSI styling stripped. */
+function lastFrame(stdout: FakeStdout): string {
+  return (
+    stdout.frames
+      .map((f) => f.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ''))
+      .filter((f) => f.trim().length > 0)
+      .at(-1) ?? ''
+  );
+}
+
+/**
+ * Polls for a painted frame rather than sleeping a fixed amount: a fixed wait
+ * passes locally and fails on a loaded CI runner, which is exactly the flake
+ * these tests would otherwise become.
+ */
+async function frameWithCursor(stdout: FakeStdout, timeoutMs = 2000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const frame = lastFrame(stdout);
+    if (frame.includes(CURSOR)) return frame;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error('timed out waiting for the cursor to reach the screen');
+}
+
+/** The label the cursor is sitting on, with ANSI styling stripped. */
 async function highlightedLabel(
   items: { label: string; value: string }[],
   initialIndex?: number,
@@ -70,18 +94,16 @@ async function highlightedLabel(
     }),
     { stdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false },
   );
-  await settle();
-  const frame =
-    stdout.frames
-      .map((f) => f.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ''))
-      .filter((f) => f.trim().length > 0)
-      .at(-1) ?? '';
-  instance.unmount();
-  return frame
-    .split('\n')
-    .find((line) => line.includes('\u276f'))
-    ?.replace('\u276f', '')
-    .trim();
+  try {
+    const frame = await frameWithCursor(stdout);
+    return frame
+      .split('\n')
+      .find((line) => line.includes(CURSOR))
+      ?.replace(CURSOR, '')
+      .trim();
+  } finally {
+    instance.unmount();
+  }
 }
 
 const ITEMS = [
