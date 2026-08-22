@@ -62,6 +62,13 @@ nodes:
     config:
       skills: [openspec-propose]
 
+  # No config: it reads the proposal from \`propose\`, the node it depends on
+  # directly, and needs no pointer to a path.
+  - id: propose-gate
+    type: approval-gate
+    config:
+      title: Review the proposal before applying it
+
   - id: apply
     type: implement
     config:
@@ -89,7 +96,9 @@ nodes:
 
 edges:
   - { from: explore, to: propose }
-  - { from: propose, to: apply }
+  - { from: propose, to: propose-gate }
+  # Unconditional out of a gate is read as \`when: "propose-gate.decision == 'approved'"\`.
+  - { from: propose-gate, to: apply }
   - { from: apply, to: test }
   - { from: test, to: validate }
   # Validate is judged against the proposal's acceptance criteria, so it
@@ -98,6 +107,16 @@ edges:
   - { from: propose, to: validate }
   - { from: validate, to: gate }
   - { from: gate, to: archive }
+
+  # Rejecting the proposal reopens the discussion that produced it, rather
+  # than ending the run: a proposal is rejected to be rewritten, not
+  # abandoned. \`loopback: true\` on a gate's edge means "on rejection" — a
+  # rejected gate is reported to the engine as though it had failed,
+  # specifically so this one edge can fire on it and only it (see
+  # \`defaultWorkflow.ts\` for the full explanation). This is not extended to
+  # \`gate\` below: work rejected there is finished work abandoned, not a
+  # proposal to be reconsidered.
+  - { from: propose-gate, to: explore, loopback: true }
 
   - { from: test, to: apply, loopback: { maxAttempts: 3 } }
   - { from: validate, to: apply, loopback: { maxAttempts: 3 } }
@@ -145,6 +164,13 @@ nodes:
     #     acceptanceCriteria:
     #       - Running \`foo --bar\` prints the parsed config and exits 0
 
+  # No config: it reads the plan from \`plan\`, the node it depends on
+  # directly, and needs no pointer to a path.
+  - id: plan-gate
+    type: approval-gate
+    config:
+      title: Review the plan before implementation begins
+
   - id: implement
     type: implement
     config:
@@ -174,7 +200,9 @@ nodes:
 
 edges:
   - { from: specify, to: plan }
-  - { from: plan, to: implement }
+  - { from: plan, to: plan-gate }
+  # Unconditional out of a gate is read as \`when: "plan-gate.decision == 'approved'"\`.
+  - { from: plan-gate, to: implement }
   - { from: implement, to: test }
   - { from: test, to: validate }
   # Validate is judged against the plan's acceptance criteria, so it depends
@@ -183,6 +211,15 @@ edges:
   - { from: plan, to: validate }
   - { from: validate, to: gate }
   - { from: gate, to: git-ops }
+
+  # Rejecting the plan reopens the discussion that produced it, rather than
+  # ending the run: a plan is rejected to be rewritten, not abandoned.
+  # \`loopback: true\` on a gate's edge means "on rejection" — a rejected gate
+  # is reported to the engine as though it had failed, specifically so this
+  # one edge can fire on it and only it (see \`defaultWorkflow.ts\` for the
+  # full explanation). This is not extended to \`gate\` below: work rejected
+  # there is finished work abandoned, not a plan to be reconsidered.
+  - { from: plan-gate, to: specify, loopback: true }
 
   - { from: test, to: implement, loopback: { maxAttempts: 3 } }
   - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
@@ -226,8 +263,8 @@ edges:
 const PRESETS: WorkflowPreset[] = [
   {
     name: 'openspec',
-    description: 'explore → propose → apply → test → validate → gate → archive, using the openspec skills',
-    summary: 'explore → propose → apply → test → validate → gate → archive',
+    description: 'explore → propose → gate → apply → test → validate → gate → archive, using the openspec skills',
+    summary: 'explore → propose → gate → apply → test → validate → gate → archive',
     yaml: OPENSPEC_YAML,
     requiredSkills: ['openspec-explore', 'openspec-propose', 'openspec-apply-change', 'openspec-archive-change'],
     cli: {
@@ -238,8 +275,8 @@ const PRESETS: WorkflowPreset[] = [
   },
   {
     name: 'spec-kit',
-    description: 'specify → plan → implement → test → validate → gate → git-ops, after GitHub Spec Kit',
-    summary: 'specify → plan → implement → test → validate → gate → git-ops',
+    description: 'specify → plan → gate → implement → test → validate → gate → git-ops, after GitHub Spec Kit',
+    summary: 'specify → plan → gate → implement → test → validate → gate → git-ops',
     yaml: SPEC_KIT_YAML,
     requiredSkills: [],
     cli: { command: 'specify', install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] } },
@@ -256,7 +293,7 @@ const PRESETS: WorkflowPreset[] = [
 export const DEFAULT_PRESET: WorkflowPreset = {
   name: 'default',
   description: 'the standard graph',
-  summary: 'discuss → spec → implement → test → validate → review → gate → git-ops',
+  summary: 'discuss → spec → gate → implement → test → validate → review → gate → git-ops',
   yaml: DEFAULT_WORKFLOW_YAML,
   requiredSkills: [],
 };

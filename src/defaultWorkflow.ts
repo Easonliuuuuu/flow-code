@@ -1,11 +1,13 @@
 import { PLACEHOLDER_TEST_COMMAND } from './registry/index.js';
 
 /**
- * The scaffolded default workflow: Discuss → Spec → Implement → Test →
- * Validate → Review → Approval-Gate → Git-ops. The gate sits before Git-ops
- * so the "nothing is pushed without explicit approval" guarantee holds with
- * zero configuration, and the Spec node sits early so everything downstream
- * is judged against a contract fixed before any code was written.
+ * The scaffolded default workflow: Discuss → Spec → Approval-Gate →
+ * Implement → Test → Validate → Review → Approval-Gate → Git-ops. The second
+ * gate sits before Git-ops so the "nothing is pushed without explicit
+ * approval" guarantee holds with zero configuration. The first sits before
+ * Implement so the contract everything downstream is judged against is fixed
+ * with a human's sign-off, not adopted the moment an agent finishes writing
+ * it — the run no longer completes unattended end to end.
  */
 export const DEFAULT_WORKFLOW_YAML = `# flow-code workflow — checked into your repo, edit as needed.
 # Run \`flow-code node-types\` to see every node type's capabilities and config.
@@ -48,6 +50,15 @@ nodes:
     #     title: What we're building
     #     acceptanceCriteria:
     #       - Running \`foo --bar\` prints the parsed config and exits 0
+
+  # A gate with nothing configured: it reads the spec from the Spec node it
+  # depends on directly and needs no pointer to a path. See \`gate\` below for
+  # why the gate before Git-ops looks different — a diff instead of a
+  # document, and no loop-back scaffolded.
+  - id: spec-gate
+    type: approval-gate
+    config:
+      title: Review the spec before implementation begins
 
   - id: implement
     type: implement
@@ -92,7 +103,10 @@ nodes:
 
 edges:
   - { from: discuss, to: spec }
-  - { from: spec, to: implement }
+  - { from: spec, to: spec-gate }
+  # Unconditional out of a gate is read as \`when: "spec-gate.decision == 'approved'"\`
+  # — same rule as the \`gate\` → \`git-ops\` edge below, spelled out there.
+  - { from: spec-gate, to: implement }
   - { from: implement, to: test }
   - { from: test, to: validate }
   # Validate needs the spec's acceptance criteria, so it depends on the spec
@@ -104,6 +118,22 @@ edges:
   - { from: validate, to: review }
   - { from: review, to: gate }
   - { from: gate, to: git-ops }
+
+  # Rejecting the spec reopens the discussion that produced it, rather than
+  # ending the run — a spec is rejected in order to be rewritten, not
+  # abandoned. \`loopback: true\` on a gate's edge means "on rejection", not
+  # "on failure" in the generic sense a loop-back usually means: a gate that
+  # got its answer never fails, but a rejected one is reported to the engine
+  # as though it had, specifically so this one edge can fire on it and only
+  # it. \`discuss\` is where it goes rather than \`spec-gate\` itself because the
+  # gate has no way to say *why* it was rejected — only \`discuss\` can ask you,
+  # and it resumes the same conversation to do it rather than starting cold.
+  #
+  # This is deliberately not extended to the gate before Git-ops below: that
+  # one keeps to the documented-but-not-enabled pattern its own comment
+  # explains, because finished work rejected there is finished work abandoned,
+  # not reconsidered.
+  - { from: spec-gate, to: discuss, loopback: true }
 
   # Loop-backs: when the \`from\` node fails, execution returns to \`to\` and
   # re-runs everything between them, with the failure passed in as context —

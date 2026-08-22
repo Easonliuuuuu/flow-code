@@ -287,15 +287,20 @@ export const worktreeAgentOutput = z.object({
 });
 
 /**
- * `diffs` is what the decision was made on, kept so the decision stays
- * reviewable after the fact and so a node downstream of the gate receives the
- * changes rather than the bare verdict. Optional because the guest path records
- * a decision it did not compute a diff for.
+ * `diffs` and `documents` are what the decision was made on, kept so the
+ * decision stays reviewable after the fact and so a node downstream of the
+ * gate receives the changes rather than the bare verdict. Both optional
+ * because the guest path records a decision it did not compute either for,
+ * and a gate with no document-producing upstream never has `documents` at
+ * all. Without a place in this schema an unrecognized field is silently
+ * stripped by `outputSchema.safeParse` (engine.ts) before it ever reaches
+ * `store.setOutput` — `documents` learned that the hard way.
  */
 export const approvalGateOutput = z.object({
   decision: z.enum(['approved', 'rejected']),
   decidedAt: z.string(),
   diffs: z.array(z.object({ label: z.string().optional(), diff: z.string() })).optional(),
+  documents: z.array(z.object({ label: z.string(), body: z.string() })).optional(),
 });
 
 export type DiscussOutput = z.infer<typeof discussOutput>;
@@ -527,7 +532,8 @@ const definitions: NodeTypeDefinition[] = [
     id: 'approval-gate',
     displayName: 'Approval-Gate',
     description:
-      'No agent session: computes the pending diff against the run baseline and waits for explicit user approval. ' +
+      'No agent session: computes the pending diff against the run baseline, reads any document a direct ' +
+      "dependency produced (a Spec node's file, today), and waits for explicit user approval on either or both. " +
       'Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent critique of ' +
       "the diff, shown to the approver alongside it — it never affects the decision itself.",
     capabilities: [],
@@ -541,7 +547,8 @@ const definitions: NodeTypeDefinition[] = [
     configSummary:
       "title? (string), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])",
     outputSummary:
-      "decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on)",
+      "decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on), " +
+      'documents? ({label, body}[], the non-diff subject decided on)',
     // A gate records a decision, not a result: without transparency every node
     // after a gate would receive `{decision, decidedAt}` and nothing else.
     contextTransparent: true,

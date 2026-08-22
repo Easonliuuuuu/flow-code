@@ -21,7 +21,7 @@ without `edit` cannot write files, whatever its instructions say.
 | [`review`](#review) | Agent-driven quality critique: findings only, no edit, no exec | yes, headless |
 | [`git-ops`](#git-ops) | Commits (and optionally pushes) what exists | yes, headless |
 | [`worktree-agent`](#worktree-agent) | Fans out N agent instances, each in an isolated git worktree/branch; converges by user selection | yes, headless |
-| [`approval-gate`](#approval-gate) | No agent session: computes the pending diff against the run baseline and waits for explicit user approval | no — deterministic, with an optional read-only agent step |
+| [`approval-gate`](#approval-gate) | No agent session: computes the pending diff against the run baseline, reads any document a direct dependency produced (a Spec node's file, today), and waits for explicit user approval on either or both | no — deterministic, with an optional read-only agent step |
 
 ## `discuss`
 
@@ -117,13 +117,13 @@ without `edit` cannot write files, whatever its instructions say.
 
 ## `approval-gate`
 
-**Approval-Gate.** No agent session: computes the pending diff against the run baseline and waits for explicit user approval. Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent critique of the diff, shown to the approver alongside it — it never affects the decision itself.
+**Approval-Gate.** No agent session: computes the pending diff against the run baseline, reads any document a direct dependency produced (a Spec node's file, today), and waits for explicit user approval on either or both. Optionally, `agent: true` (with `instructions`/`skills`) adds one read-only-by-default agent critique of the diff, shown to the approver alongside it — it never affects the decision itself.
 
 - **Capabilities:** _none_
 - **Agent session:** no — deterministic, with an optional read-only agent step
 - **Model field:** no
 - **Config:** `title? (string), agent? (boolean), instructions? (string), skills? (string[]), capabilities? (string[], default ['read'])`
-- **Output:** `decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on)`
+- **Output:** `decision ('approved'|'rejected'), decidedAt (ISO timestamp), diffs? (the changes decided on), documents? ({label, body}[], the non-diff subject decided on)`
 - **Context:** transparent — forwards its dependencies' outputs downstream, so inserting it into a graph does not sever the context chain across it.
 
 ---

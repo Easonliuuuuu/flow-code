@@ -71,7 +71,16 @@ describe('the openspec preset scaffolds a valid workflow', () => {
 
     const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
-    expect(wf.order).toEqual(['explore', 'propose', 'apply', 'test', 'validate', 'gate', 'archive']);
+    expect(wf.order).toEqual([
+      'explore',
+      'propose',
+      'propose-gate',
+      'apply',
+      'test',
+      'validate',
+      'gate',
+      'archive',
+    ]);
   });
 
   it('attaches each openspec skill to the node that needs it', () => {
@@ -135,7 +144,16 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
   it('loads and validates like any hand-written workflow, with no skill fixtures needed', () => {
     const wf = loadWorkflowFromString(preset.yaml);
 
-    expect(wf.order).toEqual(['specify', 'plan', 'implement', 'test', 'validate', 'gate', 'git-ops']);
+    expect(wf.order).toEqual([
+      'specify',
+      'plan',
+      'plan-gate',
+      'implement',
+      'test',
+      'validate',
+      'gate',
+      'git-ops',
+    ]);
   });
 
   it('puts the only conversational skill on the only interactive node', () => {

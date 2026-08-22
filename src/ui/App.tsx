@@ -63,7 +63,7 @@ import {
 import { editableFields, parseFieldValue, type EditorField } from './nodeEditor.js';
 import { helpKeyWidth, helpRows } from './help.js';
 import type { UiInteractionPorts } from './ports.js';
-import { renderMarkdown, renderPlain, segmentStyle } from './markdown.js';
+import { renderMarkdown, renderPlain, segmentStyle, type MdSegment } from './markdown.js';
 import { applyLineEdit } from './textInput.js';
 import { wrapText } from './textwrap.js';
 
@@ -170,20 +170,85 @@ function diffLinesFor(diffs: Array<{ label?: string; diff: string }>): string[] 
   ]);
 }
 
-/** GitHub-style +green/-red diff body, shared by the live approval panel and its post-decision replay. */
-function DiffLines({ lines, start, visible }: { lines: string[]; start: number; visible: number }): React.ReactElement {
+/**
+ * One row of an approval gate's body. `text` carries a diff line or a
+ * `── label ──` header — coloured by leading `+`/`-`, GitHub-style, the way
+ * this body has always coloured a diff. `doc` carries one line of a rendered
+ * document — styled prose, never coloured by its own leading character,
+ * never coloured by its own leading character, which is the whole reason a
+ * document does not go through `diffLinesFor`: a spec's `- **AC1** — …`
+ * bullets would otherwise read as deletions top to bottom.
+ */
+type GateBodyLine = { kind: 'text'; text: string } | { kind: 'doc'; segments: MdSegment[] };
+
+/**
+ * A gate's documents lead, its diff follows. An empty diff beside a document
+ * is omitted — "no changes" is true and says nothing about the document
+ * actually being decided on — but with no document at all, `diffLinesFor`'s
+ * own "(no changes)" line is the only signal the gate has anything to say,
+ * so that path is untouched.
+ */
+function gateBodyLinesFor(
+  documents: Array<{ label: string; body: string }> | undefined,
+  diffs: Array<{ label?: string; diff: string }>,
+  docWidth: number,
+): GateBodyLine[] {
+  const docs = documents ?? [];
+  const diffHasContent = diffs.some((d) => d.diff.length > 0);
+  const lines: GateBodyLine[] = [];
+
+  docs.forEach((doc, i) => {
+    if (i > 0) lines.push({ kind: 'text', text: '' });
+    lines.push({ kind: 'text', text: `── ${doc.label} ──` });
+    for (const line of renderMarkdown(doc.body, docWidth)) {
+      lines.push({ kind: 'doc', segments: line.segments });
+    }
+  });
+
+  if (docs.length === 0 || diffHasContent) {
+    if (docs.length > 0) lines.push({ kind: 'text', text: '' });
+    for (const text of diffLinesFor(diffs)) lines.push({ kind: 'text', text });
+  }
+
+  return lines;
+}
+
+/** Renders {@link gateBodyLinesFor}'s output — GitHub-style diff colouring for `text` rows, styled prose for `doc` rows. */
+function GateBodyLines({
+  lines,
+  start,
+  visible,
+}: {
+  lines: GateBodyLine[];
+  start: number;
+  visible: number;
+}): React.ReactElement {
   return (
     <>
-      {lines.slice(start, start + visible).map((line, i) => (
-        <Text
-          key={i}
-          wrap="truncate-end"
-          {...(line.startsWith('+') ? { color: 'green' } : line.startsWith('-') ? { color: 'red' } : {})}
-          dimColor={line.startsWith('@@') || line.startsWith('──')}
-        >
-          {line || ' '}
-        </Text>
-      ))}
+      {lines.slice(start, start + visible).map((line, i) =>
+        line.kind === 'doc' ? (
+          <Text key={i} wrap="truncate-end">
+            {line.segments.map((segment, j) => (
+              <Text key={j} {...segmentStyle(segment)}>
+                {segment.text}
+              </Text>
+            ))}
+          </Text>
+        ) : (
+          <Text
+            key={i}
+            wrap="truncate-end"
+            {...(line.text.startsWith('+')
+              ? { color: 'green' }
+              : line.text.startsWith('-')
+                ? { color: 'red' }
+                : {})}
+            dimColor={line.text.startsWith('@@') || line.text.startsWith('──')}
+          >
+            {line.text || ' '}
+          </Text>
+        ),
+      )}
     </>
   );
 }
@@ -972,16 +1037,21 @@ export function App({
   const nodePanelDetail = focusedNode
     ? outputDetailLines(focusedNode, runState.nodes[focusedNode.id]?.output ?? null)
     : null;
+  // Once a node's structured output has parsed, its breakdown renders through
+  // the same markdown path as the approval gate — so a Spec node's criteria
+  // read the same at the node as they do at the gate that approved them (see
+  // `gateBodyLinesFor`). Before it has parsed, or while the node is still
+  // streaming, this stays null and the raw transcript below is what shows.
+  const nodePanelDetailLines =
+    nodePanelDetail !== null ? renderMarkdown(nodePanelDetail.join('\n'), nodePanelOutputWidth) : null;
   const nodePanelLive = focusedNode ? store.liveOutputFor(focusedNode.id) : '';
-  const nodePanelLiveLines =
-    nodePanelDetail !== null
-      ? nodePanelDetail.flatMap((line) => wrapText(line, nodePanelOutputWidth))
-      : nodePanelLive.length > 0
-        ? nodePanelLive
-            .trimEnd()
-            .split('\n')
-            .flatMap((line) => wrapText(line.replace(/\t/g, '    '), nodePanelOutputWidth))
-        : [];
+  const nodePanelRawLines =
+    nodePanelDetailLines === null && nodePanelLive.length > 0
+      ? nodePanelLive
+          .trimEnd()
+          .split('\n')
+          .flatMap((line) => wrapText(line.replace(/\t/g, '    '), nodePanelOutputWidth))
+      : [];
   // Rows left for output + activity: the panel minus its borders, title,
   // config line, activity separator and footer — mirrors the panel render's
   // own bodyBudget math (kept in sync there rather than shared, since the
@@ -989,7 +1059,9 @@ export function App({
   const nodePanelBodyBudget = Math.max(2, panelHeight - 6);
   const nodePanelOutputBudget = Math.max(1, Math.floor(nodePanelBodyBudget / 2));
   const nodePanelActivityBudget = Math.max(1, nodePanelBodyBudget - nodePanelOutputBudget);
-  const outputWindow = tailWindow(nodePanelLiveLines.length, nodePanelOutputBudget, outputPin);
+  const nodePanelOutputLineCount =
+    nodePanelDetailLines !== null ? nodePanelDetailLines.length : nodePanelRawLines.length;
+  const outputWindow = tailWindow(nodePanelOutputLineCount, nodePanelOutputBudget, outputPin);
   const activityWindow = tailWindow(nodePanelActivity.length, nodePanelActivityBudget, activityPin);
   // A page-sized jump for diff scrolling (approval gate, live or replay) —
   // same panelHeight-based step Discuss's PageUp/PageDown already uses.
@@ -2166,67 +2238,76 @@ export function App({
           </Box>
           <PanelFooter hint="↑/↓: move · space: select · enter: confirm" />
         </Box>
-      ) : pendingApprovalPanelOpen && pendingApproval ? (
-        <Box {...panelBoxProps}>
-          {panelBackdrop}
-          <PanelTitle>
-            <Text bold color="yellow" wrap="truncate-end">
-              Approval — {pendingApproval.req.title}
-            </Text>
-          </PanelTitle>
-          {pendingApproval.req.pushTarget ? (
-            <Text color="red">
-              On approval, `{pendingApproval.req.pushTarget.nodeId}` will push to{' '}
-              {pendingApproval.req.pushTarget.remote}/{pendingApproval.req.pushTarget.branch}
-            </Text>
-          ) : null}
-          <Text dimColor>
-            upstream: {pendingApproval.req.upstreamSummaries.map((u) => u.nodeId).join(', ') || '—'}
-          </Text>
-          {(() => {
-            if (!pendingApproval.req.agentSummary) return null;
-            // Capped to a fixed number of lines (not fully dynamic) so a long
-            // critique can't silently eat the diff's viewport the way an
-            // uncapped variable-height block did for the skill picker's
-            // search line earlier — see `visible` below, which reserves
-            // exactly this many rows plus one for the label.
-            const summaryLines = wrapText(
-              pendingApproval.req.agentSummary,
-              Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH)),
-            ).slice(0, 4);
+      ) : pendingApprovalPanelOpen && pendingApproval
+        ? (() => {
+            const req = pendingApproval.req;
+            const proseWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
+            // Both blocks below are capped to a fixed number of lines (not
+            // fully dynamic) so neither can silently eat the body's viewport
+            // the way an uncapped variable-height block did for the skill
+            // picker's search line earlier — `summaryBudget` reserves exactly
+            // what they render, one label row apiece.
+            const upstreamLines = req.upstreamSummaries
+              .flatMap((u) => wrapText(`${u.nodeId}: ${u.summary}`, proseWidth))
+              .slice(0, 4);
+            const agentSummaryLines = req.agentSummary
+              ? wrapText(req.agentSummary, proseWidth).slice(0, 4)
+              : [];
+            const bodyLines = gateBodyLinesFor(req.documents, req.diffs, proseWidth);
+            const summaryBudget =
+              upstreamLines.length +
+              1 +
+              (agentSummaryLines.length > 0 ? agentSummaryLines.length + 1 : 0);
+            const visible = Math.max(1, panelHeight - 5 - summaryBudget);
+            const start = Math.min(diffScroll, Math.max(0, bodyLines.length - visible));
             return (
-              <Box flexDirection="column">
-                <Text color="magenta" bold>
-                  AI critique (from attached skill/instructions):
-                </Text>
-                {summaryLines.map((line, i) => (
-                  <Text key={i} dimColor wrap="truncate-end">
-                    {line || ' '}
+              <Box {...panelBoxProps}>
+                {panelBackdrop}
+                <PanelTitle>
+                  <Text bold color="yellow" wrap="truncate-end">
+                    Approval — {req.title}
                   </Text>
-                ))}
+                </PanelTitle>
+                {req.pushTarget ? (
+                  <Text color="red">
+                    On approval, `{req.pushTarget.nodeId}` will push to{' '}
+                    {req.pushTarget.remote}/{req.pushTarget.branch}
+                  </Text>
+                ) : null}
+                <Box flexDirection="column">
+                  <Text dimColor bold>
+                    Upstream:
+                  </Text>
+                  {upstreamLines.length > 0 ? (
+                    upstreamLines.map((line, i) => (
+                      <Text key={i} dimColor wrap="truncate-end">
+                        {line || ' '}
+                      </Text>
+                    ))
+                  ) : (
+                    <Text dimColor>—</Text>
+                  )}
+                </Box>
+                {agentSummaryLines.length > 0 ? (
+                  <Box flexDirection="column">
+                    <Text color="magenta" bold>
+                      AI critique (from attached skill/instructions):
+                    </Text>
+                    {agentSummaryLines.map((line, i) => (
+                      <Text key={i} dimColor wrap="truncate-end">
+                        {line || ' '}
+                      </Text>
+                    ))}
+                  </Box>
+                ) : null}
+                <Box flexDirection="column" flexGrow={1} overflow="hidden">
+                  <GateBodyLines lines={bodyLines} start={start} visible={visible} />
+                </Box>
+                <PanelFooter hint="[a] approve · [r] reject · PgUp/PgDn: scroll" />
               </Box>
             );
-          })()}
-          <Box flexDirection="column" flexGrow={1} overflow="hidden">
-            {(() => {
-              const lines = diffLinesFor(pendingApproval.req.diffs);
-              const summaryBudget = pendingApproval.req.agentSummary
-                ? Math.min(
-                    4,
-                    wrapText(
-                      pendingApproval.req.agentSummary,
-                      Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH)),
-                    ).length,
-                  ) + 1
-                : 0;
-              const visible = Math.max(1, panelHeight - 6 - summaryBudget);
-              const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
-              return <DiffLines lines={lines} start={start} visible={visible} />;
-            })()}
-          </Box>
-          <PanelFooter hint="[a] approve · [r] reject · PgUp/PgDn: scroll diff" />
-        </Box>
-      ) : helpOpen ? (
+          })()
+        : helpOpen ? (
         <Box {...panelBoxProps}>
           {panelBackdrop}
           <PanelTitle>
@@ -2472,14 +2553,19 @@ export function App({
           {(() => {
             const state = runState.nodes[focusedNode.id]!;
             // A decided approval gate has nothing else worth showing here —
-            // replay the same green/red diff the live panel showed, instead
-            // of the generic (and for this node type, nearly empty) view.
+            // replay the same view the live panel showed, instead of the
+            // generic (and for this node type, nearly empty) view.
             if (focusedNode.type.id === 'approval-gate') {
               const output = state.output as
-                | { decision?: string; diffs?: Array<{ label?: string; diff: string }> }
+                | {
+                    decision?: string;
+                    diffs?: Array<{ label?: string; diff: string }>;
+                    documents?: Array<{ label: string; body: string }>;
+                  }
                 | undefined;
               if (Array.isArray(output?.diffs)) {
-                const lines = diffLinesFor(output.diffs);
+                const proseWidth = Math.max(10, Math.min(activeRect.w - 4, MAX_PROSE_WIDTH));
+                const lines = gateBodyLinesFor(output.documents, output.diffs, proseWidth);
                 const visible = Math.max(1, panelHeight - 4);
                 const start = Math.min(diffScroll, Math.max(0, lines.length - visible));
                 return (
@@ -2496,16 +2582,17 @@ export function App({
                       </Text>
                     </PanelTitle>
                     <Box flexDirection="column" flexGrow={1} overflow="hidden">
-                      <DiffLines lines={lines} start={start} visible={visible} />
+                      <GateBodyLines lines={lines} start={start} visible={visible} />
                     </Box>
-                    <PanelFooter hint="PgUp/PgDn: scroll diff · enter/esc: close · tab: focus" />
+                    <PanelFooter hint="PgUp/PgDn: scroll · enter/esc: close · tab: focus" />
                   </>
                 );
               }
             }
             // activity/liveLines and their scroll windows are hoisted above
-            // (nodePanelActivity, nodePanelLiveLines, outputWindow,
-            // activityWindow) so the keyboard/mouse handlers can reach them.
+            // (nodePanelActivity, nodePanelDetailLines, nodePanelRawLines,
+            // outputWindow, activityWindow) so the keyboard/mouse handlers can
+            // reach them.
             return (
               <>
                 <PanelTitle>
@@ -2581,11 +2668,21 @@ export function App({
                       {state.priorAttempts!.map((a) => `${a.status}${a.detail ? ` (${a.detail})` : ''}`).join(', ')}
                     </Text>
                   ) : null}
-                  {nodePanelLiveLines.slice(outputWindow.start, outputWindow.end).map((line, i) => (
-                    <Text key={`o${i}`} wrap="truncate-end">
-                      {line || ' '}
-                    </Text>
-                  ))}
+                  {nodePanelDetailLines !== null
+                    ? nodePanelDetailLines.slice(outputWindow.start, outputWindow.end).map((line, i) => (
+                        <Text key={`o${i}`} wrap="truncate-end">
+                          {line.segments.map((segment, j) => (
+                            <Text key={j} {...segmentStyle(segment)}>
+                              {segment.text}
+                            </Text>
+                          ))}
+                        </Text>
+                      ))
+                    : nodePanelRawLines.slice(outputWindow.start, outputWindow.end).map((line, i) => (
+                        <Text key={`o${i}`} wrap="truncate-end">
+                          {line || ' '}
+                        </Text>
+                      ))}
                   {nodePanelActivity.length > 0 ? (
                     <Text dimColor>
                       ── activity ──

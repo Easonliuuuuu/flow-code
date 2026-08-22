@@ -5,7 +5,9 @@
 Defines the workflow definition file (`.flow-code/workflow.yaml`), its scaffolding via `flow-code init`, parsing and validation of nodes, edges, and run settings, and the built-in node type registry with its capability model.
 ## Requirements
 ### Requirement: Default workflow scaffold
-The system SHALL provide an `init` command that scaffolds a default workflow definition file (`.flow-code/workflow.yaml`) in the current repo when one does not already exist, containing a working Discuss → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph. The scaffolded graph SHALL declare loop-back edges from each verification node back to Implement, so iteration on a failed check is the zero-configuration default rather than an opt-in.
+The system SHALL provide an `init` command that scaffolds a default workflow definition file (`.flow-code/workflow.yaml`) in the current repo when one does not already exist, containing a working Discuss → Spec → Approval-Gate → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph. The scaffolded graph SHALL declare loop-back edges from each verification node back to Implement, so iteration on a failed check is the zero-configuration default rather than an opt-in.
+
+The scaffolded graph SHALL gate the spec as well as the push. The spec is the contract every downstream node is judged against and is fixed before any code is written, so the run SHALL NOT adopt it without an explicit human decision.
 
 #### Scenario: Init in a repo with no existing workflow file
 - **WHEN** the user runs `flow-code init` in a git repo that has no `.flow-code/workflow.yaml`
@@ -15,13 +17,25 @@ The system SHALL provide an `init` command that scaffolds a default workflow def
 - **WHEN** the scaffolded default workflow is loaded
 - **THEN** the graph SHALL contain an Approval-Gate node between the Review node and the Git-ops node, so the "nothing is pushed without explicit approval" guarantee holds with zero configuration
 
+#### Scenario: Default graph gates the spec
+- **WHEN** the scaffolded default workflow is loaded
+- **THEN** the graph SHALL contain an Approval-Gate node between the Spec node and the Implement node, so no code is written against a contract no one has read
+
+#### Scenario: A rejected spec is reconsidered rather than ending the run
+- **WHEN** the scaffolded default workflow is loaded
+- **THEN** the spec gate SHALL declare a loop-back edge to the Discuss node upstream of the Spec node, so rejecting the spec reopens the discussion that produced it and re-runs Spec with the user's reason, rather than ending the run
+
 #### Scenario: Default graph iterates on a failed check
 - **WHEN** the scaffolded default workflow is loaded
 - **THEN** the graph SHALL contain loop-back edges from Test, Validate, and Review back to Implement with a bounded attempt count, so a failing check returns to Implement with the failure as context instead of ending the run
 
-#### Scenario: Default graph stops on a rejected gate
+#### Scenario: Default graph stops on a rejected final gate
 - **WHEN** the scaffolded default workflow is loaded
-- **THEN** the Approval-Gate node SHALL have no loop-back edge and no rejection branch, so a rejection ends the run by default; the file SHALL document, without enabling, how to route a rejection to a revision step instead
+- **THEN** the Approval-Gate node before Git-ops SHALL have no loop-back edge and no rejection branch, so rejecting the finished work ends the run by default; the file SHALL document, without enabling, how to route that rejection to a revision step instead. This SHALL NOT apply to the spec gate, whose loop-back is scaffolded rather than documented, because a spec is rejected to be rewritten whereas finished work is rejected to be abandoned.
+
+#### Scenario: A scaffolded run is no longer unattended end to end
+- **WHEN** a run executes a newly scaffolded default workflow
+- **THEN** it SHALL stop for a human decision before Implement as well as before Git-ops, and the scaffolded file SHALL say so, so that the loss of unattended end-to-end execution is a stated property of the default rather than a surprise
 
 #### Scenario: Init in a repo that already has a workflow file
 - **WHEN** the user runs `flow-code init` in a repo that already has `.flow-code/workflow.yaml`
@@ -230,33 +244,27 @@ The workflow file SHALL allow an edge to be declared as a loop-back, naming the 
 ### Requirement: Workflow presets
 The `init` command SHALL accept a named preset that scaffolds a workflow other than the default graph, so a project can start from a workflow shaped around an existing methodology rather than editing the default graph into one. Presets SHALL produce a workflow file that passes the same validation as any hand-written one, and the absence of a preset SHALL scaffold the default graph unchanged. A preset is a scaffolded file and nothing more — it composes existing node types with skills and adds no registry surface, which is why a new methodology is a new preset rather than a new set of node types.
 
+Every preset that contains a Spec node SHALL gate it on the same terms as the default graph. A methodology changes which skills write the spec, not whether a human agrees to it.
+
 #### Scenario: Init with no preset
 - **WHEN** the user runs `flow-code init` without naming a preset
-- **THEN** the system SHALL scaffold the default Discuss → Spec → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph
+- **THEN** the system SHALL scaffold the default Discuss → Spec → Approval-Gate → Implement → Test → Validate → Review → Approval-Gate → Git-ops graph
 
 #### Scenario: Init with the openspec preset
 - **WHEN** the user runs `flow-code init` naming the openspec preset
-- **THEN** the system SHALL scaffold an explore → propose → apply → gate → archive graph built from the Discuss, Spec, Implement, Approval-Gate, and Git-ops node types, with the corresponding openspec skills attached to each agent-driven node
+- **THEN** the system SHALL scaffold an explore → propose → apply → gate → archive graph built from the Discuss, Spec, Implement, Approval-Gate, and Git-ops node types, with the corresponding openspec skills attached to each agent-driven node, and with the proposed spec gated before it is applied
 
 #### Scenario: Init with the spec-kit preset
 - **WHEN** the user runs `flow-code init` naming the spec-kit preset
-- **THEN** the system SHALL scaffold a workflow built from the same node types, with the corresponding spec-kit skills attached, alongside the openspec preset as an equally supported starting point
+- **THEN** the system SHALL scaffold a workflow built from the same node types, with the corresponding spec-kit skills attached, alongside the openspec preset as an equally supported starting point, and with its Spec node gated
+
+#### Scenario: A preset with no Spec node
+- **WHEN** a preset scaffolds a graph containing no Spec node
+- **THEN** it SHALL NOT be required to contain a spec gate, and its shape SHALL otherwise be unchanged
 
 #### Scenario: A preset's skills are not installed
 - **WHEN** a preset attaches skills that do not resolve in any discovery root
 - **THEN** `init` SHALL scaffold the file and SHALL warn which skills are missing and where they are expected, rather than writing a workflow that silently fails to load
-
-#### Scenario: A preset's CLI dependency is missing
-- **WHEN** a preset declares an external CLI it depends on and that CLI is not found on `PATH`
-- **THEN** `init` SHALL offer, interactively, to install it before scaffolding, and SHALL proceed to scaffold either way — declining or a failed install SHALL NOT block the preset from being written
-
-#### Scenario: A preset can scaffold its own missing skills
-- **WHEN** a preset declares a command that scaffolds its required skills (e.g. `openspec init`) and those skills are not yet installed
-- **THEN** `init` SHALL offer to run that command against the repo root, as an alternative to only warning that the skills are missing
-
-#### Scenario: An unknown preset name
-- **WHEN** the user names a preset that does not exist
-- **THEN** the system SHALL fail with an error listing the available preset names and SHALL NOT create or modify a workflow file
 
 ### Requirement: Validation is reachable without starting a run
 The system SHALL provide a `validate` command that loads `.flow-code/workflow.yaml`, applies every check the system applies before execution — node types, node config schemas, the settings block, and graph structure — and reports the result without running any node, starting any agent session, or writing a run document. The command SHALL exit non-zero when any check fails and zero when all pass.

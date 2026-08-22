@@ -242,6 +242,20 @@ export function nodeSubtitle(
  * doesn't look like this node type's shape (still unparsed, or from before a
  * type change) — which tells the caller to fall back to the raw transcript
  * instead of a blank or half-populated block.
+ *
+ * The lines are markdown source, rendered through the same path a document
+ * at an Approval-Gate uses (`renderMarkdown` in `src/ui/markdown.ts`), not
+ * plain text — so a Spec node's `- **AC1** — …` bullets match exactly what
+ * `renderSpec` wrote to the file, bold id and all, and the two views of one
+ * spec cannot disagree.
+ *
+ * A file path is data we interpolate, not prose an agent wrote, so it is
+ * wrapped in a code span (`` ` ``) rather than left bare: `parseInline`
+ * matches code spans before emphasis and consumes their contents verbatim,
+ * which is what keeps a path like `src/foo_bar.ts` from having its `_bar_`
+ * read back as italic. Free-form agent text (a conclusion, a finding's
+ * description) is left alone and rendered as markdown like anything else in
+ * this app — the same trade a Discuss transcript already makes.
  */
 export function outputDetailLines(node: WorkflowNode, output: unknown): string[] | null {
   if (output === null || typeof output !== 'object') return null;
@@ -265,13 +279,13 @@ export function outputDetailLines(node: WorkflowNode, output: unknown): string[]
         : [];
       return [
         `Title: ${o['title']}`,
-        `Spec written to ${String(o['specPath'] ?? '?')}`,
+        `Spec written to \`${String(o['specPath'] ?? '?')}\``,
         '',
         'Requirements:',
         ...(requirements.length > 0 ? requirements.map((r) => `- ${String(r)}`) : ['(none stated)']),
         '',
         'Acceptance criteria:',
-        ...criteria.map((c) => `- ${String(c.id ?? '?')} — ${String(c.text ?? '')}`),
+        ...criteria.map((c) => `- **${String(c.id ?? '?')}** — ${String(c.text ?? '')}`),
       ];
     }
     case 'validate': {
@@ -283,7 +297,14 @@ export function outputDetailLines(node: WorkflowNode, output: unknown): string[]
         `Verdict: ${o['verdict']}`,
         `Notes: ${String(o['notes'] ?? '')}`,
         ...(criteria.length > 0
-          ? ['', 'Criteria:', ...criteria.map((c) => `- [${c.met === true ? 'x' : ' '}] ${String(c.id ?? '?')} — ${String(c.evidence ?? '')}`)]
+          ? [
+              '',
+              'Criteria:',
+              ...criteria.map(
+                (c) =>
+                  `- [${c.met === true ? 'x' : ' '}] **${String(c.id ?? '?')}** — \`${String(c.evidence ?? '')}\``,
+              ),
+            ]
           : []),
       ];
     }
@@ -296,7 +317,10 @@ export function outputDetailLines(node: WorkflowNode, output: unknown): string[]
         `Verdict: ${o['verdict']}`,
         `Findings (${findings.length}):`,
         ...(findings.length > 0
-          ? findings.map((f) => `- [${String(f.severity ?? 'info')}] ${String(f.location ?? '?')} — ${String(f.description ?? '')}`)
+          ? findings.map(
+              (f) =>
+                `- [${String(f.severity ?? 'info')}] \`${String(f.location ?? '?')}\` — ${String(f.description ?? '')}`,
+            )
           : ['(none)']),
       ];
     }

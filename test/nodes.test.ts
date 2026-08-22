@@ -536,6 +536,74 @@ edges:
     expect(decisions).toBe(3);
     expect(sentPrompts.filter((p) => p.includes('sent back'))).toHaveLength(2);
   });
+
+  // The scaffolded spec gate (add-spec-approval-gate) puts a Spec node
+  // between the gate and the Discuss node its loop-back returns to — unlike
+  // the `talk -> gate` fixture above, `discuss` is not the gate's direct
+  // dependency. The resume mechanism above doesn't care (it only looks at
+  // its own prior attempt), but the segment the loop-back resets does: this
+  // proves `spec` reruns and rewrites its file too, which is the point of
+  // routing the rejection back this far instead of straight to `implement`.
+  it('rewrites the spec on a rejected pass, with a Spec node sitting between the gate and the discussion it reopens', async () => {
+    const SPEC_GATE_YAML = `
+nodes:
+  - id: discuss
+    type: discuss
+    config: { topic: "what to build" }
+  - id: spec
+    type: spec
+  - id: spec-gate
+    type: approval-gate
+edges:
+  - { from: discuss, to: spec }
+  - { from: spec, to: spec-gate }
+  - { from: spec-gate, to: discuss, loopback: true }
+`;
+    const repo = makeTempGitRepo();
+    const specTitles = ['First draft', 'Second draft'];
+    let specCall = 0;
+    const sentPrompts: string[] = [];
+    const sessions = fakeSessions((req) => {
+      sentPrompts.push(req.prompt);
+      if (req.nodeId === 'spec') {
+        const title = specTitles[specCall] ?? specTitles.at(-1)!;
+        specCall++;
+        return JSON.stringify({ title, requirements: [], acceptanceCriteria: ['it works'] });
+      }
+      if (req.prompt.includes('JSON object recording')) {
+        return JSON.stringify({ conclusion: 'clarified', constraints: [] });
+      }
+      return 'understood';
+    });
+    let decisions = 0;
+    const ports = fakePorts({
+      userMessages: [],
+      approve: () => (++decisions === 1 ? 'reject' : 'approve'),
+    });
+    const { store } = await runReal(SPEC_GATE_YAML, repo, { sessions, ports });
+
+    expect(decisions).toBe(2);
+    expect(specCall).toBe(2);
+
+    // The rewritten file reflects the second pass, not the first — the
+    // design's claim that a rejection loop-back "reads the rewritten file
+    // with no cache to invalidate."
+    const output = store.node('spec').output as { specPath: string; title: string };
+    expect(output.title).toBe('Second draft');
+    const written = readFileSync(join(repo, output.specPath), 'utf8');
+    expect(written).toContain('# Second draft');
+    expect(written).not.toContain('# First draft');
+
+    // The reopened discussion — reached through spec, not directly from the
+    // gate — still knew why it was running again.
+    const reopenings = sentPrompts.filter((p) => p.includes('sent back'));
+    expect(reopenings).toHaveLength(1);
+    expect(reopenings[0]).toContain('spec-gate');
+    expect(reopenings[0]).toContain('rejected');
+
+    expect(store.node('spec-gate').status).toBe('done');
+    expect(store.node('spec-gate').output).toMatchObject({ decision: 'approved' });
+  });
 });
 
 describe('Approval-Gate node', () => {
@@ -644,6 +712,32 @@ nodes:
     const output = store.node('gate').output as ApprovalGateOutput;
     expect(output.diffs).toBeDefined();
     expect(output.diffs![0]!.diff).toContain('agent-made.txt');
+  });
+
+  it('records the document it was decided on, through the same schema round-trip diffs take', async () => {
+    // Same trap `diffs` above guards against: `documents` has to be declared
+    // in `approvalGateOutput` or the engine's `outputSchema.safeParse`
+    // (engine.ts) silently drops it before `store.setOutput` ever sees it.
+    const yaml = `
+nodes:
+  - id: spec
+    type: spec
+  - id: spec-gate
+    type: approval-gate
+edges:
+  - { from: spec, to: spec-gate }
+`;
+    const repo = makeTempGitRepo();
+    const sessions = fakeSessions(() =>
+      JSON.stringify({ title: 'T', requirements: [], acceptanceCriteria: ['it works'] }),
+    );
+    const { store } = await runReal(yaml, repo, { sessions, portOpts: { approve: 'approve' } });
+
+    const output = store.node('spec-gate').output as ApprovalGateOutput;
+    expect(output.documents).toBeDefined();
+    expect(output.documents![0]).toMatchObject({ label: 'spec' });
+    expect(output.documents![0]!.body).toContain('# T');
+    expect(output.documents![0]!.body).toContain('it works');
   });
 
   it('on reject: gate is done-but-rejected, downstream is skipped, independent branches still run', async () => {

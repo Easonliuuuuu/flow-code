@@ -371,9 +371,12 @@ describe('end-to-end: a rejection routed to a revision step', () => {
     const baseline = await recordBaseline(repo, false);
     store.setBaseline(baseline);
 
+    // The scaffolded spec gate now sits ahead of this branch and must clear
+    // on its own — this test is about the documented revise branch on the
+    // *final* gate, so only that gate's decisions are scripted to reject.
     let decisions = 0;
     const ports = fakePorts({
-      approve: () => (++decisions === 1 ? 'reject' : 'approve'),
+      approve: (req) => (req.nodeId === 'gate' ? (++decisions === 1 ? 'reject' : 'approve') : 'approve'),
       userMessages: ['blue please'],
     });
 

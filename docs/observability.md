@@ -29,7 +29,7 @@ A run document records which process on which machine owns it, and only that pro
 When there is no window to spare — you are in an agent CLI, an editor terminal, or a tmux pane doing something else — `flow-code status` compresses the same run into a row or two:
 
 ```
-●discuss ●spec ●implement ●test ●validate ●review ◆gate ○git-ops  ◆ gate needs your approval  6/8 · 2.1M tok · 12% budget
+●discuss ●spec ◆spec-gate ○implement ○test ○validate ○review ○gate ○git-ops  ◆ spec-gate needs your approval  2/9 · 900k tok · 4% budget
 ```
 
 It answers the three questions a graph answers — where the run is, what it has cost, what it needs from you — and nothing else. It shows sequence and status, not shape: no edges, no loop-back arcs, no layout. It is a pointer to the canvas, not a replacement for it.

@@ -150,7 +150,7 @@ edges:
       acceptanceCriteria: [{ id: 'AC1', text: 'retries on 5xx' }],
     })!;
     expect(lines).toContain('Title: Add retries');
-    expect(lines).toContain('- AC1 — retries on 5xx');
+    expect(lines).toContain('- **AC1** — retries on 5xx');
     expect(lines.join('\n')).not.toContain('{');
   });
 
@@ -161,7 +161,7 @@ edges:
       criteria: [{ id: 'AC1', met: false, evidence: 'no retry logic found' }],
     })!;
     expect(lines).toContain('Verdict: fail');
-    expect(lines).toContain('- [ ] AC1 — no retry logic found');
+    expect(lines).toContain('- [ ] **AC1** — `no retry logic found`');
   });
 
   it('breaks review findings into a severity-tagged list', () => {
@@ -170,7 +170,7 @@ edges:
       findings: [{ location: 'a.ts:10', description: 'off by one', severity: 'major' }],
     })!;
     expect(lines).toContain('Findings (1):');
-    expect(lines).toContain('- [major] a.ts:10 — off by one');
+    expect(lines).toContain('- [major] `a.ts:10` — off by one');
   });
 
   it('returns null rather than a half-built view when output does not match the shape yet', () => {

@@ -97,7 +97,79 @@ nodes:
     config: { instructions: x }
 `);
 
+const SPEC_WF = workflowFromYaml(`
+nodes:
+  - id: mkspec
+    type: spec
+`);
+
 describe('App node-detail panel rendering', () => {
+  it('renders a finished spec node’s criteria as styled prose, id bold and unmarked', async () => {
+    const store = storeFor(SPEC_WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: SPEC_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      store.setOutput('mkspec', {
+        specPath: '.flow-code/specs/r1.md',
+        title: 'Add retries',
+        requirements: [],
+        acceptanceCriteria: [{ id: 'AC1', text: 'retries on 5xx' }],
+      });
+      store.setStatus('mkspec', 'done');
+      stdin.write('\r'); // expand the detail panel for the focused node
+      await settle();
+
+      const body = lastFrameLines(stdout).join('\n');
+      expect(body).toContain('AC1');
+      expect(body).toContain('retries on 5xx');
+      // Rendered through markdown, not shown as literal source or raw JSON.
+      expect(body).not.toContain('**AC1**');
+      expect(body).not.toContain('{"specPath"');
+    } finally {
+      instance.unmount();
+    }
+  });
+
+  it('still shows the raw streamed transcript for a spec node that has not finished', async () => {
+    const store = storeFor(SPEC_WF, makeTempGitRepo());
+    const stdout = fakeStdout();
+    const stdin = fakeStdin();
+    const instance = render(
+      React.createElement(App, {
+        workflow: SPEC_WF,
+        store,
+        ports: new UiInteractionPorts(),
+        modelContext: NO_MODEL_CONTEXT,
+        onExit: () => {},
+        onInterrupt: () => {},
+      }),
+      { stdout, stdin, exitOnCtrlC: false, patchConsole: false, interactive: true },
+    );
+    try {
+      // Nothing has parsed into `output` yet — the node is still streaming
+      // the JSON reply its whole session consists of.
+      store.appendLiveOutput('mkspec', '{"title": "Add retr');
+      stdin.write('\r');
+      await settle();
+
+      const body = lastFrameLines(stdout).join('\n');
+      expect(body).toContain('{"title": "Add retr');
+    } finally {
+      instance.unmount();
+    }
+  });
+
   it('wraps long agent output instead of cutting it off at the panel edge', async () => {
     const store = storeFor(DETAIL_WF, makeTempGitRepo());
     const stdout = fakeStdout();
