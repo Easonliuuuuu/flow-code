@@ -92,7 +92,11 @@ async function highlightedLabel(
       onSelect: () => {},
       onCancel: () => {},
     }),
-    { stdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false },
+    // `interactive: true` is not optional here: Ink resolves it to
+    // `!isInCi && stdout.isTTY`, and under CI=true a non-interactive Ink
+    // writes only static output — the frame is computed and never written,
+    // so the fake stdout stays empty. Same as splash/app tests do.
+    { stdout, stdin: fakeStdin(), exitOnCtrlC: false, patchConsole: false, interactive: true },
   );
   try {
     const frame = await frameWithCursor(stdout);
