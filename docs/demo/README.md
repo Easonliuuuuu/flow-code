@@ -82,9 +82,10 @@ permanently.
    ```
 
    `.flow-code/` is gitignored, so whatever is in your local `workflow.yaml`
-   may be old — and an old scaffold is missing the two things worth filming:
-   the Spec node and the loop-back edges. The current default scaffolds 8 nodes
-   and 11 edges; anything less, re-scaffold:
+   may be old — and an old scaffold is missing the things worth filming: the
+   Spec node, its own gate and loop-back to Discuss, and the verification
+   loop-back edges. The current default scaffolds 9 nodes and 13 edges;
+   anything less, re-scaffold:
 
    ```bash
    node dist/cli.js init     # answer yes to overwriting, take the default preset

@@ -562,12 +562,13 @@ edges:
 });
 
 describe('default workflow template', () => {
-  it('loads, and gates the git-mutating step behind an Approval-Gate', async () => {
+  it('loads, and gates both the spec and the git-mutating step behind an Approval-Gate', async () => {
     const { DEFAULT_WORKFLOW_YAML } = await import('../src/defaultWorkflow.js');
     const wf = loadWorkflowFromString(DEFAULT_WORKFLOW_YAML);
     expect(wf.nodes.map((n) => n.type.id)).toEqual([
       'discuss',
       'spec',
+      'approval-gate',
       'implement',
       'test',
       'validate',
@@ -576,10 +577,24 @@ describe('default workflow template', () => {
       'git-ops',
     ]);
     const gitOps = wf.nodes.find((n) => n.type.id === 'git-ops')!;
-    const gate = wf.nodes.find((n) => n.type.id === 'approval-gate')!;
-    // Every path into git-ops passes the gate; the gate follows review.
-    expect(wf.graph.directDependencies(gitOps.id)).toEqual([gate.id]);
-    expect(wf.graph.ancestorsOf(gate.id)).toContain('review');
+    // Two gates of the same type now exist, so they are told apart by id
+    // rather than by type — `gate` follows review, `spec-gate` follows spec.
+    // Every path into git-ops passes `gate`; `gate` follows review.
+    expect(wf.graph.directDependencies(gitOps.id)).toEqual(['gate']);
+    expect(wf.graph.ancestorsOf('gate')).toContain('review');
+    // Every path into implement passes `spec-gate`; `spec-gate` follows spec.
+    expect(wf.graph.directDependencies('implement')).toEqual(['spec-gate']);
+    expect(wf.graph.directDependencies('spec-gate')).toEqual(['spec']);
+    // The scaffolded file states neither gate's forward condition — both are
+    // synthesized by `withGateApprovalConditions` (load.ts:330), same as the
+    // final gate's `gate -> git-ops` edge.
+    const [implementCondition] = wf.graph.conditionsInto('implement');
+    expect(implementCondition!.condition.source).toBe("spec-gate.decision == 'approved'");
+    const [gitOpsCondition] = wf.graph.conditionsInto(gitOps.id);
+    expect(gitOpsCondition!.condition.source).toBe("gate.decision == 'approved'");
+    // The loop-back is a return path, not a forward edge, so it is exempt
+    // from that synthesis — `discuss` carries no approval condition.
+    expect(wf.graph.conditionsInto('discuss')).toHaveLength(0);
     // Default git-ops config: commit-only, no push.
     expect(gitOps.config).toEqual({});
   });
@@ -587,18 +602,26 @@ describe('default workflow template', () => {
   it('ships loop-backs enabled, so a failed check iterates instead of stopping the run', async () => {
     const { DEFAULT_WORKFLOW_YAML } = await import('../src/defaultWorkflow.js');
     const wf = loadWorkflowFromString(DEFAULT_WORKFLOW_YAML);
-    // Every shipped loop-back is failure-triggered: a check that passes has no
-    // reason to send the run back.
+    // Every verification loop-back is failure-triggered: a check that passes
+    // has no reason to send the run back. `spec-gate`'s is triggered the same
+    // way — `on: 'failure'` is the literal value, even though what actually
+    // fires it is a rejection: `wasRejectedGate` reports a rejected gate to
+    // the engine as though it had failed, specifically so a bare
+    // `loopback: true` on its edge fires on rejection and nothing else.
     expect(wf.graph.allLoopbacks()).toEqual([
+      { from: 'spec-gate', to: 'discuss', maxAttempts: 3, on: 'failure' },
       { from: 'test', to: 'implement', maxAttempts: 3, on: 'failure' },
       { from: 'validate', to: 'implement', maxAttempts: 3, on: 'failure' },
       { from: 'review', to: 'implement', maxAttempts: 3, on: 'failure' },
     ]);
-    // A rejected gate still means stop: "no" is a decision, not a retry.
+    // A rejected *final* gate still means stop: "no" is a decision, not a
+    // retry — only the spec gate loops back.
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
     // Loop-backs are return paths, not dependencies: implement must not wait
-    // on the nodes that can send work back to it.
-    expect(wf.graph.directDependencies('implement')).toEqual(['spec']);
+    // on the nodes that can send work back to it, and discuss must not wait
+    // on spec-gate.
+    expect(wf.graph.directDependencies('implement')).toEqual(['spec-gate']);
+    expect(wf.graph.directDependencies('discuss')).toEqual([]);
   });
 });
 

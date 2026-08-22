@@ -235,6 +235,55 @@ tree, parallel agents cannot collide in yours.
 `mode: parallelize` instead gives each instance its own `task`, for independent work
 that should not share a working tree.
 
+## Approval before implementation
+
+An `approval-gate` reads more than a diff. Placed directly downstream of a `spec`
+node, it reads that node's file from disk and presents it as a document — rendered
+as prose, not as a diff, so a spec's `- **AC1** — …` bullets read as acceptance
+criteria rather than as deletions:
+
+```yaml
+nodes:
+  - id: spec
+    type: spec
+  - id: spec-gate
+    type: approval-gate
+edges:
+  - { from: spec, to: spec-gate }
+```
+
+No config: the document comes from the gate's direct dependencies, not from
+anything you point it at. A gate downstream of more than one document-producing
+node presents each, labelled with the node it came from; a gate with a diff and a
+document presents both, on their own paths.
+
+Rejecting the spec should reopen it, not end the run — a spec is rejected in order
+to be rewritten. The scaffolded graph wires this as a bare loop-back straight from
+the gate to the Discuss node upstream of `spec`:
+
+```yaml
+  - { from: spec-gate, to: discuss, loopback: true }
+```
+
+This looks unusual next to [loop-backs](#loop-backs) above — a loop-back normally
+fires when its source *fails*, and a gate that got its answer never fails. It fires
+here because a rejected gate is reported internally as though it had: `failure` is
+the default trigger a bare `loopback: true` takes, and a rejected gate is the one
+case that trigger is made to catch. It is not incidental — this predates rejection
+branches on gates and is exactly the mechanism this relies on. An *approved* gate
+never reports as a failure, so the same edge never fires on approval.
+
+`discuss` — not `spec-gate` itself — is where it goes, because the gate has no way
+to say *why* it was rejected; only a Discuss node can ask you. It resumes the same
+conversation rather than starting cold, and tells you it is running again because
+the work that followed it was sent back. `spec` reruns too, since it sits between
+`discuss` and `spec-gate` in the reset segment, and rewrites the same file, so the
+next pass reads what was actually approved.
+
+This is deliberately not extended to the gate before Git-ops below: a spec is
+rejected to be rewritten, but finished work is rejected to be abandoned, so that
+gate keeps to the documented-but-not-enabled pattern its own section describes.
+
 ## Approval before git
 
 The scaffolded graph puts an `approval-gate` between `review` and `git-ops`, so the

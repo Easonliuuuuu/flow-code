@@ -716,3 +716,153 @@ edges:
     expect(store.allTerminal()).toBe(true);
   });
 });
+
+// The scaffolded spec gate (add-spec-approval-gate): `discuss -> spec ->
+// spec-gate -> implement`, with a bare `loopback: true` from `spec-gate` back
+// to `discuss`. `loopback: true` normalizes to the same
+// `{ maxAttempts: 3, on: 'failure' }` the explicit form above uses; what's
+// different here is the trigger — `wasRejectedGate` (engine.ts) reports a
+// rejected gate to `fireLoopback` as `failure` even though the node
+// completed, so the edge fires on rejection and nothing else.
+describe('spec-gate loop-back (add-spec-approval-gate)', () => {
+  const SPEC_GATE_YAML = `
+nodes:
+  - id: discuss
+    type: discuss
+    config: { topic: x }
+  - id: spec
+    type: spec
+  - id: spec-gate
+    type: approval-gate
+  - id: implement
+    type: implement
+    config: { instructions: x }
+edges:
+  - { from: discuss, to: spec }
+  - { from: spec, to: spec-gate }
+  - { from: spec-gate, to: implement }
+  - { from: spec-gate, to: discuss, loopback: true }
+`;
+  const SPEC_OUT = {
+    specPath: '.flow-code/specs/run.md',
+    title: 'T',
+    requirements: [],
+    acceptanceCriteria: [{ id: 'AC1', text: 'x' }],
+  };
+  const DISCUSS_OUT = { conclusion: 'ok', constraints: [] };
+
+  /** Rejects on its first call, approves on every call after. */
+  function rejectOnceThenApprove(): { executor: NodeExecutor; runs: () => number } {
+    let runs = 0;
+    return {
+      runs: () => runs,
+      executor: async function* (): AsyncGenerator<StatusEvent, void, void> {
+        runs++;
+        yield { type: 'status', status: 'running' };
+        const rejected = runs === 1;
+        yield {
+          type: 'result',
+          output: { decision: rejected ? 'rejected' : 'approved', decidedAt: new Date().toISOString() },
+        };
+        yield { type: 'status', status: 'done', detail: rejected ? 'rejected by user' : 'approved' };
+      },
+    };
+  }
+
+  /** Always rejects — for the maxAttempts-exhaustion case. */
+  function alwaysReject(): { executor: NodeExecutor; runs: () => number } {
+    let runs = 0;
+    return {
+      runs: () => runs,
+      executor: async function* (): AsyncGenerator<StatusEvent, void, void> {
+        runs++;
+        yield { type: 'status', status: 'running' };
+        yield { type: 'result', output: { decision: 'rejected', decidedAt: new Date().toISOString() } };
+        yield { type: 'status', status: 'done', detail: 'rejected by user' };
+      },
+    };
+  }
+
+  it('resets discuss, spec and spec-gate on a rejection, and does not cascade a skip into implement', async () => {
+    let discussRuns = 0;
+    let specRuns = 0;
+    let implementRuns = 0;
+    const gate = rejectOnceThenApprove();
+    const { engine, store } = engineWith(SPEC_GATE_YAML, {
+      discuss: doneAfter(DISCUSS_OUT, async () => {
+        discussRuns++;
+      }),
+      spec: doneAfter(SPEC_OUT, async () => {
+        specRuns++;
+      }),
+      implement: doneAfter(IMPL_OUT, async () => {
+        implementRuns++;
+      }),
+      'spec-gate': gate.executor,
+    });
+    await engine.run();
+
+    // One rejection, one approval: the segment between spec-gate and its
+    // loop-back target ran twice, and implement — outside that segment —
+    // ran exactly once, only after approval.
+    expect(discussRuns).toBe(2);
+    expect(specRuns).toBe(2);
+    expect(gate.runs()).toBe(2);
+    expect(implementRuns).toBe(1);
+    expect(store.attemptOf('discuss')).toBe(2);
+    expect(store.attemptOf('spec-gate')).toBe(2);
+
+    // Not cascaded over: a rejected gate is a decision, not a failure, so
+    // implement is never touched by markDownstreamSkipped and reaches `done`
+    // on the approved pass rather than sitting `skipped`.
+    expect(store.node('implement').status).toBe('done');
+    expect(store.node('spec-gate').status).toBe('done');
+    expect(store.node('spec-gate').output).toMatchObject({ decision: 'approved' });
+  });
+
+  it('fires no loop-back, and runs implement once, when the spec gate is approved on the first pass', async () => {
+    let discussRuns = 0;
+    let implementRuns = 0;
+    const { engine, store } = engineWith(SPEC_GATE_YAML, {
+      discuss: doneAfter(DISCUSS_OUT, async () => {
+        discussRuns++;
+      }),
+      spec: doneAfter(SPEC_OUT),
+      implement: doneAfter(IMPL_OUT, async () => {
+        implementRuns++;
+      }),
+      'spec-gate': doneAfter({ decision: 'approved', decidedAt: new Date().toISOString() }),
+    });
+    await engine.run();
+
+    expect(discussRuns).toBe(1);
+    expect(implementRuns).toBe(1);
+    expect(store.attemptOf('discuss')).toBe(1);
+    expect(store.node('implement').status).toBe('done');
+  });
+
+  it('exhausts after 3 rejections, ending at `done` with the limit named — not `error`', async () => {
+    let implementRuns = 0;
+    const gate = alwaysReject();
+    const { engine, store } = engineWith(SPEC_GATE_YAML, {
+      discuss: doneAfter(DISCUSS_OUT),
+      spec: doneAfter(SPEC_OUT),
+      implement: doneAfter(IMPL_OUT, async () => {
+        implementRuns++;
+      }),
+      'spec-gate': gate.executor,
+    });
+    await engine.run();
+
+    // maxAttempts 3 counted on the target (discuss): attempts 1, 2, 3, then spent.
+    expect(gate.runs()).toBe(3);
+    expect(implementRuns).toBe(0);
+    // A rejected gate got its answer — it does not fail, so exhausting its
+    // loop-back leaves it at `done`, unlike a verification loop-back
+    // exhausting at `error`.
+    expect(store.node('spec-gate').status).toBe('done');
+    expect(store.node('spec-gate').statusDetail).toContain('loop-back attempt limit reached');
+    expect(store.node('spec-gate').statusDetail).toContain('`discuss` after 3 attempt(s)');
+    expect(store.snapshot().finishedAt).toBeDefined();
+  });
+});

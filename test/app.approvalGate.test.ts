@@ -126,6 +126,58 @@ describe('Approval-gate panel rendering', () => {
     }
   });
 
+  it('renders a bulleted spec document as ordinary text, not as diff deletions, with no empty diff region', async () => {
+    const { ports, stdout, unmount } = mountGateApp();
+    try {
+      void ports.approval.request({
+        nodeId: 'gate',
+        title: 'Review the spec',
+        diffs: [{ diff: '' }],
+        documents: [{ label: 'spec', body: '- **AC1** — it works\n- **AC2** — also works' }],
+        upstreamSummaries: [],
+      });
+      await settle();
+
+      const frame = lastFrameLines(stdout).join('\n');
+      // Markdown bullets render as `•`, not the literal `- **AC1**` a diff
+      // line would show — proof this went through the document path.
+      expect(frame).toContain('AC1');
+      expect(frame).toContain('AC2');
+      expect(frame).not.toContain('**AC1**');
+      expect(frame).not.toContain('- **AC1**');
+      // An empty diff beside a document states something true about the
+      // wrong subject, so it must not appear at all.
+      expect(frame).not.toContain('(no changes)');
+    } finally {
+      unmount();
+    }
+  });
+
+  it('renders a document and a non-empty diff on their own paths, diff still distinguishable', async () => {
+    const { ports, stdout, unmount } = mountGateApp();
+    try {
+      void ports.approval.request({
+        nodeId: 'gate',
+        title: 'Review the change',
+        diffs: [{ diff: '+added line\n-removed line' }],
+        documents: [{ label: 'spec', body: '- **AC1** — it works' }],
+        upstreamSummaries: [],
+      });
+      await settle();
+
+      const frame = lastFrameLines(stdout).join('\n');
+      expect(frame).toContain('AC1');
+      expect(frame).toContain('added line');
+      expect(frame).toContain('removed line');
+      // The diff still carries its own literal `+`/`-` markers; only the
+      // document's bullets were translated away from them.
+      expect(frame).toContain('+added line');
+      expect(frame).toContain('-removed line');
+    } finally {
+      unmount();
+    }
+  });
+
   it('replays the diff on a decided gate when its node panel is opened', async () => {
     const { store, stdout, stdin, unmount } = mountGateApp();
     try {

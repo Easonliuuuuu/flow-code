@@ -77,6 +77,14 @@ export interface ApprovalRequest {
   title: string;
   /** One diff on the plain path; one per selected branch after a convergence. */
   diffs: Array<{ label?: string; diff: string }>;
+  /**
+   * The non-diff subject of a decision — prose to read rather than a diff to
+   * scan. Always derived from a direct dependency's result (a Spec node's
+   * file, today); never something a gate is configured to point at, so a
+   * gate placed after a document-producing node needs no config to show what
+   * it is gating.
+   */
+  documents?: Array<{ label: string; body: string }>;
   upstreamSummaries: Array<{ nodeId: string; summary: string }>;
   /** Present when a push-configured Git-ops node is downstream of this gate. */
   pushTarget?: { nodeId: string; remote: string; branch: string };

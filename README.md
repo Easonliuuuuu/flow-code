@@ -21,21 +21,23 @@ Instead of scrolling a chat log, a coding task runs as a graph you can watch: ea
 </p>
 
 ```
-  Discuss ─→ Spec ─→ Implement ─→ Test ─→ Validate ─→ Review ─→ Gate ─→ Git-ops
-                         ↑          │         │          │
-                         └──────────┴─────────┴──────────┘
-                             loop back on a failing verdict
+  Discuss ─→ Spec ─→ Gate ─→ Implement ─→ Test ─→ Validate ─→ Review ─→ Gate ─→ Git-ops
+  ↑                  │       ↑            │       │           │
+  └──────────────────┘       └────────────┴───────┴───────────┘
+  a rejected spec loops back to Discuss
+                             a failing verdict loops back to Implement
 ```
 
 | Node | What it does |
 | --- | --- |
 | **Discuss** | The only interactive step — settles what is being built before anything runs headless. |
 | **Spec** | Turns that discussion into acceptance criteria, written to `.flow-code/specs/<runId>.md`. |
+| **Gate** (first) | Pauses for an explicit yes or no on the spec before any code is written; a rejection reopens Discuss with your reason. |
 | **Implement** | Writes the code and the tests covering it. |
 | **Test** | Runs your test commands. The verdict is an exit code, never a model's opinion. |
 | **Validate** | Checks the result against the spec's acceptance criteria, one by one. |
 | **Review** | Reviews the pending diff. |
-| **Gate** | Pauses for an explicit yes or no before anything touches git. |
+| **Gate** (second) | Pauses for an explicit yes or no before anything touches git; a rejection here ends the run. |
 | **Git-ops** | Commits, and pushes if you configured a remote. |
 
 Every node is optional and rewireable — the graph above is just what `flow-code init` scaffolds.

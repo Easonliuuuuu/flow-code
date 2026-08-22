@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
 import { capabilitySet } from '../capabilities.js';
-import type { ApprovalRequest, NodeExecutor } from '../engine/types.js';
+import type { ApprovalRequest, ExecuteContext, NodeExecutor } from '../engine/types.js';
 import { diffAgainstTree, git } from '../git/ops.js';
-import { nodeWantsAgentStep, type ApprovalGateConfig, type GitOpsConfig, type WorktreeAgentOutput } from '../registry/index.js';
+import { nodeWantsAgentStep, type ApprovalGateConfig, type GitOpsConfig, type SpecOutput, type WorktreeAgentOutput } from '../registry/index.js';
 import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './helpers.js';
 
 /**
@@ -12,6 +14,43 @@ import { nodeModel, runNodeSession, truncateText, upstreamPreamble } from './hel
  * reachable in the run's own state.
  */
 const RECORDED_DIFF_LIMIT = 8 * 1024;
+
+/** Same ceiling, same reasoning, for a document body. */
+const RECORDED_DOCUMENT_LIMIT = 8 * 1024;
+
+/**
+ * A gate's non-diff subject, one per direct dependency whose result names
+ * one. Read from disk rather than re-rendered from the dependency's output
+ * object, so what is approved is the bytes downstream nodes will actually
+ * read — and so a rejection that loops back and rewrites the file is picked
+ * up on the next pass with no cache to invalidate.
+ *
+ * Degrades rather than throws: a document a hand-edited run state can no
+ * longer find is not a reason to fail the gate, only a reason to say so
+ * alongside whatever else it has.
+ */
+function collectDocuments(ctx: ExecuteContext): ApprovalRequest['documents'] {
+  const documents: NonNullable<ApprovalRequest['documents']> = [];
+  for (const depId of ctx.workflow.graph.directDependencies(ctx.node.id)) {
+    const dep = ctx.workflow.nodes.find((n) => n.id === depId);
+    if (dep?.type.id !== 'spec') continue;
+    const output = ctx.store.node(depId).output as SpecOutput | undefined;
+    if (!output?.specPath) continue;
+    const absolutePath = isAbsolute(output.specPath)
+      ? output.specPath
+      : join(ctx.repoRoot, output.specPath);
+    try {
+      const body = readFileSync(absolutePath, 'utf8');
+      documents.push({ label: depId, body: truncateText(body, RECORDED_DOCUMENT_LIMIT) });
+    } catch {
+      documents.push({
+        label: depId,
+        body: `_Could not read the document at \`${output.specPath}\`._`,
+      });
+    }
+  }
+  return documents.length > 0 ? documents : undefined;
+}
 
 /**
  * No agent session by default: computes the pending diff against the run
@@ -51,6 +90,8 @@ export const executeApprovalGate: NodeExecutor = async function* (ctx) {
   } else {
     diffs.push({ diff: await diffAgainstTree(ctx.workingDir, ctx.baseline.tree) });
   }
+
+  const documents = collectDocuments(ctx);
 
   const upstreamSummaries = ctx.upstream.map((u) => ({
     nodeId: u.nodeId,
@@ -93,25 +134,48 @@ export const executeApprovalGate: NodeExecutor = async function* (ctx) {
     nodeId: ctx.node.id,
     title: config.title ?? `Approve changes at ${ctx.node.id}`,
     diffs,
+    ...(documents !== undefined ? { documents } : {}),
     upstreamSummaries,
     ...(pushTarget !== undefined ? { pushTarget } : {}),
     ...(agentSummary !== undefined ? { agentSummary } : {}),
   });
 
   const decidedAt = new Date().toISOString();
-  // Diffs ride along on the result so the detail panel can re-show the same
-  // green/red view after the decision — the live approval panel is only
-  // reachable while the gate is actually waiting. Truncated first: every
-  // upstream output a downstream node receives shares one budget, and an
-  // unbounded diff here would crowd out the review that justified it.
+  // Diffs and documents ride along on the result so the detail panel can
+  // re-show the same view after the decision — the live approval panel is
+  // only reachable while the gate is actually waiting. Truncated first:
+  // every upstream output a downstream node receives shares one budget, and
+  // an unbounded diff or document here would crowd out the review that
+  // justified it. Documents are already bounded at collection time, but the
+  // limit is repeated here so a future document source can't skip it.
   const recorded = diffs.map((d) => ({ ...d, diff: truncateText(d.diff, RECORDED_DIFF_LIMIT) }));
+  const recordedDocuments = documents?.map((d) => ({
+    ...d,
+    body: truncateText(d.body, RECORDED_DOCUMENT_LIMIT),
+  }));
   if (decision === 'approve') {
-    yield { type: 'result', output: { decision: 'approved', decidedAt, diffs: recorded } };
+    yield {
+      type: 'result',
+      output: {
+        decision: 'approved',
+        decidedAt,
+        diffs: recorded,
+        ...(recordedDocuments !== undefined ? { documents: recordedDocuments } : {}),
+      },
+    };
     yield { type: 'status', status: 'done', detail: 'approved' };
   } else {
     // A rejection is a decision, not a failure. Downstream is held back by the
     // approved-condition on the gate's out-edges, not by an `error` status.
-    yield { type: 'result', output: { decision: 'rejected', decidedAt, diffs: recorded } };
+    yield {
+      type: 'result',
+      output: {
+        decision: 'rejected',
+        decidedAt,
+        diffs: recorded,
+        ...(recordedDocuments !== undefined ? { documents: recordedDocuments } : {}),
+      },
+    };
     yield { type: 'status', status: 'done', detail: 'rejected by user' };
   }
 };

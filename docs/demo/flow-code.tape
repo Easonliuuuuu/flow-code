@@ -6,10 +6,10 @@
 # opens on the graph itself rather than on a shell prompt.
 #
 # Composition: the run plays out in full cards — status, summary, tokens, clock
-# per node — and then `o` pulls back to the whole graph, all eight nodes green
+# per node — and then `o` pulls back to the whole graph, all nine nodes green
 # with the loop-back arcs visible. Full cards are worth the run; the pull-back
-# is worth the ending, because an eight-node chain does not fit on screen at a
-# readable font size and the gate is the last thing you want cropped.
+# is worth the ending, because a nine-node chain does not fit on screen at a
+# readable font size and the final gate is the last thing you want cropped.
 #
 # Two numbers to re-tune after re-capturing:
 #   npm run demo:duration -- --speed 16 --max-gap 600 --hold 6000
