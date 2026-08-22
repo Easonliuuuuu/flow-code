@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.5.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.4.0...flow-code-v0.5.0) (2026-08-22)
+
+
+### ⚠ BREAKING CHANGES
+
+* **approval-gate:** a scaffolded workflow (`flow-code init`, default or the openspec/spec-kit presets) no longer runs unattended end-to-end — there is now a blocking approval gate before Implement, in addition to the one before Git-ops. Existing checked-in workflow.yaml files are unaffected; this only changes what `init` writes from now on.
+
+### Features
+
+* **approval-gate:** gate the spec before implementation begins ([c21c98a](https://github.com/Easonliuuuuu/flow-code/commit/c21c98a9907cc83882c3e172df99920861890624))
+* **cli:** add --version, and stop shipping a build hook that runs on install ([10c4322](https://github.com/Easonliuuuuu/flow-code/commit/10c432245c0c5f063ea408197a3130fe0809013d))
+* **init:** reuse credentials already on the machine instead of asking ([cc49c9f](https://github.com/Easonliuuuuu/flow-code/commit/cc49c9fc0395a7dc7ed4eb1c2674f2fb3aa43d6e))
+* **notify:** add cross-platform desktop notifications and terminal bell ([0644aa1](https://github.com/Easonliuuuuu/flow-code/commit/0644aa162f795340b49324a2757b2a5530463b71))
+* **preflight:** ask what to do about a dirty tree instead of refusing ([06769a9](https://github.com/Easonliuuuuu/flow-code/commit/06769a9cb198962d488ead436ed15114d4cc06d1))
+* **workflow:** decide test commands and route rejections by default ([e921a56](https://github.com/Easonliuuuuu/flow-code/commit/e921a56b68d1391c73710d8fe3d406df0691737d))
+
+
+### Bug Fixes
+
+* **app.testCommands.test.ts:** wait for the seeded checkbox, not a fixed delay ([323f8b8](https://github.com/Easonliuuuuu/flow-code/commit/323f8b8f6fb594491f23e99b97ae2301e8e302c3))
+* **splash:** center the intro on the screen it owns ([5ab4e15](https://github.com/Easonliuuuuu/flow-code/commit/5ab4e15cda3fc9c64592426aef7a856deb92924a))
+* **ui:** keep the key hints inside the panel frame ([cb4b33f](https://github.com/Easonliuuuuu/flow-code/commit/cb4b33f49b0be6999f260b180b8ac18bda67fb00))
+* **watch:** resolve the newest run past anything that is not one ([604d3ae](https://github.com/Easonliuuuuu/flow-code/commit/604d3ae63e75ca82bc470aaf14fc865d198ccf5e))
+
 ## [0.4.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.3.0...flow-code-v0.4.0) (2026-08-20)
 
 
