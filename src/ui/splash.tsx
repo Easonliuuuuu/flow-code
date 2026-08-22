@@ -70,7 +70,7 @@ const RUNS: Record<NodeId, Run[]> = {
 
 /** Below this width the chain and logo would wrap rather than fit, so the splash is skipped outright. */
 const MIN_COLUMNS = 46;
-/** Above this height the reserved logo block could overflow a very short terminal, so the splash is skipped outright too. */
+/** Below this height the block and the blank rows it centers in stop fitting, so the splash is skipped outright too. */
 const MIN_ROWS = 12;
 
 /**
@@ -140,11 +140,17 @@ const FIREWORK_COLORS = ['yellow', 'magenta', 'cyan', 'green'];
 /** Sparks pop in center-out rather than left-to-right, so it reads as a burst instead of a scan. */
 const REVEAL_ORDER = [1, 2, 0, 3];
 
+/**
+ * Dedented by the one column of padding FIGlet gave every line, so the logo's
+ * leftmost glyph sits on the same column as the chain's first node rather than
+ * one over. The uneven leading space that remains is the glyph shapes, not
+ * padding, and trimming further would bend the letters out of true.
+ */
 const WORDMARK_LINES = [
-  '   __ _                           _     ',
-  '  / _| |_____ __ _____ __ ___  __| |___ ',
-  ' |  _| / _ \\ V  V /___/ _/ _ \\/ _` / -_)',
-  ' |_| |_\\___/\\_/\\_/    \\__\\___/\\__,_\\___|',
+  '  __ _                           _     ',
+  ' / _| |_____ __ _____ __ ___  __| |___ ',
+  '|  _| / _ \\ V  V /___/ _/ _ \\/ _` / -_)',
+  '|_| |_\\___/\\_/\\_/    \\__\\___/\\__,_\\___|',
 ];
 
 export function Splash({ onDone }: { onDone: () => void }): React.ReactElement | null {
@@ -152,6 +158,11 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
   const { stdout } = useStdout();
   const [frame, setFrame] = useState(0);
   const skip = shouldSkip(stdin, stdout);
+  // Read per render rather than once: the frame timer re-renders every
+  // FRAME_MS anyway, so a terminal resized mid-animation re-centers on the
+  // next tick without needing a resize listener of its own.
+  const columns = stdout?.columns ?? 80;
+  const rows = stdout?.rows ?? 24;
   // Guards against the interval and a stray keypress both firing onDone —
   // the caller unmounts this component and mounts the real UI on the first
   // call, and a second call would do that twice.
@@ -208,53 +219,63 @@ export function Splash({ onDone }: { onDone: () => void }): React.ReactElement |
   const showHint = frame < WORDMARK_START;
 
   return (
-    <Box flexDirection="column" marginLeft={2} marginTop={1} marginBottom={1}>
-      <Box flexDirection="row">
-        {NODE_IDS.map((id, i) => (
-          <React.Fragment key={id}>
-            <Glyph {...glyphFor(states[i]!, frame)} />
-            <Text> {id} </Text>
-            {i < NODE_IDS.length - 1 ? <Arrow lit={states[i] === 'done'} /> : null}
-          </React.Fragment>
-        ))}
-      </Box>
-      {/* One row for the storyline caption plus the skip hint, so the chain
-          never shifts when either appears or disappears. */}
-      <Box flexDirection="row" minHeight={1}>
-        {caption ? <Text color={caption.color}>{caption.text}</Text> : null}
-        {caption && showHint ? <Text> · </Text> : null}
-        {showHint ? (
-          <Text dimColor>press any key to skip</Text>
-        ) : null}
-      </Box>
-      {/* The firework row, the four wordmark lines, and the tagline all share
-          one fixed-height region so your eye never jumps when the firework
-          hands off to the logo — the row count below it is constant the whole
-          way through. */}
-      <Box flexDirection="column" marginTop={1} minHeight={1 + WORDMARK_LINE_COUNT + 1}>
-        {showFireworks ? (
-          <Box flexDirection="row">
-            {FIREWORK_GLYPHS.map((glyph, pos) => {
-              const revealFrame = FIREWORK_START + REVEAL_ORDER.indexOf(pos);
-              const lit = frame >= revealFrame;
-              return (
-                <Text key={pos} {...(lit ? { color: FIREWORK_COLORS[pos] } : {})} dimColor={!lit}>
-                  {lit ? `${glyph} ` : '  '}
+    // Centered because the splash owns a whole alternate screen of its own
+    // (see the `render` call in ui/index.ts): nothing else shares that buffer
+    // and nothing survives it, so the reasons a CLI banner normally hugs the
+    // top left — staying aligned with the output printed beneath it, not
+    // stranding blank padding in scrollback — do not apply here. The block is
+    // a fixed 39x8 and `shouldSkip` rejects anything under 46x12, so it always
+    // fits. Centering is on the outer box only: the rows inside keep their
+    // shared left edge, which is what binds the caption to the chain above it.
+    <Box width={columns} height={rows} justifyContent="center" alignItems="center">
+      <Box flexDirection="column">
+        <Box flexDirection="row">
+          {NODE_IDS.map((id, i) => (
+            <React.Fragment key={id}>
+              <Glyph {...glyphFor(states[i]!, frame)} />
+              <Text> {id} </Text>
+              {i < NODE_IDS.length - 1 ? <Arrow lit={states[i] === 'done'} /> : null}
+            </React.Fragment>
+          ))}
+        </Box>
+        {/* One row for the storyline caption plus the skip hint, so the chain
+            never shifts when either appears or disappears. */}
+        <Box flexDirection="row" minHeight={1}>
+          {caption ? <Text color={caption.color}>{caption.text}</Text> : null}
+          {caption && showHint ? <Text> · </Text> : null}
+          {showHint ? (
+            <Text dimColor>press any key to skip</Text>
+          ) : null}
+        </Box>
+        {/* The firework row, the four wordmark lines, and the tagline all share
+            one fixed-height region so your eye never jumps when the firework
+            hands off to the logo — the row count below it is constant the whole
+            way through. */}
+        <Box flexDirection="column" marginTop={1} minHeight={1 + WORDMARK_LINE_COUNT + 1}>
+          {showFireworks ? (
+            <Box flexDirection="row">
+              {FIREWORK_GLYPHS.map((glyph, pos) => {
+                const revealFrame = FIREWORK_START + REVEAL_ORDER.indexOf(pos);
+                const lit = frame >= revealFrame;
+                return (
+                  <Text key={pos} {...(lit ? { color: FIREWORK_COLORS[pos] } : {})} dimColor={!lit}>
+                    {lit ? `${glyph} ` : '  '}
+                  </Text>
+                );
+              })}
+            </Box>
+          ) : null}
+          {showsWordmark
+            ? WORDMARK_LINES.slice(0, wordmarkLines).map((line, i) => (
+                <Text key={i} bold color="cyan">
+                  {line}
                 </Text>
-              );
-            })}
-          </Box>
-        ) : null}
-        {showsWordmark
-          ? WORDMARK_LINES.slice(0, wordmarkLines).map((line, i) => (
-              <Text key={i} bold color="cyan">
-                {line}
-              </Text>
-            ))
-          : null}
-        <Text dimColor>
-          {showsWordmark && wordmarkLines >= WORDMARK_LINE_COUNT ? 'agentic workflows, on your repo' : ''}
-        </Text>
+              ))
+            : null}
+          <Text dimColor>
+            {showsWordmark && wordmarkLines >= WORDMARK_LINE_COUNT ? 'agentic workflows, on your repo' : ''}
+          </Text>
+        </Box>
       </Box>
     </Box>
   );

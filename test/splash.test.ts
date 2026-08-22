@@ -130,6 +130,44 @@ describe('Splash', () => {
     unmount();
   });
 
+  it('centers the block on the screen it owns, keeping the rows left-aligned to each other', async () => {
+    const { stdout, unmount } = mountSplash(() => {});
+
+    // Past the wordmark reveal, so the block is at its full height.
+    await settle(4200);
+    const lines = lastFrame(stdout).replace(/\n$/, '').split('\n');
+    const filled = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.trim().length > 0);
+    const first = filled[0]!.i;
+    const last = filled.at(-1)!.i;
+
+    // Vertical: the blank rows above match what an exact centering of a block
+    // this tall would leave. (The matching rows below are there too, but Ink
+    // drops the frame's trailing blank line, so they are not all emitted.)
+    expect(first).toBe(Math.floor((ROWS - (last - first + 1)) / 2));
+
+    // Horizontal: left gap matches right gap, to within the one column an odd
+    // leftover cannot split evenly. Measured across the block rather than per
+    // row, because the rows are centered *as a unit* — they keep the shared
+    // left edge that puts the caption under the chain's first glyph.
+    const leftGap = Math.min(...filled.map(({ l }) => l.length - l.trimStart().length));
+    const rightGap = COLUMNS - Math.max(...filled.map(({ l }) => l.trimEnd().length));
+    expect(Math.abs(leftGap - rightGap)).toBeLessThanOrEqual(1);
+
+    // The chain and the caption under it start at the same column — that is
+    // the alignment the unit-centering exists to preserve.
+    const indentOf = (l: string): number => l.length - l.trimStart().length;
+    const chain = filled.find(({ l }) => l.includes('▶'))!.l;
+    const caption = filled.find(({ l }) => l.includes('ready'))!.l;
+    expect(indentOf(caption)).toBe(indentOf(chain));
+
+    // And the wordmark starts there too, now that its FIGlet padding is gone —
+    // its last line is flush left, so the logo squares up with the chain.
+    const logo = filled.filter(({ l }) => l.includes('\\')).map(({ l }) => l);
+    expect(Math.min(...logo.map(indentOf))).toBe(indentOf(chain));
+
+    unmount();
+  }, 10000);
+
   it('skips outright below the minimum terminal width, without rendering the diagram', async () => {
     let doneCount = 0;
     const { stdout, unmount } = mountSplash(
