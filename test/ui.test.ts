@@ -292,6 +292,39 @@ describe('canvas rendering', () => {
     expect(text).toContain('▶');
   });
 
+  it('keeps a short edge\'s arrowhead when a longer edge shares its row', () => {
+    // b -> d skips c, sharing b|c's and c|d's row with the ordinary adjacent
+    // edges a->b, b->c, c->d. b->d is listed last, so if its fill drew
+    // unconditionally it would sweep across and erase the arrowheads
+    // b->c and c->d already left in that span.
+    const wf = workflowFromYaml(`
+nodes:
+  - id: a
+    type: implement
+    config: { instructions: x }
+  - id: b
+    type: test
+    config: { commands: ["true"] }
+  - id: c
+    type: review
+  - id: d
+    type: validate
+edges:
+  - { from: a, to: b }
+  - { from: b, to: c }
+  - { from: c, to: d }
+  - { from: b, to: d }
+`);
+    const store = storeFor(wf, '/tmp');
+    const layout = computeLayout(wf);
+    const grid = renderGraph(wf, layout, store.snapshot(), null);
+    // b->c's arrowhead sits one cell left of c's box, on its title row —
+    // squarely inside b->d's span, and the one an unconditional fill would
+    // have overwritten.
+    const c = layout.boxes.get('c')!;
+    expect(grid[c.y + 1]![c.x - 1]!.ch).toBe('▶');
+  });
+
   it('draws the focused card in heavy rules, so focus is a shape and not just a shade', () => {
     const store = storeFor(WF, '/tmp');
     // `impl` is running, i.e. cyan — the same colour focus paints with, which
@@ -1082,7 +1115,11 @@ edges:
     for (const id of ['a', 'b', 'c', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(0);
   });
 
-  it('falls back to a flat layout when a loop-back would cross the band boundary', () => {
+  it('wraps normally even where a loop-back spans the whole graph', () => {
+    // d -> a loops back across every layer in the graph — but a loop-back
+    // draws no line (see canvas.ts's `drawWrapEdge` doc comment), so there is
+    // nothing for a band boundary to cut through and this wraps exactly like
+    // CHAIN_WF, which has the same forward edges and no loop-back at all.
     const wf = workflowFromYaml(`
 nodes:
   - id: a
@@ -1102,7 +1139,10 @@ edges:
   - { from: d, to: a, loopback: true }
 `);
     const wrapped = computeLayout(wf, undefined, { density: 'compact', wrapWidth });
-    for (const id of ['a', 'b', 'c', 'd']) expect(wrapped.boxes.get(id)!.band).toBe(0);
+    expect(wrapped.boxes.get('a')!.band).toBe(0);
+    expect(wrapped.boxes.get('b')!.band).toBe(0);
+    expect(wrapped.boxes.get('c')!.band).toBe(1);
+    expect(wrapped.boxes.get('d')!.band).toBe(1);
   });
 
   it('draws a wrap edge, distinct from a forward edge, at the band boundary', () => {
@@ -1178,14 +1218,14 @@ edges:
   });
 
   it('leaves the wrap lanes alone even where a loop-back spans bands', () => {
-    // b -> a loops back entirely inside band 0 — validCutPoints only forbids
-    // splitting *inside* that span, not the a,b | c,d boundary right after
-    // it — so this still wraps into three bands. This used to be the case the
-    // wrap and loop-back lane allocators didn't coordinate on: a loop-back's
-    // row lived below the *whole* graph, so a band-0 loop had to route down
-    // past both band boundaries, and the collision needed an explicit
-    // crossing glyph to stay legible. Loop-backs draw no lines now, so the
-    // wrap lanes are simply never crossed.
+    // b -> a loops back inside band 0 — validCutPoints never restricts a cut
+    // on account of a loop-back at all (see the doc comment there), so this
+    // still wraps into three bands regardless of the loop-back's span. This
+    // used to be the case the wrap and loop-back lane allocators didn't
+    // coordinate on: a loop-back's row lived below the *whole* graph, so a
+    // band-0 loop had to route down past both band boundaries, and the
+    // collision needed an explicit crossing glyph to stay legible. Loop-backs
+    // draw no lines now, so the wrap lanes are simply never crossed.
     const wf = workflowFromYaml(`
 nodes:
   - id: a

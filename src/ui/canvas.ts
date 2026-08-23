@@ -150,6 +150,30 @@ function put(grid: Grid, x: number, y: number, text: string, style: string): voi
 }
 
 /**
+ * Like `put`, but only into cells still at the grid's blank default.
+ *
+ * A multi-layer edge (`spec` feeding `validate` directly, say) shares its
+ * row with every ordinary adjacent edge between the layers it skips over —
+ * same row because every single-node layer in a band lines up on it, same
+ * columns because both edges cross the same inter-box gap. Filling that span
+ * with an unconditional `put` draws over whatever the shorter edges already
+ * left there, arrowheads included. Routing around every edge that might
+ * share a row is a general router this graph doesn't have; refusing to
+ * overwrite a cell that already carries a real edge is enough to stop one
+ * edge's fill erasing another's, and costs nothing when no edge shares the
+ * span; whichever edge got there first draws its glyph, and this only ever
+ * withholds a plain fill dash, never the corner or arrowhead that gives an
+ * edge its shape.
+ */
+function putIfBlank(grid: Grid, x: number, y: number, ch: string, style: string): void {
+  const cell = grid[y]?.[x];
+  if (cell && cell.ch === ' ') {
+    cell.ch = ch;
+    cell.style = style;
+  }
+}
+
+/**
  * A band-to-band wrap edge: down out of the source's bottom, across a lane
  * below the *whole band* — not just below the source box's own row, which
  * can sit above other, taller layers in the same band (a fan-out earlier in
@@ -351,16 +375,16 @@ export function renderGraph(
     const tx = to.x - 1;
     const ty = to.y + Math.min(1, to.h - 1);
     const mid = sx + Math.max(1, Math.floor((tx - sx) / 2));
-    for (let x = sx; x < mid; x++) put(grid, x, sy, '─', 'edge');
+    for (let x = sx; x < mid; x++) putIfBlank(grid, x, sy, '─', 'edge');
     if (sy !== ty) {
       put(grid, mid, sy, sy < ty ? '┐' : '┘', 'edge');
       const [y0, y1] = sy < ty ? [sy + 1, ty - 1] : [ty + 1, sy - 1];
-      for (let y = y0; y <= y1; y++) put(grid, mid, y, '│', 'edge');
+      for (let y = y0; y <= y1; y++) putIfBlank(grid, mid, y, '│', 'edge');
       put(grid, mid, ty, sy < ty ? '└' : '┌', 'edge');
     } else {
-      put(grid, mid, sy, '─', 'edge');
+      putIfBlank(grid, mid, sy, '─', 'edge');
     }
-    for (let x = mid + 1; x < tx; x++) put(grid, x, ty, '─', 'edge');
+    for (let x = mid + 1; x < tx; x++) putIfBlank(grid, x, ty, '─', 'edge');
     put(grid, tx, ty, '▶', 'edge');
   }
 
