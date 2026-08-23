@@ -58,6 +58,8 @@ scopes:
   notify: [approval-gate, terminal-canvas-ui]
   status: [project-documentation]   # scripts/status.mjs and the STATUS.md rollup
   guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
+  demo: [first-run-demo]
+  try: [first-run-demo]
 
 # Top-level modules under src/ — directories and single-file modules alike, so
 # a feature that ships as one .ts file cannot slip past. `index.ts` is skipped
@@ -81,6 +83,7 @@ modules:
   notify: [approval-gate, terminal-canvas-ui]
   runstate: [run-state]
   guest: [guest-run-reporting, guest-agent-instructions, host-session-harness, run-state-reconciliation]
+  demo: [first-run-demo]
 
 # Which BR each capability serves — the BR -> ER edge. Exactly one BR per
 # capability (a strict tree, not many-to-many): if a capability's own purpose
@@ -145,6 +148,12 @@ capabilities:
   # not BR-09's. terminal-canvas-ui keeps "legible on one screen"; this owns
   # "visible from somewhere flow-code does not own."
   session-status-line: BR-03
+  # The first thing a stranger can see without committing anything — BR-01's
+  # own outcome, which nothing owned before this. Deliberately not folded into
+  # workflow-graph: `init` and the scaffold are specified there because they
+  # are about the graph, and that is exactly why GAP-10 (now closed) said
+  # nothing was about the stranger.
+  first-run-demo: BR-01
 
 # OpenSpec changes in openspec/changes/, mapped to the business requirement they
 # serve. `status: parked` means deliberately not scheduled — it silences the
@@ -237,6 +246,15 @@ archived:
   # back to Discuss on rejection — the mechanism 2026-08-17-route-rejected-
   # gate-to-revision documented for the final gate, now used directly.
   2026-08-22-add-spec-approval-gate: BR-08
+  # `flow-code try` — a complete run of the real default graph against a
+  # seeded temporary repository, with no repository, configuration, or
+  # credential required, and the model replaced by a script that writes
+  # the files a real agent would have written. The test fails once and
+  # recovers through the loop-back; both gates pause and hold a diff
+  # computed from real git. A persistent header banner discloses that
+  # nothing live is running. The first work attached to BR-01, and closes
+  # GAP-10.
+  2026-08-23-add-first-run-demo: BR-01
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
@@ -279,23 +297,11 @@ registered_gaps:
       decision — there is no future state where this becomes a spec.
     tracked_by: closed — non-issue
 
-  # GAP-10 and GAP-11 come from the reverse edge: a BR that nothing is attached
-  # to. Both are the same shape — a real surface exists, but it is described in
-  # pieces inside capabilities that are *about* something else, so no spec is
-  # about the outcome itself. Neither is code drift; both are ER work that has
-  # not been done. `tracked_by: inbox` rather than a BR on purpose: a gap about
-  # BR-01 cannot be tracked by BR-01 without tracking nothing.
-  - id: GAP-10
-    kind: br
-    subject: BR-01
-    reason: >-
-      No capability spec is about a stranger's first run. `src/init/`,
-      `src/presets.ts`, the scaffold, and the discovery prompts are all real and
-      all specified — but inside workflow-graph and test-command-discovery,
-      which serve BR-08. Nothing owns the outcome, which is the likeliest reason
-      "ship-ready" keeps feeling unfinished.
-    tracked_by: inbox
-
+  # GAP-10 (BR-01) is closed: first-run-demo archived 2026-08-23 and is about
+  # the outcome directly, not described in pieces inside a capability that is
+  # about something else — see the archived: comment above. GAP-11 comes from
+  # the same reverse edge and is not: a real surface exists (terminal-canvas-ui's
+  # navigation half) but no spec is about it yet. ER work, not code drift.
   - id: GAP-11
     kind: br
     subject: BR-05
