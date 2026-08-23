@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { ensureFlowCodeGitignore } from '../workflow/gitignore.js';
 import { isProviderId, type ProviderId } from './providers.js';
 
 export const CREDENTIALS_RELATIVE_PATH = join('.flow-code', 'credentials.json');
@@ -51,10 +52,16 @@ export function loadCredentials(repoRoot: string): StoredCredentials | undefined
   }
 }
 
-/** Written mode 0600: it's a plaintext API key. */
+/**
+ * Written mode 0600: it's a plaintext API key. The ignore file goes in first,
+ * so the key is never briefly sitting in a tracked directory — the wizard
+ * tells the user this file is gitignored, and this is what makes that true in
+ * their repository rather than only in flow-code's own.
+ */
 export function saveCredentials(repoRoot: string, creds: StoredCredentials): void {
   const path = credentialsPath(repoRoot);
   mkdirSync(dirname(path), { recursive: true });
+  ensureFlowCodeGitignore(repoRoot);
   writeFileSync(path, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
   try {
     chmodSync(path, 0o600);
