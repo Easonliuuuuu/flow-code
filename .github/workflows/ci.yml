@@ -8,7 +8,17 @@ on:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    # macOS is in the matrix because the docs claim it works. Everything below
+    # assumes POSIX — `sh -c` for test commands, 0600 for the credentials file
+    # — so a second POSIX platform is the cheapest way to keep that claim
+    # honest rather than aspirational. Native Windows is deliberately absent:
+    # the Test node shells out via `sh -c` and cannot work there, which
+    # README.md states outright instead of burning CI minutes to rediscover.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       # Full history: `npm run status:check` reads every feat() commit scope to
       # find features that shipped without a spec. A shallow clone would leave
@@ -33,11 +43,19 @@ jobs:
       # step is what makes it work rather than an accident of install order.
       - run: npm run build
 
-      # docs/node-types.md is generated from the node type registry; this fails
-      # if a registry change landed without regenerating it.
-      - run: npm run docs:check
+      # The generated docs and STATUS.md are derived from source and git
+      # history, so they say the same thing on every platform. Checking them
+      # once keeps a docs failure reported once rather than per-OS.
+      #
+      # docs/node-types.md comes from the node type registry, and the README's
+      # command table and the workflow reference's settings table come from
+      # `CLI_COMMANDS` and `settingsSchema`; this fails if any of them landed
+      # without regenerating.
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run docs:check
 
       # STATUS.md is generated from openspec/, src/, and git history; this fails
       # if it is stale, or if a feature shipped without a capability spec owning
       # it and without being registered as a known gap in coverage.yaml.
-      - run: npm run status:check
+      - if: matrix.os == 'ubuntu-latest'
+        run: npm run status:check
