@@ -6,6 +6,7 @@ import { selectFromList } from '../init/SelectList.js';
 import { DEFAULT_PRESET, listPresets } from '../presets.js';
 import type { WorkflowPreset } from '../presets.js';
 import { defaultSkillRoots, discoverSkills } from '../skills/discover.js';
+import { ensureFlowCodeGitignore } from '../workflow/gitignore.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 
 /** Which of `preset.requiredSkills` aren't discoverable from this repo yet. */
@@ -64,6 +65,9 @@ export async function scaffoldWorkflow(
   const justScaffolded = !alreadyScaffolded || overwrite;
   if (justScaffolded) {
     mkdirSync(dirname(path), { recursive: true });
+    // Before the workflow, so a repo that scaffolds and then runs never has an
+    // unguarded .flow-code/ for a run to write transcripts into.
+    ensureFlowCodeGitignore(repoRoot);
     writeFileSync(path, preset.yaml);
     ensureGitExclude(repoRoot);
     console.log(`flow-code: ${overwrite ? 'overwrote' : 'created'} ${WORKFLOW_RELATIVE_PATH}`);
