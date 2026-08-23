@@ -236,12 +236,24 @@ export interface LayoutOptions {
    *
    * A band only ever ends where a wrap edge can actually route without
    * dodging another band's own boxes — single node at the end, single node
-   * at the start of the next, no loop-back crossing it (see
-   * `validCutPoints`). Reaching `wrapWidth` mid-fan-out doesn't stop
-   * wrapping outright: the boundary backs off to the nearest earlier legal
-   * point that still fits, or — if the *whole* band up to here is one long
-   * illegal run — grows past `wrapWidth` to the next legal point wherever
-   * that is, rather than giving up on wrapping entirely.
+   * at the start of the next (see `validCutPoints`). Loop-backs never factor
+   * into this: they draw no line (see canvas.ts's `drawWrapEdge` doc
+   * comment), so one is free to span any number of bands. Reaching
+   * `wrapWidth` mid-fan-out doesn't stop wrapping outright: the boundary
+   * backs off to the nearest earlier legal point that still fits, or — if
+   * the *whole* band up to here is one long illegal run — grows past
+   * `wrapWidth` to the next legal point wherever that is, rather than giving
+   * up on wrapping entirely.
+   *
+   * That growing-past-`wrapWidth` case is not rare: any *forward* edge that
+   * skips more than one layer forces every layer it spans into one band,
+   * however wide (see `validCutPoints`) — the default workflow's own
+   * `spec → validate` edge does this, so `spec` through `validate` always
+   * shares a single ~200-column band no matter how narrow `wrapWidth` is.
+   * Fixing that would mean either drawing a forward edge across more than
+   * one band boundary (today's wrap edge only ever spans exactly one) or
+   * dropping the drawn line the way loop-backs already have — either is a
+   * real change to what gets drawn, not a bug in this function.
    */
   wrapWidth?: number;
 }
@@ -253,12 +265,16 @@ export interface LayoutOptions {
  * `layerCount` — the end of the graph is always a legal place to stop.
  *
  * A cut is legal only if the layers on both sides of it are single nodes,
- * and no edge — forward or loop-back — spans across it without landing on
- * exactly that adjacent pair. An edge spanning several layers (a fan-out
- * converging a few layers later, a loop-back reaching back further than
- * one step) knocks out every cut inside its span, which has the wanted
- * side effect of forcing that whole run to share one band — nothing further
- * has to check for it once band widths are being decided.
+ * and no *forward* edge spans across it without landing on exactly that
+ * adjacent pair. A forward edge spanning several layers (a fan-out
+ * converging a few layers later, say) knocks out every cut inside its span,
+ * which has the wanted side effect of forcing that whole run to share one
+ * band — nothing further has to check for it once band widths are being
+ * decided.
+ *
+ * Loop-backs are exempt: they draw no line (see canvas.ts's `drawWrapEdge`
+ * doc comment), so there is nothing for a band boundary to cut through, no
+ * matter how many layers one spans.
  */
 function validCutPoints(
   workflow: Workflow,
@@ -273,12 +289,13 @@ function validCutPoints(
     if ((layers.get(c)?.length ?? 0) !== 1) legal[c] = false;
   }
   for (const edge of workflow.edges) {
+    if (edge.loopback) continue; // draws no line — see the doc comment above
     const f = layerOf.get(edge.from);
     const t = layerOf.get(edge.to);
     if (f === undefined || t === undefined || f === t) continue;
     const lo = Math.min(f, t);
     const hi = Math.max(f, t);
-    if (!edge.loopback && hi - lo === 1) continue; // an ordinary adjacent edge is never a problem
+    if (hi - lo === 1) continue; // an ordinary adjacent edge is never a problem
     for (let c = lo + 1; c <= hi; c++) legal[c] = false;
   }
   const cuts: number[] = [];
