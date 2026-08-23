@@ -58,6 +58,42 @@ function fakeStdin(opts: { isTTY?: boolean } = {}): NodeJS.ReadStream {
 
 const settle = (ms = 120): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Waits for the splash to actually reach a frame, rather than sleeping for
+ * however long that frame *should* take.
+ *
+ * The animation advances on a 160ms `setInterval`, and an interval is a floor
+ * rather than a schedule: on a loaded runner it fires fewer times per wall
+ * second, so a fixed `settle(4200)` that reaches the "ready" caption on one
+ * machine lands several frames short on another. That is what it did — the
+ * suite was green on Linux and failed on macOS at the first assertion that
+ * needed the settled frame.
+ */
+async function until(predicate: () => boolean, what: string, timeoutMs = 8000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await settle(40);
+  }
+}
+
+async function frameWhere(
+  stdout: FakeStdout,
+  predicate: (frame: string) => boolean,
+  timeoutMs = 8000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let frame = lastFrame(stdout);
+  while (!predicate(frame)) {
+    if (Date.now() > deadline) {
+      throw new Error(`splash never reached the expected frame within ${timeoutMs}ms. Last:\n${frame}`);
+    }
+    await settle(40);
+    frame = lastFrame(stdout);
+  }
+  return frame;
+}
+
 function lastFrame(stdout: FakeStdout): string {
   const plain = stdout.frames.map((f) => f.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ''));
   return plain.filter((f) => f.trim().length > 0).at(-1) ?? '';
@@ -100,12 +136,14 @@ describe('Splash', () => {
     await settle(1600);
     expect(lastFrame(stdout)).toMatch(/failed|retrying/);
 
-    // Past AUTO_DONE_FRAME (28 frames * 160ms = 4480ms): settled and done.
-    await settle(4000);
+    // Past AUTO_DONE_FRAME: settled and done. Waits on `onDone` rather than on
+    // the caption, because "ready" paints two hold frames before the animation
+    // actually finishes — and rather than on a fixed sleep, because 28 frames
+    // * 160ms is the interval's floor, not a promise it keeps under load.
+    await until(() => doneCount === 1, 'the splash to finish');
     const frame = lastFrame(stdout);
     expect(frame).toContain('agentic workflows, on your repo');
     expect(frame).toContain('ready');
-    expect(doneCount).toBe(1);
 
     unmount();
   });
@@ -133,9 +171,14 @@ describe('Splash', () => {
   it('centers the block on the screen it owns, keeping the rows left-aligned to each other', async () => {
     const { stdout, unmount } = mountSplash(() => {});
 
-    // Past the wordmark reveal, so the block is at its full height.
-    await settle(4200);
-    const lines = lastFrame(stdout).replace(/\n$/, '').split('\n');
+    // Past the wordmark reveal, so the block is at its full height: wait for
+    // the settled frame itself, since every assertion below reads a row that
+    // only exists once the caption and the full wordmark are both on screen.
+    const settled = await frameWhere(
+      stdout,
+      (f) => f.includes('ready') && f.includes('▶'),
+    );
+    const lines = settled.replace(/\n$/, '').split('\n');
     const filled = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.trim().length > 0);
     const first = filled[0]!.i;
     const last = filled.at(-1)!.i;
@@ -166,7 +209,7 @@ describe('Splash', () => {
     expect(Math.min(...logo.map(indentOf))).toBe(indentOf(chain));
 
     unmount();
-  }, 10000);
+  }, 15000);
 
   it('skips outright below the minimum terminal width, without rendering the diagram', async () => {
     let doneCount = 0;
