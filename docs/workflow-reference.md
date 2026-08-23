@@ -138,13 +138,29 @@ Details worth knowing:
 
 ```yaml
 settings:
-  concurrency: 2       # 1–16, default 2 — max concurrent agent sessions
-  model: claude-...    # optional run-wide default; per-node `model` wins
+  concurrency: 2                 # max concurrent agent sessions
+  model: claude-sonnet-4-5       # run-wide default; a node's own `model` wins
+  subagents: true                # may a node's agent delegate?
+  notifications:                 # bell and desktop alert when a run needs you
+    bell: true
+    desktop: true
   budget:
     tokensPerNode: 300000
     tokensPerRun: 2000000
     minutesPerRun: 60
 ```
+
+Every field is optional. The whole `settings` block can be left out.
+
+<!-- BEGIN GENERATED: settings-fields -->
+| Field | Type | Default | What it does |
+| --- | --- | --- | --- |
+| `concurrency` | integer 1–16 | `2` | Most agent sessions that may run at once. Only nodes that fan out ever actually run in parallel, so this matters most in a wide graph. |
+| `model` | string | _unset_ | Run-wide default model. A node's own `model` wins over it, and an unset value leaves each session on its provider's default. |
+| `budget` | object | _unset_ (unbounded) | Ceilings that stop the run: `tokensPerNode`, `tokensPerRun`, `minutesPerRun`. See [Budgets](#budgets) — a budget stop is final and never triggers a loop-back. |
+| `subagents` | boolean | `true` | Whether a node's agent may delegate to subagents. A subagent runs under its parent node's capability set and working directory and counts against `concurrency`, so this is a lever for cost and predictability rather than for safety. |
+| `notifications` | boolean or object | `true` for both channels | Terminal bell and OS desktop alerts when a run needs you. `notifications: false` disables both; `{ bell, desktop }` sets them separately. See [Notifications](#notifications) for the flags and environment variables that override this per invocation. |
+<!-- END GENERATED: settings-fields -->
 
 Only Worktree-Agent instances ever actually run in parallel, so `concurrency` matters
 most in graphs that fan out.
@@ -181,6 +197,39 @@ distinction.
 
 **A budget stop is final.** It never triggers a loop-back retry — retrying past a
 ceiling is exactly what the ceiling exists to prevent.
+
+### Notifications
+
+A headless run can sit waiting for you for a long time, so it says so: the terminal
+bell rings and an OS notification is raised when the run needs a human or reaches an
+end. Six events trigger one — a gate waiting for approval, a Discuss turn waiting for
+a reply, test-command discovery waiting for confirmation, a worktree node waiting for
+you to pick which branches to converge, and the run finishing or failing.
+
+```yaml
+settings:
+  notifications: false            # both channels off
+  # or, separately:
+  notifications: { bell: true, desktop: false }
+```
+
+Both channels default to on, except that **desktop notifications are off by default
+when `CI` is set** — a build machine has no desktop to raise them on. Per invocation,
+these override the file:
+
+| Flag | Environment variable | Turns off |
+| --- | --- | --- |
+| `--no-bell` | `FLOW_CODE_NO_BELL` | The terminal bell |
+| `--no-notify` | `FLOW_CODE_NO_NOTIFY` | The OS desktop notification |
+| `--no-alerts`, `--silent-alerts` | `FLOW_CODE_NO_ALERTS` | Both |
+
+Precedence runs flags → environment → `settings.notifications` → defaults, and every
+one of them can only turn a channel *off*. An environment variable counts as set when
+its value is `1`, `true`, `yes`, or `on`.
+
+Desktop delivery is best-effort and platform-specific (`notify-send` on Linux,
+`osascript` on macOS, PowerShell toast on Windows and WSL). A missing notifier is
+never an error — the run continues, and the bell still rings.
 
 ## Named graphs
 

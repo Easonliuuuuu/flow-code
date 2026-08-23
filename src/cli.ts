@@ -2,6 +2,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fail } from './cli/context.js';
+import { renderHelp } from './cli/commands.js';
 
 /*
  * Every subcommand is imported dynamically, and that is a performance
@@ -21,60 +22,12 @@ import { fail } from './cli/context.js';
  * two paths least able to afford it.
  */
 
-const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
-
-Usage:
-  flow-code try               Run the real default graph against a seeded temporary repository —
-                              no repository, configuration, or credential needed. Every agent
-                              session is scripted; the engine, gates, and UI are the real ones.
-                              Pauses for a real approval at both gates, same as \`flow-code run\`
-  flow-code init [--preset <name>]
-                              Scaffold .flow-code/workflow.yaml with the default graph, set up
-                              its test command(s), and pick the provider/model for the project
-                              (re-run any time — already-configured steps ask before redoing)
-  flow-code run [--allow-dirty] [--no-splash] [--no-notify] [--no-bell] [--no-alerts]
-                              Run the workflow (a dirty tree is asked about, not refused;
-                              --allow-dirty skips the question and snapshots it as the baseline)
-                              —no-splash skips the startup animation (or set FLOW_CODE_NO_SPLASH)
-                              —no-notify / --no-bell / --no-alerts control OS popups & terminal bell
-  flow-code run --resume, -r [runId]
-                              Resume a run interrupted by ctrl+c/SIGTERM (defaults to the
-                              most recent one); completed nodes are kept, the rest re-run,
-                              and an interrupted Discuss conversation picks back up with
-                              full history
-  flow-code runs              List past runs in this repo (id, when, status, node tally) —
-                              use a listed id with \`flow-code run --resume\` or \`flow-code watch\`
-  flow-code watch [runId] [--no-splash]
-                              Follow a run started elsewhere — same graph, read-only, fed by the
-                              run's state file. Defaults to whichever run is currently being
-                              written, and picks up a run started after the viewer was opened
-  flow-code status [--line] [--json] [--script] [--width N] [--dir <path>]
-                              Summarize the current run in one or two rows — what it needs, how
-                              far it is, what it has spent. Read-only, and cheap enough to run on
-                              every event of whatever displays it. --line emits a single row for
-                              embedding in a status bar you already have; --script prints a
-                              ready-made one for a host that has none
-  flow-code node <sub> …      Report progress through the graph from an agent flow-code is not
-                              running — open a run, then report each node started/done/failed,
-                              and the graph fills in beside your own session. \`flow-code node\`
-                              on its own lists the subcommands
-  flow-code connect [--check] Install flow-code's reporting surface into this project's agent
-                              configuration (MCP server, workflow skill, instructions section,
-                              enforcement hook, and a status row for the host's status line).
-                              --check reports what is installed and whether it is still current;
-                              --status-line installs only the status row, which is the one piece
-                              the Claude Code plugin cannot install for you
-  flow-code reconcile [runId] [--json]
-                              Check a run's claims against the repository — which completed nodes
-                              reported work the tree does not show. Read-only and advisory; exits
-                              non-zero when the repository contradicts the run
-  flow-code validate          Check .flow-code/workflow.yaml without running it — reports every
-                              problem it can find, and which checks a failure stopped it reaching
-  flow-code node-types        List built-in node types, capabilities, config and output shapes
-  flow-code skills            List skills attachable to a node, and where each was found
-  flow-code doctor [--yes]    List/remove orphaned worktrees from crashed runs
-  flow-code --version, -v     Print the installed version
-`;
+/**
+ * Rendered from `CLI_COMMANDS` rather than written out here, so the README's
+ * command table and this help text cannot disagree — `npm run docs:check`
+ * regenerates the table from the same list and fails CI when it is stale.
+ */
+const HELP = renderHelp();
 
 /**
  * The version this build was published as, read from the package manifest
