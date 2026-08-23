@@ -7,7 +7,12 @@ import {
   WorkflowValidationError,
   type LoadOptions,
 } from '../src/workflow/load.js';
-import { DEFAULT_LOOPBACK_MAX_ATTEMPTS, DEFAULT_SETTINGS } from '../src/workflow/schema.js';
+import {
+  DEFAULT_LOOPBACK_MAX_ATTEMPTS,
+  DEFAULT_SETTINGS,
+  settingsSchema,
+  SETTINGS_FIELDS,
+} from '../src/workflow/schema.js';
 
 const VALID = `
 nodes:
@@ -914,5 +919,27 @@ edges:
 
   it('has nothing to enforce when the graph declares no plan node', () => {
     expect(() => loadWorkflowFromString(VALID)).not.toThrow();
+  });
+});
+
+describe('SETTINGS_FIELDS', () => {
+  /**
+   * The generated settings table in the workflow reference is only as
+   * trustworthy as this parity. `settings.notifications` and `settings.subagents`
+   * both shipped and went undocumented for exactly as long as nothing checked.
+   */
+  it('documents every settings key, and no key that is not one', () => {
+    const documented = SETTINGS_FIELDS.map((f) => f.name).sort();
+    const actual = Object.keys(settingsSchema.shape).sort();
+
+    expect(documented).toEqual(actual);
+  });
+
+  it('gives each field a type, a default and a description to render', () => {
+    for (const field of SETTINGS_FIELDS) {
+      expect(field.type).not.toBe('');
+      expect(field.default).not.toBe('');
+      expect(field.description.length).toBeGreaterThan(20);
+    }
   });
 });

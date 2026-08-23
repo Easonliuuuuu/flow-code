@@ -10,6 +10,24 @@ feature branch → pull request → CI passes → merge
 
 Note: this is a convention, not an enforced gate — no branch protection rule is configured, so nothing server-side blocks a direct push to `main` or a merge with a failing check.
 
+## Commit messages
+
+Conventional commits, because two generated things read them:
+
+```
+feat(ops.ts): add a --dry-run flag
+fix(engine): stop a rejected gate from consuming a retry
+docs(security.md): document what a run record contains
+chore(deps): bump vitest
+```
+
+The scope is a bare file or folder name — `ops.ts`, `engine`, `presets.ts` —
+never a path. `npm run status:check` reads every `feat()` scope to find features
+that shipped without a capability spec owning them, and release-please reads the
+types to decide the next version and write the changelog. A message outside this
+format is not rejected by a linter, but it goes uncounted by the first and
+invisible to the second.
+
 ## Development setup
 
 ```bash
@@ -27,6 +45,22 @@ run inside consumers' installs too, where the published package has no source
 to compile. Run `npm run build` yourself before anything that reads `dist/`
 (`npm run docs:check`, the demo scripts, the `testbed` skill). `npm test`,
 `npm run lint`, and `npm run typecheck` all read `src/` and need no build.
+
+## A note on `.flow-code/` in this repo
+
+flow-code writes a `.flow-code/.gitignore` into the repositories it is used on,
+which keeps `workflow.yaml` tracked and everything else — credentials, run
+records, transcripts — out of git. That is the advice the
+[README](README.md) and [docs/security.md](docs/security.md) give, and it is
+what users should follow.
+
+**This repository ignores the whole directory instead**, via the root
+`.gitignore`. Not an oversight and not disagreement with the advice: here
+`.flow-code/` is the tool's own scratch space — multi-megabyte demo captures,
+throwaway runs against fixtures, a workflow.yaml that gets rewritten by whatever
+preset is being tested that afternoon. None of it is project history. A nested
+ignore file would also be the wrong tool for the job, since a deeper
+`.gitignore` overrides a shallower one and the `!workflow.yaml` line would win.
 
 ## Knowing what you're building
 

@@ -79,6 +79,73 @@ export type RunSettings = z.infer<typeof settingsSchema>;
 
 export const DEFAULT_SETTINGS: RunSettings = settingsSchema.parse({});
 
+/**
+ * One row per `settings` key, for the generated table in the workflow
+ * reference. Prose has to live somewhere a schema cannot hold it, but the
+ * *key set* is the thing that drifts: `settings.notifications` shipped with
+ * four CLI flags and three environment variables and was documented nowhere,
+ * while `subagents` existed only in a comment inside a scaffolded YAML file.
+ *
+ * `workflow.test.ts` asserts these names are exactly `settingsSchema`'s, so a
+ * new setting cannot reach a release without a line here explaining it.
+ */
+export interface SettingsFieldDoc {
+  name: keyof RunSettings;
+  type: string;
+  /** Rendered as-is in the Default column. */
+  default: string;
+  description: string;
+}
+
+export const SETTINGS_FIELDS: SettingsFieldDoc[] = [
+  {
+    name: 'concurrency',
+    type: 'integer 1–16',
+    default: '`2`',
+    description:
+      'Most agent sessions that may run at once. Only nodes that fan out ever ' +
+      'actually run in parallel, so this matters most in a wide graph.',
+  },
+  {
+    name: 'model',
+    type: 'string',
+    default: '_unset_',
+    description:
+      "Run-wide default model. A node's own `model` wins over it, and an unset " +
+      "value leaves each session on its provider's default.",
+  },
+  {
+    name: 'budget',
+    type: 'object',
+    default: '_unset_ (unbounded)',
+    description:
+      'Ceilings that stop the run: `tokensPerNode`, `tokensPerRun`, ' +
+      '`minutesPerRun`. See [Budgets](#budgets) — a budget stop is final and ' +
+      'never triggers a loop-back.',
+  },
+  {
+    name: 'subagents',
+    type: 'boolean',
+    default: '`true`',
+    description:
+      "Whether a node's agent may delegate to subagents. A subagent runs under " +
+      "its parent node's capability set and working directory and counts against " +
+      '`concurrency`, so this is a lever for cost and predictability rather than ' +
+      'for safety.',
+  },
+  {
+    name: 'notifications',
+    type: 'boolean or object',
+    default: '`true` for both channels',
+    description:
+      'Terminal bell and OS desktop alerts when a run needs you. ' +
+      '`notifications: false` disables both; `{ bell, desktop }` sets them ' +
+      'separately. See [Notifications](#notifications) for the flags and ' +
+      'environment variables that override this per invocation.',
+  },
+];
+
+
 /** Attempts a loop-back target may take before the run gives up on it. */
 export const DEFAULT_LOOPBACK_MAX_ATTEMPTS = 3;
 
