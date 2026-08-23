@@ -45,11 +45,15 @@ _No OpenSpec change serves this yet._
 
 ## M1 — Ship-ready
 
-`██████████ 29/29` tasks across 2 change(s)
+`██████████ 66/66` tasks across 3 change(s)
 
 ### BR-01 — A stranger succeeds on their first run
 
-_No OpenSpec change serves this yet._
+**Capabilities:** `first-run-demo`
+
+| Change | State | Tasks |
+| --- | --- | --- |
+| `2026-08-23-add-first-run-demo` | archived | ██████████ 37/37 |
 
 ### BR-02 — The project's quality bar enforces itself
 
@@ -107,7 +111,7 @@ Designed, deliberately not scheduled — recorded so it stays distinguishable fr
 
 ## Drift
 
-No unregistered drift. 5 known gap(s) registered in `coverage.yaml`.
+No unregistered drift. 4 known gap(s) registered in `coverage.yaml`.
 
 ### Registered gaps
 
@@ -118,9 +122,8 @@ Known debt, already decided about. Green on purpose — but still debt.
 | GAP-01 | scope `watch` | BR-03 |
 | GAP-06 | scope `nvidia-integration.yml` | closed — non-issue |
 | GAP-12 | scope `testbed` | closed — non-issue |
-| GAP-10 | br `BR-01` | inbox |
 | GAP-11 | br `BR-05` | inbox |
 
 ## Shipped
 
-16 archived change(s), 517 tasks. 18 modules under `src/`, 17 capability specs.
+17 archived change(s), 554 tasks. 19 modules under `src/`, 18 capability specs.
