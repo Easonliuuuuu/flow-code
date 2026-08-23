@@ -2,7 +2,15 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { preflight, PreflightError } from '../src/engine/preflight.js';
-import { captureTree, diffAgainstTree, recordBaseline } from '../src/git/ops.js';
+import {
+  addWorktree,
+  captureTree,
+  diffAgainstTree,
+  headCommit,
+  listWorktreeDirs,
+  recordBaseline,
+  removeWorktree,
+} from '../src/git/ops.js';
 import { makeTempGitRepo, repoGit, workflowFromYaml } from './helpers.js';
 
 const MINIMAL = `
@@ -177,5 +185,74 @@ describe('run baseline', () => {
 
     const diff = await diffAgainstTree(repo, baseline.tree);
     expect(diff).toBe('');
+  });
+});
+
+describe('concurrent worktree mutation', () => {
+  /**
+   * A Worktree-Agent node fans out with `Promise.all` and creates each
+   * instance's worktree before taking a session slot, so `concurrency` does
+   * not bound how many `git worktree add` calls are in flight at once.
+   *
+   * git cannot take that: an add reads every sibling worktree's `commondir`
+   * while rewriting shared `.git/worktrees/` metadata, so a racing pair can
+   * have one read a file the other has not finished writing — reported as
+   * `failed to read .git/worktrees/<sibling>/commondir: Undefined error: 0`.
+   * The window is narrow enough that this passed on ext4 for months and
+   * failed the first time it ran on APFS.
+   */
+  it('creates every worktree when a fan-out adds them all at once', async () => {
+    const repo = makeTempGitRepo();
+    const start = await headCommit(repo);
+    mkdirSync(join(repo, '.flow-code', 'worktrees'), { recursive: true });
+
+    const instances = Array.from({ length: 8 }, (_, i) => `fan-${i}`);
+    await Promise.all(
+      instances.map((id) =>
+        addWorktree(repo, join(repo, '.flow-code', 'worktrees', id), `flow-code/test/${id}`, start),
+      ),
+    );
+
+    const dirs = await listWorktreeDirs(repo);
+    for (const id of instances) {
+      expect(dirs.some((d) => d.endsWith(id))).toBe(true);
+    }
+  });
+
+  it('removes them all when the fan-out tears down at once', async () => {
+    const repo = makeTempGitRepo();
+    const start = await headCommit(repo);
+    mkdirSync(join(repo, '.flow-code', 'worktrees'), { recursive: true });
+
+    const instances = Array.from({ length: 6 }, (_, i) => `tear-${i}`);
+    const dirOf = (id: string) => join(repo, '.flow-code', 'worktrees', id);
+    await Promise.all(
+      instances.map((id) => addWorktree(repo, dirOf(id), `flow-code/test/${id}`, start)),
+    );
+
+    await Promise.all(instances.map((id) => removeWorktree(repo, dirOf(id))));
+
+    const dirs = await listWorktreeDirs(repo);
+    for (const id of instances) {
+      expect(dirs.some((d) => d.endsWith(id))).toBe(false);
+    }
+  });
+
+  it('lets the rest through when one add fails', async () => {
+    const repo = makeTempGitRepo();
+    const start = await headCommit(repo);
+    mkdirSync(join(repo, '.flow-code', 'worktrees'), { recursive: true });
+
+    // Two adds claiming the same branch: the second must fail without
+    // stranding everything queued behind it on the serialization chain.
+    const results = await Promise.allSettled([
+      addWorktree(repo, join(repo, '.flow-code', 'worktrees', 'a'), 'flow-code/test/dup', start),
+      addWorktree(repo, join(repo, '.flow-code', 'worktrees', 'b'), 'flow-code/test/dup', start),
+      addWorktree(repo, join(repo, '.flow-code', 'worktrees', 'c'), 'flow-code/test/c', start),
+    ]);
+
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    const dirs = await listWorktreeDirs(repo);
+    expect(dirs.some((d) => d.endsWith('c'))).toBe(true);
   });
 });
