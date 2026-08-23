@@ -162,17 +162,67 @@ export async function worktreeSupported(dir: string): Promise<boolean> {
   }
 }
 
+/**
+ * In-flight worktree mutations, one chain per repository.
+ *
+ * `git worktree add` is not safe to run concurrently against the same
+ * repository. It rewrites shared metadata under `.git/worktrees/`, and while
+ * doing so it reads *every sibling worktree's* `commondir` file — so two adds
+ * racing can have one of them read a file the other has created but not
+ * finished writing. Git reports that as a bare read failure:
+ *
+ *   fatal: failed to read .git/worktrees/<sibling>/commondir: Undefined error: 0
+ *
+ * ("Undefined error: 0" is errno 0 — a short read, not a real I/O error.)
+ *
+ * A Worktree-Agent node fans out with `Promise.all`, and it creates the
+ * worktree *before* taking a session slot, so `settings.concurrency` does not
+ * bound this — every instance adds at once however low the cap is set. The
+ * window is narrow enough that ext4 almost always wins the race and APFS
+ * frequently does not, which is why this only ever failed on macOS.
+ */
+const worktreeMutations = new Map<string, Promise<unknown>>();
+
+/**
+ * Runs `op` after any worktree mutation already queued for this repository.
+ * Serializing is the whole fix — these calls are a handful per run, they are
+ * bounded by `git worktree add`'s own runtime, and nothing about the fan-out
+ * gets slower in a way anyone can measure: the instances still run their
+ * sessions in parallel, they just stop creating their directories in unison.
+ */
+function serializeWorktreeMutation<T>(repoRoot: string, op: () => Promise<T>): Promise<T> {
+  const prior = worktreeMutations.get(repoRoot) ?? Promise.resolve();
+  // `then(op, op)` rather than `then(op)`: one instance failing to get its
+  // worktree must not strand every instance queued behind it.
+  const next = prior.then(op, op);
+  const settled = next.then(
+    () => {},
+    () => {},
+  );
+  worktreeMutations.set(repoRoot, settled);
+  // Drop the entry once this is the last mutation queued, so a long-lived
+  // process does not accumulate one resolved promise per repository forever.
+  void settled.then(() => {
+    if (worktreeMutations.get(repoRoot) === settled) worktreeMutations.delete(repoRoot);
+  });
+  return next;
+}
+
 export async function addWorktree(
   repoRoot: string,
   dir: string,
   branch: string,
   startPoint: string,
 ): Promise<void> {
-  await git(['worktree', 'add', '-b', branch, dir, startPoint], repoRoot);
+  await serializeWorktreeMutation(repoRoot, () =>
+    git(['worktree', 'add', '-b', branch, dir, startPoint], repoRoot),
+  );
 }
 
 export async function removeWorktree(repoRoot: string, dir: string): Promise<void> {
-  await git(['worktree', 'remove', '--force', dir], repoRoot);
+  await serializeWorktreeMutation(repoRoot, () =>
+    git(['worktree', 'remove', '--force', dir], repoRoot),
+  );
 }
 
 export async function listWorktreeDirs(repoRoot: string): Promise<string[]> {
