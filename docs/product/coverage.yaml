@@ -51,6 +51,7 @@ scopes:
   cli.ts: [workflow-graph, agent-execution]   # historical; prefer `cli`
   init: [workflow-graph]
   presets: [workflow-graph]
+  presets.ts: [workflow-graph]   # a preset is a scaffolded graph and nothing more
   validate: [workflow-graph]
   record: [run-state, workflow-graph]
   runstate: [run-state]
