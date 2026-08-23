@@ -219,6 +219,78 @@ describe('the planned preset scaffolds a valid workflow', () => {
   });
 });
 
+describe('the frugal preset scaffolds a valid workflow', () => {
+  const preset = getPreset('frugal')!;
+
+  it('loads and validates like any hand-written workflow, with no skill fixtures needed', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.order).toEqual([
+      'discuss',
+      'spec',
+      'spec-gate',
+      'implement',
+      'test',
+      'validate',
+      'gate',
+      'git-ops',
+      'revise',
+    ]);
+  });
+
+  it('is the default graph minus its second opinion — no Review node', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.nodes.some((n) => n.type.id === 'review')).toBe(false);
+    // Validate's verdict is the last automated word before a human's.
+    expect(wf.graph.directDependencies('gate')).toEqual(['validate']);
+  });
+
+  it('turns delegation off, since a subagent is where a session\'s cost runs away', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.settings.subagents).toBe(false);
+    expect(wf.settings.concurrency).toBe(1);
+  });
+
+  it('bounds the run in every dimension a budget has', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.settings.budget).toEqual({
+      tokensPerNode: 250000,
+      tokensPerRun: 600000,
+      minutesPerRun: 30,
+    });
+  });
+
+  it('spends one fewer retry than the default on every path back to implement', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    const loopbacks = wf.graph.allLoopbacks().filter((l) => l.to === 'implement');
+    expect(loopbacks.length).toBe(3);
+    for (const loopback of loopbacks) {
+      expect(loopback.maxAttempts).toBe(2);
+    }
+  });
+
+  it('keeps both gates — frugal is about fewer sessions, not less of a say', () => {
+    const wf = loadWorkflowFromString(preset.yaml);
+
+    expect(wf.nodes.filter((n) => n.type.id === 'approval-gate').map((n) => n.id)).toEqual([
+      'spec-gate',
+      'gate',
+    ]);
+    expect(wf.graph.directDependencies('git-ops')).toEqual(['gate']);
+    expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
+  });
+
+  it('names no model, so it cannot scaffold one the configured provider will not serve', () => {
+    for (const node of loadWorkflowFromString(preset.yaml).nodes) {
+      expect((node.config as { model?: unknown }).model).toBeUndefined();
+    }
+  });
+});
+
 describe('every preset', () => {
   it('leaves every test node to work its own commands out and confirm them', () => {
     for (const preset of listPresets()) {
