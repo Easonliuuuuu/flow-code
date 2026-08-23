@@ -13,7 +13,9 @@ import {
   findLatestInterruptedRun,
 } from '../runstate/persist.js';
 import { RunStateStore } from '../runstate/store.js';
-import { isRejectedGate, type RunState } from '../runstate/types.js';
+import { isRejectedGate, type RunBaseline, type RunState } from '../runstate/types.js';
+import type { ModelContext } from '../ui/App.js';
+import type { SessionRunner } from '../engine/types.js';
 import { runUi, UiInteractionPorts } from '../ui/index.js';
 import { declaredGraphs, WORKFLOW_RELATIVE_PATH, type Workflow } from '../workflow/load.js';
 import {
@@ -204,6 +206,104 @@ export async function driveEngine(
   }
 }
 
+/**
+ * Aborts a run cleanly on ctrl+c or a real SIGINT/SIGTERM (piped stdin,
+ * `kill`, a second ctrl+c once the terminal has left raw mode). The first
+ * call gives in-flight nodes a chance to unwind; a second forces an
+ * immediate exit in case something is stuck. Standalone from `runEngineUi`
+ * because the caller has to register it on `process` and construct its
+ * `InteractionPorts` from the same `AbortController` before the engine can
+ * be built — `runEngineUi` only ever receives the signal, never creates one.
+ */
+export function makeInterruptTrigger(abortController: AbortController): () => void {
+  let interruptCount = 0;
+  return (): void => {
+    interruptCount += 1;
+    if (interruptCount > 1) {
+      console.error('\nflow-code: forcing exit.');
+      process.exit(130);
+    }
+    console.error('\nflow-code: interrupting — finishing cleanly (press ctrl+c again to force quit)…');
+    abortController.abort();
+    // Safety net: if some code path fails to respect the signal and hangs,
+    // don't leave the terminal stuck. unref so it never delays a clean exit.
+    setTimeout(() => {
+      console.error('flow-code: cleanup took too long — forcing exit.');
+      process.exit(130);
+    }, 10_000).unref();
+  };
+}
+
+/**
+ * The middle of a run: build engines as needed (across Plan-node
+ * expansions), drive them, mount the UI over the whole sequence, and release
+ * any worktrees a converged run leaves behind. Shared by `cmdRun` and
+ * `flow-code try` so the demo drives the identical engine/UI path a real run
+ * takes — only what constructs `sessions` and `ports` differs between them,
+ * and both are supplied by the caller rather than built here.
+ */
+export async function runEngineUi(opts: {
+  workflow: Workflow;
+  store: RunStateStore;
+  repoRoot: string;
+  baseline: RunBaseline;
+  ports: UiInteractionPorts;
+  sessions: SessionRunner;
+  signal: AbortSignal;
+  onInterrupt: () => void;
+  splash: boolean;
+  modelContext: ModelContext;
+  /** Threaded straight to `runUi` — see `AppProps.demo`. */
+  demo?: boolean;
+}): Promise<Workflow> {
+  const newEngine = (wf: Workflow): Engine =>
+    new Engine({
+      workflow: wf,
+      store: opts.store,
+      repoRoot: opts.repoRoot,
+      baseline: opts.baseline,
+      ports: opts.ports,
+      sessions: opts.sessions,
+      executors: builtinExecutors,
+      signal: opts.signal,
+    });
+  const engine = newEngine(opts.workflow);
+
+  // `runUi` stays mounted once for the whole sequence — possibly several
+  // Engine instances, see `driveEngine` — with `WorkflowHost` picking up
+  // each expansion reactively via `store.subscribe`, the same path an
+  // ordinary mid-run node edit already uses.
+  const enginePromise = driveEngine(engine, opts.workflow, { store: opts.store, repoRoot: opts.repoRoot, newEngine }).then(
+    async (finalWorkflow) => {
+      // The run reached a terminal state: retained (converged) worktrees can
+      // go now; their branches keep the work reachable.
+      for (const wt of opts.store.snapshot().worktrees) {
+        if (!wt.removed && existsSync(wt.dir)) {
+          try {
+            await removeWorktree(opts.repoRoot, wt.dir);
+            opts.store.updateWorktree(wt.dir, { removed: true });
+          } catch {
+            // leave it for doctor
+          }
+        }
+      }
+      return finalWorkflow;
+    },
+  );
+
+  await runUi({
+    workflow: opts.workflow,
+    store: opts.store,
+    ports: opts.ports,
+    repoRoot: opts.repoRoot,
+    onInterrupt: opts.onInterrupt,
+    splash: opts.splash,
+    modelContext: opts.modelContext,
+    ...(opts.demo !== undefined ? { demo: opts.demo } : {}),
+  });
+  return enginePromise;
+}
+
 /** Node count by final status, e.g. `2 done, 1 error` — shared by the closing summary and `flow-code runs`. */
 export function tallyNodeStatuses(nodes: RunState['nodes']): string {
   const counts = Object.values(nodes).reduce<Record<string, number>>(
@@ -342,71 +442,18 @@ export async function cmdRun(args: string[]): Promise<void> {
   const abortController = new AbortController();
   const ports = new UiInteractionPorts(abortController.signal, notifier);
   const sessions = resolved ? buildRunner(resolved.provider) : new SdkSessionRunner();
-  const newEngine = (wf: Workflow): Engine =>
-    new Engine({
-      workflow: wf,
-      store,
-      repoRoot,
-      baseline,
-      ports,
-      sessions,
-      executors: builtinExecutors,
-      signal: abortController.signal,
-    });
-  const engine = newEngine(workflow);
-
-  // ctrl+c (via the UI) or a real SIGINT/SIGTERM (piped stdin, `kill`, a
-  // second ctrl+c once the terminal has left raw mode) both land here.
-  // First call aborts the run and gives in-flight nodes a chance to unwind
-  // cleanly; a second forces an immediate exit in case something is stuck.
-  let interruptCount = 0;
-  const triggerInterrupt = (): void => {
-    interruptCount += 1;
-    if (interruptCount > 1) {
-      console.error('\nflow-code: forcing exit.');
-      process.exit(130);
-    }
-    console.error(
-      '\nflow-code: interrupting — finishing cleanly (press ctrl+c again to force quit)…',
-    );
-    abortController.abort();
-    // Safety net: if some code path fails to respect the signal and hangs,
-    // don't leave the terminal stuck. unref so it never delays a clean exit.
-    setTimeout(() => {
-      console.error('flow-code: cleanup took too long — forcing exit.');
-      process.exit(130);
-    }, 10_000).unref();
-  };
+  const triggerInterrupt = makeInterruptTrigger(abortController);
   process.on('SIGINT', triggerInterrupt);
   process.on('SIGTERM', triggerInterrupt);
 
-  // `runUi` stays mounted once for the whole sequence — possibly several
-  // Engine instances, see `driveEngine` — with `WorkflowHost` picking up
-  // each expansion reactively via `store.subscribe`, the same path an
-  // ordinary mid-run node edit already uses.
-  const enginePromise = driveEngine(engine, workflow, { store, repoRoot, newEngine }).then(
-    async (finalWorkflow) => {
-      // The run reached a terminal state: retained (converged) worktrees can
-      // go now; their branches keep the work reachable.
-      for (const wt of store.snapshot().worktrees) {
-        if (!wt.removed && existsSync(wt.dir)) {
-          try {
-            await removeWorktree(repoRoot, wt.dir);
-            store.updateWorktree(wt.dir, { removed: true });
-          } catch {
-            // leave it for doctor
-          }
-        }
-      }
-      return finalWorkflow;
-    },
-  );
-
-  await runUi({
+  const finalWorkflow = await runEngineUi({
     workflow,
     store,
-    ports,
     repoRoot,
+    baseline,
+    ports,
+    sessions,
+    signal: abortController.signal,
     onInterrupt: triggerInterrupt,
     splash,
     modelContext: {
@@ -415,7 +462,6 @@ export async function cmdRun(args: string[]): Promise<void> {
       workflowSettingsModel,
     },
   });
-  const finalWorkflow = await enginePromise;
   process.off('SIGINT', triggerInterrupt);
   process.off('SIGTERM', triggerInterrupt);
 

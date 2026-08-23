@@ -67,7 +67,15 @@ The package is scoped; the command it installs is plain `flow-code`.
 
 ## Quickstart
 
-Run these in any git repository:
+See it run first, no setup required:
+
+```bash
+npx @easonliuuuuu/flow-code try
+```
+
+Seeds a throwaway repo with a failing test and runs the real default graph against it — every agent session is scripted (no live provider, no tokens spent, no credentials needed), but the engine, the loop-back, and both approval gates are the real ones. Pauses for your approval twice, same as a live run, and finishes by printing where the repo landed so you can look around.
+
+Then, in a repository of your own:
 
 ```bash
 flow-code init   # scaffold the workflow, pick a provider and model

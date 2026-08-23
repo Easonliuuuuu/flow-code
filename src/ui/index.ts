@@ -21,6 +21,8 @@ interface WorkflowHostProps {
   modelContext: ModelContext;
   watch: boolean;
   repoRoot: string;
+  /** See `AppProps.demo`. */
+  demo?: boolean;
 }
 
 /**
@@ -63,6 +65,7 @@ export function WorkflowHost({
   modelContext,
   watch,
   repoRoot,
+  demo,
 }: WorkflowHostProps): React.ReactElement {
   const [workflow, setWorkflow] = useState<Workflow>(initialWorkflow);
   const [graphIssue, setGraphIssue] = useState<string | null>(null);
@@ -119,6 +122,7 @@ export function WorkflowHost({
     graphIssue,
     onExit,
     onInterrupt,
+    ...(demo !== undefined ? { demo } : {}),
   });
 }
 
@@ -134,6 +138,8 @@ export function runUi(opts: {
   watch?: boolean;
   /** Skip the startup splash entirely, even in a TTY (`--no-splash`). Defaults to playing it. */
   splash?: boolean;
+  /** See `AppProps.demo`. */
+  demo?: boolean;
 }): Promise<void> {
   return new Promise((resolve) => {
     // Ink's raw-mode-enabled stdin is what normally keeps the process alive
@@ -160,6 +166,7 @@ export function runUi(opts: {
           ports: opts.ports,
           modelContext: opts.modelContext,
           watch: opts.watch ?? false,
+          ...(opts.demo !== undefined ? { demo: opts.demo } : {}),
           repoRoot: opts.repoRoot,
           onExit: () => {
             instance.unmount();
