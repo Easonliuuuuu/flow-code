@@ -24,6 +24,10 @@ import { fail } from './cli/context.js';
 const HELP = `flow-code — terminal node-graph interface for agentic coding workflows
 
 Usage:
+  flow-code try               Run the real default graph against a seeded temporary repository —
+                              no repository, configuration, or credential needed. Every agent
+                              session is scripted; the engine, gates, and UI are the real ones.
+                              Pauses for a real approval at both gates, same as \`flow-code run\`
   flow-code init [--preset <name>]
                               Scaffold .flow-code/workflow.yaml with the default graph, set up
                               its test command(s), and pick the provider/model for the project
@@ -91,6 +95,8 @@ export function packageVersion(): string {
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
+    case 'try':
+      return (await import('./cli/try.js')).cmdTry();
     case 'init':
       return (await import('./cli/init.js')).cmdInit(args);
     case 'run':

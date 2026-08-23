@@ -91,6 +91,13 @@ const HEADER_ROWS = 1;
 const FOOTER_ROWS = 1;
 
 /**
+ * `flow-code try`'s header disclosure — present for the whole run, never
+ * dismissible. Not folded into `tierDisclosure`: that reports what an engine
+ * *guaranteed* about a real run; this says the run itself isn't one.
+ */
+export const DEMO_BANNER_TEXT = 'flow-code try — scripted demo: no live agent is running, no tokens are spent';
+
+/**
  * Longest a panel's key hint may be. An 80-column terminal is the floor we
  * draw for; a docked panel spans it minus its border, padding and the resize
  * grip sharing the row.
@@ -132,6 +139,13 @@ export interface AppProps {
    * `workflow.yaml` — see {@link WATCH_READ_ONLY_MESSAGE}.
    */
   watch?: boolean;
+  /**
+   * `flow-code try`: the run is real, but every agent session is scripted —
+   * seeded repository, canned text, no live provider. Turns on the header
+   * disclosure row for the whole run; see `DEMO_BANNER_TEXT` below. Never
+   * set outside the demo command.
+   */
+  demo?: boolean;
   /**
    * Set by `WorkflowHost` (`src/ui/index.ts`) when it could not derive a
    * workflow to show from the run it just attached to — a run document
@@ -304,6 +318,7 @@ export function App({
   onInterrupt,
   modelContext,
   watch = false,
+  demo = false,
   graphIssue = null,
 }: AppProps): React.ReactElement {
   const { exit } = useApp();
@@ -550,7 +565,7 @@ export function App({
   // untouched for them.
   const tier = effectiveTier(runState.enforcement);
   const tierLine = tierDisclosure(tier);
-  const headerRows = HEADER_ROWS + (tierLine ? 1 : 0);
+  const headerRows = HEADER_ROWS + (tierLine ? 1 : 0) + (demo ? 1 : 0);
   const docked = dockedLayout(
     { columns, rows },
     headerRows,
@@ -2089,6 +2104,11 @@ export function App({
       {tierLine ? (
         <Text color="yellow" wrap="truncate-end">
           {tierLine}
+        </Text>
+      ) : null}
+      {demo ? (
+        <Text color="cyan" bold wrap="truncate-end">
+          {DEMO_BANNER_TEXT}
         </Text>
       ) : null}
       <Box flexDirection="column" height={canvasHeight}>
