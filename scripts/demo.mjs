@@ -350,6 +350,11 @@ async function play() {
   await runUi({
     workflow,
     store,
+    // Required since a recorded graph is re-derived on every shape change
+    // (`WorkflowHost`): rehydrating one resolves skill roots, and those are
+    // rooted here. A replay runs outside the repo it recorded, so this is the
+    // directory it plays in, matching the `repoRoot` `hydrate` puts on state.
+    repoRoot: process.cwd(),
     ports: new UiInteractionPorts(),
     // Nothing to interrupt: ctrl+c (and `q`) just end the replay.
     onInterrupt: () => {},
