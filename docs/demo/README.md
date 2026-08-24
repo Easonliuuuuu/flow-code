@@ -1,6 +1,21 @@
 # The README demo
 
-`docs/demo/flow-code.gif` is a **replay of a recorded run**, not a live one.
+There are two demos here, and they are made the same way.
+
+| | Shows | Tape | Recording |
+| --- | --- | --- | --- |
+| **Companion** — the README hero, `flow-code.gif` | An agent session flow-code did not start, with the graph filling in beside it | `companion.tape` | `companion.cast` + `companion-run.jsonl` |
+| **Engine** — `engine.gif`, not committed | flow-code driving the graph itself, including a loop-back firing | `flow-code.tape` | `run.jsonl.gz` |
+
+`npm run demo:record` cuts the first; `npm run demo:record:engine` cuts the
+second. The engine demo is kept because it is the only recording of a failing
+Test node routing back to Implement, which is the thing a chat log cannot show.
+
+Everything below describes the engine demo, whose pipeline came first and which
+the companion demo is built on top of. [Part 3](#part-3--the-companion-demo)
+covers what the second pane adds.
+
+`docs/demo/engine.gif` is a **replay of a recorded run**, not a live one.
 
 A real run takes minutes, spends tokens, and never repeats itself, so recording
 one directly gives you a demo you can never reproduce — and a demo nobody can
@@ -31,7 +46,7 @@ If `run.jsonl` is already what you want and only the GIF needs remaking:
 npm run build
 npm run demo:play -- --speed 16 --max-gap 600   # look at it yourself first
 npm run demo:duration -- --speed 16 --max-gap 600 --hold 6000
-npm run demo:record                             # writes docs/demo/flow-code.gif
+npm run demo:record:engine                      # writes docs/demo/engine.gif
 ```
 
 The committed recording is `run.jsonl.gz`. Full run-state documents repeated
@@ -45,7 +60,7 @@ pack it by hand before committing:
 gzip -9 -c .flow-code/demo-run.jsonl > docs/demo/run.jsonl.gz
 ```
 
-`demo:record` needs [VHS](https://github.com/charmbracelet/vhs) on `PATH`
+Both `demo:record` targets need [VHS](https://github.com/charmbracelet/vhs) on `PATH`
 (`brew install vhs`, or `go install github.com/charmbracelet/vhs@latest` plus
 `ttyd` and `ffmpeg`). `vhs themes` lists the theme names the tape can set.
 
@@ -172,3 +187,88 @@ where the interesting moments land.
 | Replay races past | Lower `--speed`; it divides real gaps, so 1 is real time. |
 | Replay drags | Lower `--max-gap`. Long stalls are agents thinking, and they clamp well. |
 | GIF too large | Fewer frames: drop `Set Framerate`, shorten `Sleep`, raise `--speed`. |
+
+---
+
+## Part 3 — The companion demo
+
+The hero GIF shows a session flow-code did not start. That needs a second
+recording: run-state describes what the graph did, and says nothing about what
+the agent's own terminal looked like while it did it.
+
+So one session is captured twice, at the same time.
+
+```bash
+# window 1 — the agent, recorded as terminal output
+cd /path/to/a/testbed && asciinema rec --window-size 100x26 -c claude session.cast
+
+# window 2 — the same run, recorded as state (reads the run file, never writes)
+npm run demo:capture -- --repo /path/to/a/testbed --out session.jsonl
+```
+
+Nothing new is needed to capture the graph half: `src/guest/report.ts` writes to
+the same `runFilePath` the engine does, so `demo:capture` sees a reported run
+exactly as it sees a driven one. Use `.claude/skills/testbed/make-testbed.sh
+--mode guest` for a repo to record in.
+
+Two things ruin a take, and neither is visible until you replay it:
+
+- **Delegation.** If the session dispatches the work to a subagent, its own
+  pane shows a spinner and nothing else — the whole left half comes out empty.
+  Leave auto mode off, and tell the agent to walk the steps itself. The node
+  briefs ask for a fresh subagent per step, so this has to be said explicitly.
+- **Stopping the capture early.** Let it run until the last node resolves. A
+  capture that stops sooner leaves the two halves covering different spans, and
+  they cannot be re-aligned afterwards.
+
+### Putting the two halves together
+
+```bash
+node docs/demo/warp.mjs \
+  --cast session.cast --run session.jsonl \
+  --cast-out docs/demo/companion.cast --run-out docs/demo/companion-run.jsonl \
+  --start 92 --end 435 --max-gap 3 --speed 7
+```
+
+`--start`/`--end` are seconds into the cast: the window worth showing. Read them
+off the cast — the run's `createdAt` against the cast header's `timestamp` gives
+you where the run opens, and there is usually a minute of typing before it.
+
+The rest of what `warp.mjs` does is what makes the panes stay together:
+
+- **One clock for both.** `demo.mjs --max-gap` and `asciinema -i` each clamp
+  their own stream, which is correct alone and wrong in a pair: two streams
+  clamped separately no longer describe the same time, and drift apart by
+  whatever idle one had that the other did not. The warp is computed once over
+  the union of both streams' event times and applied to both. Only intervals
+  where *neither* stream did anything are shortened. On the committed recording
+  that turns 343s of wall clock into 120s of activity, most of it the four
+  minutes the gate spent waiting to be approved.
+- **A paced head.** Events before the window are kept, so the pane opens on the
+  scrollback the session had drawn — Claude Code renders its conversation as
+  history, so clearing instead opens an empty pane that never fills. They are
+  spread over ~2s rather than dumped at once.
+
+It prints the `SPEED` and `DELAY` the tape and `companion.sh` need. They must
+agree with each other, or the panes drift.
+
+### Then cut it
+
+```bash
+./docs/demo/companion.sh    # watch the composition (SPEED=3 to study it)
+npm run demo:record         # writes docs/demo/flow-code.gif and companion.webm
+```
+
+`companion.sh` documents the four constraints that took a render each to find —
+pinned session size, the exact 100-column agent pane, no per-stream clamping,
+and `restamp.mjs` moving the recording's clock to now so a running node reports
+`0s` rather than `12h39m`.
+
+### What the two recordings contain
+
+`companion.cast` is a **verbatim terminal recording**: the prompt, the agent's
+output, every tool call, and whatever was on screen. `companion-run.jsonl`
+carries the run's activity log and each node's recorded output. Both are
+committed, and both are permanent in git history. Record the take in a testbed,
+never in a repo whose contents you would not publish — `demo:capture --redact`
+covers the state half only, and there is no equivalent for the cast.

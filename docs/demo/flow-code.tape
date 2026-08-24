@@ -1,6 +1,12 @@
-# The README demo. Regenerate with `npm run demo:record` (needs VHS:
-# https://github.com/charmbracelet/vhs), which replays docs/demo/run.jsonl.gz
-# through the real UI and records the result.
+# The engine demo: flow-code driving the graph itself. Regenerate with
+# `npm run demo:record:engine` (needs VHS: https://github.com/charmbracelet/vhs),
+# which replays docs/demo/run.jsonl.gz through the real UI and records the
+# result.
+#
+# No longer the README hero — that is companion.tape, which shows the graph
+# filling in beside an agent flow-code did not start. This one is kept because
+# it is the only recording of a loop-back firing, which is the thing a chat log
+# cannot show.
 #
 # Everything up to `Show` is setup that never reaches the GIF, so the recording
 # opens on the graph itself rather than on a shell prompt.
@@ -16,7 +22,7 @@
 # reports how long the replay runs. `Sleep` before `o` should land a little
 # after the frames end, and --hold must outlast the final Sleep.
 
-Output docs/demo/flow-code.gif
+Output docs/demo/engine.gif
 
 Require node
 

@@ -6,3 +6,10 @@ docs/architecture-notes.md
 coverage/
 .env
 .env.local
+
+# Demo artifacts that are regenerated rather than committed: the engine GIF
+# (`demo:record:engine`), the companion video, and restamp's scratch copy of
+# the recording. Only `docs/demo/flow-code.gif` is served, so only it is kept.
+docs/demo/engine.gif
+docs/demo/companion.webm
+docs/demo/.companion-run.play.jsonl
