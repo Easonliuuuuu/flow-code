@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.5.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.4.0...flow-code-v0.5.0) (2026-08-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **approval-gate:** a scaffolded workflow (`flow-code init`, default or the openspec/spec-kit presets) no longer runs unattended end-to-end — there is now a blocking approval gate before Implement, in addition to the one before Git-ops. Existing checked-in workflow.yaml files are unaffected; this only changes what `init` writes from now on.
+
+### Features
+
+* **approval-gate:** gate the spec before implementation begins ([c21c98a](https://github.com/Easonliuuuuu/flow-code/commit/c21c98a9907cc83882c3e172df99920861890624))
+* **cli:** add --version, and stop shipping a build hook that runs on install ([10c4322](https://github.com/Easonliuuuuu/flow-code/commit/10c432245c0c5f063ea408197a3130fe0809013d))
+* **demo:** add flow-code try — a zero-credential first-run demo ([5430622](https://github.com/Easonliuuuuu/flow-code/commit/54306226dd9dfc3f28b2b8025fb7096094fb183d))
+* generate the CLI and settings tables from source, and rewrite the docs ([c7ca218](https://github.com/Easonliuuuuu/flow-code/commit/c7ca21893f1146d6aee207ece83534b6b1c19d99))
+* **init:** reuse credentials already on the machine instead of asking ([cc49c9f](https://github.com/Easonliuuuuu/flow-code/commit/cc49c9fc0395a7dc7ed4eb1c2674f2fb3aa43d6e))
+* **notify:** add cross-platform desktop notifications and terminal bell ([0644aa1](https://github.com/Easonliuuuuu/flow-code/commit/0644aa162f795340b49324a2757b2a5530463b71))
+* **preflight:** ask what to do about a dirty tree instead of refusing ([06769a9](https://github.com/Easonliuuuuu/flow-code/commit/06769a9cb198962d488ead436ed15114d4cc06d1))
+* **presets.ts:** add a frugal preset that trades sessions, not gates ([aef43f0](https://github.com/Easonliuuuuu/flow-code/commit/aef43f0a33fbb4160623795ecadd4ca22ac99860))
+* **workflow:** decide test commands and route rejections by default ([e921a56](https://github.com/Easonliuuuuu/flow-code/commit/e921a56b68d1391c73710d8fe3d406df0691737d))
+
+
+### Bug Fixes
+
+* **app.testCommands.test.ts:** wait for the seeded checkbox, not a fixed delay ([323f8b8](https://github.com/Easonliuuuuu/flow-code/commit/323f8b8f6fb594491f23e99b97ae2301e8e302c3))
+* **demo.mjs:** pass repoRoot so a replay can rehydrate its graph ([34830ff](https://github.com/Easonliuuuuu/flow-code/commit/34830ff161f8472d859752bf8b9ce84c9fe6376b))
+* **demo.mjs:** scrub the owner block out of a recording ([b2ea77b](https://github.com/Easonliuuuuu/flow-code/commit/b2ea77b1102d8a3e160978ae846a18003f09b64c))
+* **gitignore.ts:** keep run transcripts and credentials out of a user's git ([ee5b3d4](https://github.com/Easonliuuuuu/flow-code/commit/ee5b3d446d0e99950e5b1775c6c0fea203d679dc))
+* **ops.ts:** serialize worktree add and remove per repository ([22c946e](https://github.com/Easonliuuuuu/flow-code/commit/22c946e82df026ae71fce17a63b2bb65e406bf3f))
+* **splash:** center the intro on the screen it owns ([5ab4e15](https://github.com/Easonliuuuuu/flow-code/commit/5ab4e15cda3fc9c64592426aef7a856deb92924a))
+* **ui:** keep the key hints inside the panel frame ([cb4b33f](https://github.com/Easonliuuuuu/flow-code/commit/cb4b33f49b0be6999f260b180b8ac18bda67fb00))
+* **ui:** stop loop-backs and skip-layer edges from breaking band-wrap and edge drawing ([4145eb5](https://github.com/Easonliuuuuu/flow-code/commit/4145eb58dd4ca34fa1d63f2eb9d17304beddf0c7))
+* **watch:** resolve the newest run past anything that is not one ([604d3ae](https://github.com/Easonliuuuuu/flow-code/commit/604d3ae63e75ca82bc470aaf14fc865d198ccf5e))
+
 ## [0.4.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.3.0...flow-code-v0.4.0) (2026-08-20)
 
 
