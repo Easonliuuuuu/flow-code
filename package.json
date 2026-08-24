@@ -55,7 +55,8 @@
     "demo:capture": "node scripts/demo.mjs capture",
     "demo:play": "node scripts/demo.mjs play",
     "demo:duration": "node scripts/demo.mjs duration",
-    "demo:record": "vhs docs/demo/flow-code.tape",
+    "demo:record": "vhs docs/demo/companion.tape",
+    "demo:record:engine": "vhs docs/demo/flow-code.tape",
     "status": "node scripts/status.mjs",
     "status:check": "node scripts/status.mjs --check"
   },

@@ -17,8 +17,13 @@ output. Steps that fail route back upstream and try again, and nothing reaches
 git without your explicit approval.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Easonliuuuuu/flow-code/main/docs/demo/flow-code.gif" width="900" alt="A flow-code run: eight nodes laid out as a graph, each card showing its status, model and token spend as the run moves through them, with a failing Test node routing back to Implement.">
+  <img src="https://raw.githubusercontent.com/Easonliuuuuu/flow-code/main/docs/demo/flow-code.gif" width="900" alt="Two terminal panes side by side. On the left a Claude Code session works through a task; on the right the same work draws as a five-node graph, each card taking its status from what the session reports, until the approval gate's prompt appears in the session and the gate card waits for it.">
 </p>
+
+The session on the left is one flow-code did not start. `flow-code connect`
+installs the reporting surface into the agent you already use, and the graph
+fills in beside it — no second agent, no extra tokens. Run the graph with
+`flow-code run` instead and the same picture comes with enforcement behind it.
 
 - **The verdict is an exit code, never an opinion.** The Test node runs your
   commands; a failure routes back to Implement and tries again, up to a bound
