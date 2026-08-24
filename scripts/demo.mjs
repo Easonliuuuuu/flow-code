@@ -137,6 +137,14 @@ function newestRunFile(runsDir) {
  */
 function scrub(state, redact) {
   const scrubbed = { ...state, repoRoot: '', pid: 0 };
+  // The owner block identifies the machine that drove the run the same way
+  // `repoRoot` and `pid` identify where it ran: `host` is the recorder's
+  // hostname, and `token` is a write-ownership nonce that a secret scanner
+  // reads — correctly, on the evidence available to it — as a high-entropy
+  // credential. Neither means anything to a replay: ownership is only ever
+  // consulted against the machine holding the file, and `pid: 0` already
+  // makes `driverLiveness` report `unknown`.
+  if (state.owner) scrubbed.owner = { ...state.owner, pid: 0, host: '', token: '' };
   if (!redact) return scrubbed;
   scrubbed.nodes = Object.fromEntries(
     Object.entries(state.nodes).map(([id, node]) => {
