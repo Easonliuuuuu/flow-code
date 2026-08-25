@@ -11,7 +11,7 @@ import { emptyWorkflow, loadWorkflowFromString } from '../src/workflow/load.js';
 import { recordGraph } from '../src/workflow/record.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openGuestRun, reportTransition } from '../src/guest/report.js';
+import { acceptPlan, openGuestRun, proposePlan, reportTransition } from '../src/guest/report.js';
 import { latestRunState } from '../src/runstate/watch.js';
 import { makeTempGitRepo } from './helpers.js';
 
@@ -266,14 +266,11 @@ edges:
     expect(lastFrame(stdout)).toContain('plan');
     expect(lastFrame(stdout)).not.toContain('impl');
 
-    reportTransition(repo, runId, {
-      nodeId: 'plan',
-      kind: 'done',
-      output: {
-        nodes: [{ id: 'impl', type: 'implement', config: { instructions: 'build it' } }],
-        edges: [],
-      },
+    proposePlan(repo, runId, 'plan', {
+      nodes: [{ id: 'impl', type: 'implement', config: { instructions: 'build it' } }],
+      edges: [],
     });
+    acceptPlan(repo, runId, 'plan');
     store.applySnapshot(latestRunState(repo)!);
     await settle();
 

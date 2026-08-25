@@ -18,10 +18,13 @@ import {
   closeGuestRun,
   currentGuestRun,
   GuestReportError,
+  acceptPlan,
   openGuestRun,
   reportTransition,
+  proposePlan,
 } from '../guest/report.js';
 import type { ReportedTransition } from '../guest/validate.js';
+import type { PlanProposal } from '../workflow/splice.js';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { fail, repoRootFromCwd } from './context.js';
@@ -39,6 +42,10 @@ Usage:
                               Report node <id> complete. Output is checked against the node
                               type's shape (\`flow-code node-types\` prints it); with neither
                               flag, JSON is read from stdin
+  flow-code node propose-plan <id> [--output <json>|--output-file <path>] [--run <runId>]
+                              Validate and save a Plan graph without adopting it
+  flow-code node accept-plan <id> [--run <runId>]
+                              Adopt the pending Plan graph after the user accepts it; requires a terminal
   flow-code node fail <id> <reason…> [--run <runId>]
                               Report node <id> failed, with the reason as its status detail
   flow-code node approve <id> | reject <id> [--run <runId>]
@@ -166,6 +173,10 @@ export async function cmdNode(args: string[]): Promise<void> {
       case 'done':
       case 'fail':
         return cmdTransition(repoRoot, sub, rest);
+      case 'propose-plan':
+        return cmdProposePlan(repoRoot, rest);
+      case 'accept-plan':
+        return cmdAcceptPlan(repoRoot, rest);
       case 'approve':
       case 'reject':
         return cmdGate(repoRoot, sub === 'approve' ? 'approved' : 'rejected', rest);
@@ -181,6 +192,32 @@ export async function cmdNode(args: string[]): Promise<void> {
     if (err instanceof GuestReportError) fail(err.message);
     throw err;
   }
+}
+
+function cmdProposePlan(repoRoot: string, args: string[]): void {
+  const [nodeId] = positionals(args, VALUE_FLAGS);
+  if (nodeId === undefined) fail('`flow-code node propose-plan` needs a Plan node id.');
+  const run = resolveRun(repoRoot, args);
+  const saved = proposePlan(repoRoot, run.runId, nodeId, readOutput(args) as PlanProposal);
+  console.log(
+    `flow-code: proposal saved for ${saved.nodeId}: ${saved.proposal.nodes.map((node) => node.id).join(' → ')}\n` +
+      '  the graph has not changed — ask the user, revise if needed, then run `flow-code node accept-plan`.',
+  );
+}
+
+function cmdAcceptPlan(repoRoot: string, args: string[]): void {
+  const [nodeId] = positionals(args, VALUE_FLAGS);
+  if (nodeId === undefined) fail('`flow-code node accept-plan` needs a Plan node id.');
+  if (!process.stdin.isTTY) {
+    fail(
+      'a Plan graph is accepted by the user at a terminal — this is not one. ' +
+        'Ask the user to run `flow-code node accept-plan` in an interactive shell.',
+    );
+  }
+  const run = resolveRun(repoRoot, args);
+  const { accepted, order } = acceptPlan(repoRoot, run.runId, nodeId);
+  console.log(`flow-code: ${accepted.nodeId} → ${accepted.status}`);
+  if (order !== undefined) console.log(`  the run now holds: ${order.join(' → ')}`);
 }
 
 async function cmdOpen(repoRoot: string, args: string[]): Promise<void> {

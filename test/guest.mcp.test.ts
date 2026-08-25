@@ -77,11 +77,28 @@ describe('completing a Plan node over MCP', () => {
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
 
-    const done = await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+    const draft = await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
+    expect(draft.text).toContain('graph has not changed');
+    expect(latestRunState(repo)!.graph!.nodes.some((node) => node.id === 'impl')).toBe(false);
+
+    const done = await call(client, 'accept_plan', { node: 'plan' });
 
     expect(done.refused).toBe(false);
     expect(done.text).toContain('plan → done');
     expect(done.text).toContain('plan → impl → gate → ship');
+  });
+
+  it('does not let the generic completion tool bypass Plan acceptance', async () => {
+    const repo = plannedRepo();
+    const client = await connect(repo);
+    await call(client, 'open_run');
+    await call(client, 'start_node', { node: 'plan' });
+
+    const refused = await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+
+    expect(refused.refused).toBe(true);
+    expect(refused.text).toContain('accept_plan');
+    expect(latestRunState(repo)!.nodes.plan!.status).toBe('running');
   });
 
   it('says the ids replace what the instructions listed, since the brief cannot be re-read', async () => {
@@ -90,7 +107,8 @@ describe('completing a Plan node over MCP', () => {
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
 
-    const done = await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+    await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
+    const done = await call(client, 'accept_plan', { node: 'plan' });
 
     expect(done.text).toContain('The graph grew');
     expect(done.text).toContain('replace');
@@ -101,7 +119,8 @@ describe('completing a Plan node over MCP', () => {
     const client = await connect(repo);
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
-    await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+    await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
+    await call(client, 'accept_plan', { node: 'plan' });
 
     const started = await call(client, 'start_node', { node: 'impl' });
 
@@ -115,9 +134,9 @@ describe('completing a Plan node over MCP', () => {
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
 
-    const bad = await call(client, 'complete_node', {
+    const bad = await call(client, 'propose_plan', {
       node: 'plan',
-      output: { nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] },
+      proposal: { nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] },
     });
 
     // Refused as a tool error the model can read and act on, not thrown — a
@@ -133,7 +152,8 @@ describe('completing a Plan node over MCP', () => {
     const client = await connect(repo);
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
-    await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+    await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
+    await call(client, 'accept_plan', { node: 'plan' });
 
     const brief = await call(client, 'node_brief', { node: 'impl' });
 
@@ -151,7 +171,8 @@ describe('both reporting surfaces describe the same expansion', () => {
     const client = await connect(repo);
     await call(client, 'open_run');
     await call(client, 'start_node', { node: 'plan' });
-    const done = await call(client, 'complete_node', { node: 'plan', output: PROPOSAL });
+    await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
+    const done = await call(client, 'accept_plan', { node: 'plan' });
 
     // Execution order, derived from the run's own recorded graph — not the
     // order the nodes happen to be stored in, and not a list either surface

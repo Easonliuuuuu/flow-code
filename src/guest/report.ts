@@ -26,6 +26,7 @@ import {
 } from '../runstate/persist.js';
 import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
 import { enforcementLive } from './enforce.js';
+import { planOutput } from '../registry/index.js';
 import type { AttemptRecord, NodeRunState, RecordedGraph, RunState } from '../runstate/types.js';
 import { loadWorkflow, WorkflowValidationError, type Workflow } from '../workflow/load.js';
 import {
@@ -195,6 +196,69 @@ export interface ReportOutcome {
   order?: string[];
 }
 
+export interface PlanProposalOutcome {
+  nodeId: string;
+  proposal: PlanProposal;
+}
+
+/** Validate and save a Plan proposal without changing the graph. */
+export function proposePlan(
+  repoRoot: string,
+  runId: string,
+  nodeId: string,
+  proposal: PlanProposal,
+): PlanProposalOutcome {
+  const state = loadRun(repoRoot, runId);
+  assertNotDriven(state);
+  if (state.finishedAt !== undefined) throw new GuestReportError(`run ${runId.slice(0, 8)} is already closed`);
+  const workflow = workflowOf(state, repoRoot);
+  const node = workflow.nodes.find((candidate) => candidate.id === nodeId);
+  if (!node || node.type.id !== 'plan') throw new GuestReportError(`node \`${nodeId}\` is not a Plan node`);
+  const current = state.nodes[nodeId];
+  if (!current || (current.status !== 'running' && current.status !== 'waiting')) {
+    throw new GuestReportError(`node \`${nodeId}\` cannot receive a proposal from \`${current?.status ?? 'unknown'}\``);
+  }
+  const parsed = planOutput.safeParse(proposal);
+  if (!parsed.success) {
+    throw new GuestReportError(
+      `the graph \`${nodeId}\` proposed is not valid — the Plan stays running, so propose again:\n` +
+        parsed.error.issues.map((issue) => `  - ${issue.path.join('.') || '(root)'}: ${issue.message}`).join('\n'),
+    );
+  }
+  try {
+    expandRecordedGraph(workflow, nodeId, parsed.data as PlanProposal, {
+      repoRoot,
+      ...(state.graph?.selected !== undefined ? { selected: state.graph.selected } : {}),
+    });
+  } catch (err) {
+    if (err instanceof WorkflowValidationError) {
+      throw new GuestReportError(
+        `the graph \`${nodeId}\` proposed is not valid — the Plan stays running, so propose again:\n` +
+          err.problems.map((problem) => `  - ${problem}`).join('\n'),
+      );
+    }
+    throw err;
+  }
+  persist(repoRoot, withTierCheck(repoRoot, {
+    ...state,
+    nodes: { ...state.nodes, [nodeId]: { ...current, pendingPlan: parsed.data as PlanProposal } },
+  }));
+  return { nodeId, proposal: parsed.data as PlanProposal };
+}
+
+/** Accept the currently pending Plan proposal through an explicit user action. */
+export function acceptPlan(repoRoot: string, runId: string, nodeId: string): ReportOutcome {
+  const state = loadRun(repoRoot, runId);
+  const pending = state.nodes[nodeId]?.pendingPlan;
+  if (!pending) throw new GuestReportError(`Plan node \`${nodeId}\` has no pending proposal to accept`);
+  return reportTransition(repoRoot, runId, {
+    nodeId,
+    kind: 'done',
+    output: pending,
+    acceptPlan: true,
+  });
+}
+
 /**
  * Apply one reported transition, or refuse it with a reason.
  *
@@ -332,6 +396,7 @@ function applyTransition(state: RunState, accepted: AcceptedTransition): RunStat
       delete next.output;
     }
   }
+  if (accepted.expandWith) delete next.pendingPlan;
   if (terminal) next.endedAt = now;
   if (accepted.detail !== undefined) next.statusDetail = accepted.detail;
   else delete next.statusDetail;

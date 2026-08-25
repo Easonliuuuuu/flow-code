@@ -22,10 +22,15 @@ Nothing here is project-specific on purpose. **The graph is per-project, and
 2. **`open_run`** — opens the run and returns the step ids in order.
 3. For each step, in order:
    - **`start_node`** *before* you begin the work. It returns that step's brief.
-   - **Run the step in a fresh subagent**, handing it the brief verbatim. Do not do the
-     work in this conversation — see below.
+   - For an interactive `discuss` or `plan` step, stay in this user-facing conversation and
+     talk with the user. Do not delegate the conversation to a fresh subagent.
+   - For every non-interactive step, **run it in a fresh subagent**, handing it the brief
+     verbatim. Do not do that work in this conversation — see below.
    - **`complete_node`** with that step's output, in the shape `describe_workflow`
      gave for it — or **`fail_node`** with a reason if it did not succeed.
+   - For a `plan` step, call **`propose_plan`** after drafting the graph, revise it as needed,
+     and call **`accept_plan`** only after the user explicitly accepts it. Do not use
+     `complete_node` for Plan.
 4. If the graph has an approval gate, **ask the user** and record their answer with
    **`decide_gate`**. Never decide one yourself.
 5. **`close_run`** when the graph is finished, or when you are stopping early.
