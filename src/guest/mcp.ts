@@ -21,13 +21,16 @@ import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { loadWorkflow, WorkflowValidationError } from '../workflow/load.js';
 import { rehydrateGraph } from '../workflow/record.js';
+import { planOutput } from '../registry/index.js';
 import { enforcementLive } from './enforce.js';
 import { generateInstructions, nodeBrief } from './instructions.js';
 import {
   closeGuestRun,
   currentGuestRun,
   GuestReportError,
+  acceptPlan,
   openGuestRun,
+  proposePlan,
   reportTransition,
 } from './report.js';
 import type { ReportedTransition } from './validate.js';
@@ -117,6 +120,13 @@ const GATE_ANNOTATIONS = {
   readOnlyHint: false,
 } as Record<string, unknown>;
 
+const PLAN_ACCEPT_ANNOTATIONS = {
+  title: 'Accept negotiated graph',
+  requiresUserInteraction: true,
+  destructiveHint: false,
+  readOnlyHint: false,
+} as Record<string, unknown>;
+
 const runArg = {
   run: z
     .string()
@@ -142,6 +152,19 @@ function briefFor(repoRoot: string, run: string | undefined, nodeId: string): st
     // A brief is an aid, never a precondition: failing to build one must not
     // turn a successful transition into an error.
     return undefined;
+  }
+}
+
+function isInteractiveNode(repoRoot: string, run: string | undefined, nodeId: string): boolean {
+  try {
+    const state = resolveRun(repoRoot, run);
+    if (!state.graph) return false;
+    return (
+      rehydrateGraph(state.graph, { repoRoot }).nodes.find((node) => node.id === nodeId)?.type
+        .interactive === true
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -255,10 +278,56 @@ export function buildMcpServer(repoRoot: string): McpServer {
         ? result
         : ok(
             `${result.content[0]!.text}\n\n--- brief for \`${node}\` ---\n${brief}\n\n` +
-              'Run this step in a fresh subagent with the brief above, so it does not inherit this ' +
-              "conversation's context. Report it complete when the subagent returns.",
+              (isInteractiveNode(repoRoot, run, node)
+                ? 'This is an interactive step. Continue the discussion in the current user-facing conversation; do not delegate it to a fresh subagent.'
+                : 'Run this step in a fresh subagent with the brief above, so it does not inherit this conversation\'s context. Report it complete when the subagent returns.'),
           );
     },
+  );
+
+  server.registerTool(
+    'propose_plan',
+    {
+      title: 'Put a graph proposal on the table',
+      description:
+        'Validate and save a proposed Plan graph without adopting it. Discuss it with the user, revise it as needed, and call accept_plan only after the user explicitly agrees.',
+      inputSchema: {
+        node: z.string().describe('The Plan node id.'),
+        proposal: planOutput.describe('The proposed nodes and edges. This is a draft until accept_plan is approved.'),
+        ...runArg,
+      },
+    },
+    async ({ node, proposal, run }) =>
+      guard(() => {
+        const saved = proposePlan(repoRoot, resolveRun(repoRoot, run).runId, node, proposal);
+        return (
+          `proposal saved for \`${saved.nodeId}\`: ${saved.proposal.nodes.map((candidate) => candidate.id).join(' → ')}\n` +
+          'The graph has not changed. Discuss or revise this proposal with the user, then call `accept_plan` after they agree.'
+        );
+      }),
+  );
+
+  server.registerTool(
+    'accept_plan',
+    {
+      title: 'Accept the negotiated graph',
+      description:
+        'Adopt the pending Plan proposal only after the USER has explicitly agreed to it. This is the only tool that can complete a Plan node.',
+      inputSchema: {
+        node: z.string().describe('The Plan node id whose pending proposal the user accepted.'),
+        ...runArg,
+      },
+      annotations: PLAN_ACCEPT_ANNOTATIONS,
+    },
+    async ({ node, run }) =>
+      guard(() => {
+        const target = resolveRun(repoRoot, run);
+        const { accepted, order } = acceptPlan(repoRoot, target.runId, node);
+        const line = `${accepted.nodeId} → ${accepted.status}`;
+        return order === undefined
+          ? line
+          : `${line}\n\nThe graph grew. The run now holds: ${order.join(' → ')}. These nodes replace the old successors; report against them.`;
+      }),
   );
 
   server.registerTool(

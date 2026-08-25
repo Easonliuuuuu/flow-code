@@ -1,4 +1,5 @@
 import type { NodeBudget, RunSettings, WorkflowEdge } from '../workflow/schema.js';
+import type { PlanProposal } from '../workflow/splice.js';
 import type { RunEnforcement } from './tier.js';
 
 export const NODE_STATUSES = ['idle', 'running', 'waiting', 'done', 'error', 'skipped'] as const;
@@ -210,6 +211,8 @@ export interface NodeRunState {
   workingDir?: string;
   /** Persisted Discuss transcript, so an interrupted conversation survives to `--resume`. */
   discussTranscript?: DiscussTranscriptEntry[];
+  /** A validated Plan proposal awaiting explicit user acceptance. */
+  pendingPlan?: PlanProposal;
   /** Underlying agent session id, so `--resume` can continue it with full context. */
   sessionId?: string;
   /**

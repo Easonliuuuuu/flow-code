@@ -16,7 +16,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { GuestReportError, openGuestRun, reportTransition } from '../src/guest/report.js';
+import { GuestReportError, acceptPlan, openGuestRun, proposePlan, reportTransition } from '../src/guest/report.js';
 import { runFilePath } from '../src/runstate/persist.js';
 import { latestRunState } from '../src/runstate/watch.js';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
@@ -69,11 +69,16 @@ async function runAtPlan(yaml = PLANNED): Promise<{ repo: string; runId: string 
   return { repo, runId };
 }
 
+function acceptProposal(repo: string, runId: string, proposal: PlanProposal = GOOD_PROPOSAL) {
+  proposePlan(repo, runId, 'plan', proposal);
+  return acceptPlan(repo, runId, 'plan');
+}
+
 describe('a reported Plan node expands the run', () => {
   it('splices the proposal into the recorded graph, between plan and its successors', async () => {
     const { repo, runId } = await runAtPlan();
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
 
     const state = latestRunState(repo)!;
     expect(state.graph!.nodes.map((n) => n.id).sort()).toEqual([
@@ -93,7 +98,7 @@ describe('a reported Plan node expands the run', () => {
   it('records the plan node done with its proposal, and seeds the new nodes idle', async () => {
     const { repo, runId } = await runAtPlan();
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
 
     const state = latestRunState(repo)!;
     expect(state.nodes.plan!.status).toBe('done');
@@ -109,18 +114,14 @@ describe('a reported Plan node expands the run', () => {
   it('returns the node ids the run now holds, in graph order', async () => {
     const { repo, runId } = await runAtPlan();
 
-    const outcome = reportTransition(repo, runId, {
-      nodeId: 'plan',
-      kind: 'done',
-      output: GOOD_PROPOSAL,
-    });
+    const outcome = acceptProposal(repo, runId);
 
     expect(outcome.order).toEqual(['plan', 'impl', 'check', 'gate', 'ship']);
   });
 
   it('says nothing about an order for a report that did not expand anything', async () => {
     const { repo, runId } = await runAtPlan();
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
 
     const outcome = reportTransition(repo, runId, { nodeId: 'impl', kind: 'start' });
 
@@ -135,7 +136,7 @@ describe('a reported Plan node expands the run', () => {
       /unknown node `impl`/,
     );
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
     reportTransition(repo, runId, { nodeId: 'impl', kind: 'start' });
     reportTransition(repo, runId, {
       nodeId: 'impl',
@@ -156,7 +157,7 @@ ${PLANNED.replace(/^/gm, '    ').replace(/^\s+$/gm, '')}
     reportTransition(repo, runId, { nodeId: 'plan', kind: 'start' });
     expect(latestRunState(repo)!.graph!.selected).toBe('ship');
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
 
     // The name identifies the run wherever it is displayed (`flow-code runs`,
     // the viewer's header). Losing it on expansion would make a run that had
@@ -168,7 +169,7 @@ ${PLANNED.replace(/^/gm, '    ').replace(/^\s+$/gm, '')}
     const { repo, runId } = await runAtPlan();
     const before = latestRunState(repo)!.enforcement;
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
 
     // Expanding is not an escalation: a run reported at `reported` before the
     // graph grew is reported at `reported` after it.
@@ -183,7 +184,7 @@ describe('a proposal that does not build is refused', () => {
     const before = rawDocument(repo, runId);
     let message = '';
     try {
-      reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: proposal });
+    proposePlan(repo, runId, 'plan', proposal);
       throw new Error('expected the report to be refused');
     } catch (err) {
       if (!(err instanceof GuestReportError)) throw err;
@@ -250,17 +251,13 @@ describe('a proposal that does not build is refused', () => {
   it('leaves the plan node running, and takes a corrected proposal afterwards', async () => {
     const { repo, runId } = await runAtPlan();
     expect(() =>
-      reportTransition(repo, runId, {
-        nodeId: 'plan',
-        kind: 'done',
-        output: { nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] },
-      }),
+    proposePlan(repo, runId, 'plan', { nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] }),
     ).toThrow(GuestReportError);
 
     // Still `running`, so `done` is a legal transition — which is what makes
     // "propose again" something the agent can actually do rather than advice.
     expect(latestRunState(repo)!.nodes.plan!.status).toBe('running');
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
     expect(latestRunState(repo)!.nodes.plan!.status).toBe('done');
   });
 
@@ -279,7 +276,7 @@ describe('the guest and the engine expand identically', () => {
   it('produces the recorded graph `driveEngine` would produce from the same proposal', async () => {
     const { repo, runId } = await runAtPlan();
 
-    reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: GOOD_PROPOSAL });
+    acceptProposal(repo, runId);
     const viaGuest = latestRunState(repo)!.graph!;
 
     // What `driveEngine` calls, with the same arguments it has to hand. If the
@@ -312,7 +309,7 @@ describe('the guest and the engine expand identically', () => {
     reportTransition(repo, runId, { nodeId: 'plan', kind: 'start' });
     let guestMessage = '';
     try {
-      reportTransition(repo, runId, { nodeId: 'plan', kind: 'done', output: bad });
+    proposePlan(repo, runId, 'plan', bad);
     } catch (err) {
       guestMessage = (err as Error).message;
     }

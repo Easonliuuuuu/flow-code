@@ -28,8 +28,13 @@ edges:
 const originalCwd = process.cwd();
 afterEach(() => {
   process.chdir(originalCwd);
+  if (Object.prototype.hasOwnProperty.call(process.stdin, 'isTTY')) delete (process.stdin as { isTTY?: boolean }).isTTY;
   vi.restoreAllMocks();
 });
+
+function enableTty(): void {
+  Object.defineProperty(process.stdin, 'isTTY', { configurable: true, get: () => true });
+}
 
 function repoWithWorkflow(): string {
   const repo = makeTempGitRepo();
@@ -186,7 +191,9 @@ edges:
     await node(repo, 'open');
     await node(repo, 'start', 'plan');
 
-    const done = await node(repo, 'done', 'plan', '--output', PROPOSAL);
+    await node(repo, 'propose-plan', 'plan', '--output', PROPOSAL);
+    enableTty();
+    const done = await node(repo, 'accept-plan', 'plan');
 
     expect(done.exited).toBe(false);
     expect(done.out).toContain('plan → done');
@@ -199,7 +206,9 @@ edges:
     const repo = plannedRepo();
     await node(repo, 'open');
     await node(repo, 'start', 'plan');
-    await node(repo, 'done', 'plan', '--output', PROPOSAL);
+    await node(repo, 'propose-plan', 'plan', '--output', PROPOSAL);
+    enableTty();
+    await node(repo, 'accept-plan', 'plan');
 
     const started = await node(repo, 'start', 'impl');
 
@@ -214,7 +223,7 @@ edges:
 
     const bad = await node(
       repo,
-      'done',
+      'propose-plan',
       'plan',
       '--output',
       JSON.stringify({ nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] }),

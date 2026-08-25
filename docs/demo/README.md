@@ -215,8 +215,9 @@ Two things ruin a take, and neither is visible until you replay it:
 
 - **Delegation.** If the session dispatches the work to a subagent, its own
   pane shows a spinner and nothing else — the whole left half comes out empty.
-  Leave auto mode off, and tell the agent to walk the steps itself. The node
-  briefs ask for a fresh subagent per step, so this has to be said explicitly.
+  Leave auto mode off, and tell the agent to walk the steps itself. Non-interactive
+  node briefs ask for a fresh subagent; Discuss and Plan explicitly stay in the
+  user-facing conversation.
 - **Stopping the capture early.** Let it run until the last node resolves. A
   capture that stops sooner leaves the two halves covering different spans, and
   they cannot be re-aligned afterwards.

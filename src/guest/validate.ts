@@ -33,6 +33,8 @@ export interface ReportedTransition {
   decision?: 'approved' | 'rejected';
   /** Required by `gate`: the surface that collected the decision from them. */
   surface?: string;
+  /** Only the explicit Plan acceptance surface may complete a Plan node. */
+  acceptPlan?: boolean;
 }
 
 /** What run-state should become if the report is accepted. */
@@ -124,7 +126,7 @@ export function validateTransition(
     case 'start':
       return validateStart(workflow, state, node, current);
     case 'done':
-      return validateDone(node, current, reported.output);
+      return validateDone(node, current, reported.output, reported.acceptPlan === true);
     case 'fail':
       return validateFail(node, current, reported.reason);
     case 'gate':
@@ -240,7 +242,12 @@ function validateLoopbackReentry(
   return { ok: true, accepted: { nodeId: node.id, status: 'running', reset } };
 }
 
-function validateDone(node: WorkflowNode, current: NodeRunState, output: unknown): TransitionResult {
+function validateDone(
+  node: WorkflowNode,
+  current: NodeRunState,
+  output: unknown,
+  acceptedByUser: boolean,
+): TransitionResult {
   // An agent completing a gate is an agent approving its own work. The gate
   // surfaces exist precisely so that the decision cannot be produced by the
   // thing the decision is about.
@@ -248,6 +255,12 @@ function validateDone(node: WorkflowNode, current: NodeRunState, output: unknown
     return reject(
       `\`${node.id}\` is an approval gate — it is answered by the person, not reported complete. ` +
         'Ask them, and record their answer with the gate decision tool (`flow-code node approve` on the CLI).',
+    );
+  }
+  if (node.type.id === 'plan' && !acceptedByUser) {
+    return reject(
+      `\`${node.id}\` is an interactive planning step — propose a graph first, then accept it with ` +
+        '`accept_plan` (or `flow-code node accept-plan`) after the user agrees.',
     );
   }
   if (current.status !== 'running' && current.status !== 'waiting') {

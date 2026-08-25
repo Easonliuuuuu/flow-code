@@ -13,6 +13,7 @@
  */
 
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
+import { nodeTypeReferenceLines } from '../registry/index.js';
 
 /**
  * Delimiters around the section this owns inside a file it shares with the
@@ -42,13 +43,13 @@ function howToWork(node: WorkflowNode): string {
   // an agent off reporting prose against a schema that takes nodes and edges.
   if (node.type.id === 'plan') {
     return (
-      'Settle with the user what should be built, then propose the graph that carries it out — ' +
-      'drawn only from the built-in node types (`flow-code node-types` lists them). Do not report ' +
-      'this step complete until they have accepted the graph.'
+      'Stay in the current user-facing conversation. Settle with the user what should be built, ' +
+      'then propose the graph that carries it out by calling `propose_plan`, drawn only from the built-in node types. Revise it ' +
+      'as needed, and call `accept_plan` only after the user explicitly accepts it.'
     );
   }
   if (node.type.interactive) {
-    return 'Talk to the user until the question is settled, then report the conclusion you both reached.';
+    return 'Stay in the current user-facing conversation and talk to the user until the question is settled, then report the conclusion you both reached.';
   }
   return 'Do the work yourself, then report what you produced.';
 }
@@ -74,7 +75,7 @@ function expansionNote(node: WorkflowNode, next: readonly string[]): string[] {
       : 'after this step';
   return [
     `- **This step changes the graph:** your output *is* a proposed set of nodes and edges. ` +
-      `Reporting this step complete splices them into the run ${where}, so the steps you planned ` +
+      `Accepting the proposal splices it into the run ${where}, so the steps you planned ` +
       `become real nodes you can report against. From that point the run — not these instructions ` +
       `— is what says which nodes exist: the report hands back the ids the run now holds, and ` +
       `those are the ones to walk. A proposal that does not build a valid graph is refused and ` +
@@ -220,6 +221,16 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     .map((id, i) => nodeSection(workflow.nodes.find((n) => n.id === id)!, i, workflow))
     .join('\n\n');
   const loopbacks = loopbackSection(workflow);
+  const hasPlan = workflow.nodes.some((node) => node.type.id === 'plan');
+  const planningVocabulary = hasPlan
+    ? [
+        '## Planning vocabulary',
+        '',
+        'A Plan proposal may use only these built-in node types:',
+        '',
+        ...nodeTypeReferenceLines(),
+      ]
+    : [];
 
   return [
     '## Walking this project\'s flow-code graph',
@@ -238,6 +249,8 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     'flow-code node open --json          # once, at the start; prints the run id',
     'flow-code node start <id>           # before working on a step',
     'flow-code node done <id> --output \'{…}\'   # when it finishes, with its output',
+    'flow-code node propose-plan <id> --output \'{…}\'  # save a Plan draft without adopting it',
+    'flow-code node accept-plan <id>       # user accepts the pending Plan draft in a terminal',
     'flow-code node fail <id> <reason>   # when it does not',
     'flow-code node close                # once, at the end',
     '```',
@@ -249,6 +262,7 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     '### The steps',
     '',
     nodes,
+    ...(planningVocabulary.length > 0 ? ['', ...planningVocabulary] : []),
     ...(loopbacks ? ['', loopbacks] : []),
     '',
     ...whatThisIsSection(opts.enforced === true),
@@ -317,6 +331,9 @@ export function nodeBrief(
     ...(instructions ? ['', `This project's instructions for this step: ${instructions}`] : []),
     ...(topic ? ['', `Topic: ${topic}`] : []),
     ...(commands ? ['', `Commands to run: ${commands.map((c) => `\`${String(c)}\``).join(', ')}`] : []),
+    ...(node.type.id === 'plan'
+      ? ['', '## Planning vocabulary', '', ...nodeTypeReferenceLines()]
+      : []),
     ...(upstream.length > 0 ? ['', '## Upstream context', '', upstream.join('\n\n')] : []),
     '',
     `When you finish, report: \`${node.type.outputSummary}\`.`,
