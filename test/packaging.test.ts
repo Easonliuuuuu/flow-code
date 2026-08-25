@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { packageVersion } from '../src/cli.js';
 
@@ -17,7 +17,28 @@ const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.
   version: string;
 };
 
+const claudePluginManifest = JSON.parse(
+  readFileSync(new URL('../plugin/.claude-plugin/plugin.json', import.meta.url), 'utf8'),
+) as { hooks?: string; mcpServers?: unknown };
+
+const claudePluginMcp = JSON.parse(
+  readFileSync(new URL('../plugin/.mcp.json', import.meta.url), 'utf8'),
+) as { mcpServers?: Record<string, { command?: string; args?: string[] }> };
+
 describe('the published package', () => {
+  it('lets Claude auto-load the conventional hooks file exactly once', () => {
+    expect(existsSync(new URL('../plugin/hooks/hooks.json', import.meta.url))).toBe(true);
+    expect(claudePluginManifest.hooks).toBeUndefined();
+  });
+
+  it('puts the MCP server where Claude plugin discovery loads it', () => {
+    expect(claudePluginManifest.mcpServers).toBeUndefined();
+    expect(claudePluginMcp.mcpServers?.['flow-code']).toEqual({
+      command: 'flow-code',
+      args: ['mcp'],
+    });
+  });
+
   it('has no `prepare` script — it would run on install, in a package that ships no source to build', () => {
     // `files` ships dist/ and plugin/ only: no src/, no tsconfig, and
     // typescript is a devDependency, so a build hook that runs during someone

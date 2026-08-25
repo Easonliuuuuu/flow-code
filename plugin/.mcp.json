@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "flow-code": {
+      "command": "flow-code",
+      "args": ["mcp"]
+    }
+  }
+}
