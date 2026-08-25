@@ -83,6 +83,63 @@ describe('generated instructions describe this project and no other', () => {
   });
 });
 
+describe('a graph that can grow says so', () => {
+  const PLANNED = `
+nodes:
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: ship }
+`;
+
+  it('tells the agent that completing the Plan node splices its proposal into the run', () => {
+    const text = generateInstructions(workflowFromYaml(PLANNED));
+
+    expect(text).toContain('This step changes the graph');
+    // The three things the brief cannot leave out: what the output is, where
+    // it goes, and who is the authority afterwards.
+    expect(text).toContain('proposed set of nodes and edges');
+    expect(text).toContain('between this step and `gate`');
+    expect(text).toContain('the run — not these instructions');
+  });
+
+  it('tells it a refused proposal leaves the step running, so it can propose again', () => {
+    expect(generateInstructions(workflowFromYaml(PLANNED))).toContain('propose again');
+  });
+
+  it('asks for a graph rather than a conclusion, which is what the schema takes', () => {
+    const text = generateInstructions(workflowFromYaml(PLANNED));
+
+    // The generic interactive phrasing would send an agent off reporting prose
+    // against an output shape that takes nodes and edges.
+    expect(text).not.toContain('report the conclusion you both reached');
+    expect(text).toContain('propose the graph that carries it out');
+  });
+
+  it('says nothing about expansion for a graph with no Plan node', () => {
+    const text = generateInstructions(workflow);
+
+    expect(text).not.toContain('changes the graph');
+    expect(text).not.toContain('propose again');
+  });
+
+  it('still reports a freshly generated section as current, so `connect --check` is not tripped', () => {
+    const planned = workflowFromYaml(PLANNED);
+
+    expect(instructionState(instructionsSection(planned), planned)).toBe('current');
+    // And drift detection still reads the node headings out of it — the extra
+    // bullet must not disturb the `### n. \`id\`` shape it parses.
+    expect(describeDrift(instructionsSection(planned), planned)).toEqual([
+      "a step's configuration or output shape changed",
+    ]);
+  });
+});
+
 describe('installing into a file the user owns', () => {
   const section = instructionsSection(workflow);
 

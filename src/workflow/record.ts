@@ -80,17 +80,33 @@ export function rehydrateGraph(
  * (for a fresh `Engine`) and its `RecordedGraph` projection (for
  * `RunStateStore.expandGraph`), built from the same rebuild so the two
  * cannot describe different shapes.
+ *
+ * The one entry point both producers reach: `driveEngine`, after the engine
+ * stops with `awaiting-expansion`, and the reported path, when a guest
+ * completes a Plan node. Neither splices for itself, so a proposal one accepts
+ * cannot be one the other refuses.
  */
 export function expandRecordedGraph(
   workflow: Workflow,
   planNodeId: string,
   proposal: PlanProposal,
-  context: { repoRoot: string; skillRoots?: SkillRoots },
+  context: {
+    repoRoot: string;
+    skillRoots?: SkillRoots;
+    /**
+     * Which declared graph this run is walking, carried across the rebuild.
+     * It identifies the run rather than describing its shape — the viewer's
+     * header and `flow-code runs` both read it — so dropping it here would
+     * leave a run that had been walking `review` walking nothing in
+     * particular the moment it expanded.
+     */
+    selected?: string;
+  },
 ): { workflow: Workflow; graph: RecordedGraph } {
   const skillRoots = context.skillRoots ?? defaultSkillRoots(context.repoRoot);
   const expanded = buildWorkflowFromRaw(spliceProposal(workflow, planNodeId, proposal), {
     repoRoot: context.repoRoot,
     skillRoots,
   });
-  return { workflow: expanded, graph: recordGraph(expanded) };
+  return { workflow: expanded, graph: recordGraph(expanded, context.selected) };
 }

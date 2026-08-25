@@ -18,6 +18,22 @@ For Claude Code specifically there is a plugin, which needs no per-project step 
 
 Either way your agent reports each transition (`flow-code node start <id>`, `… done <id> --output '{…}'`, `… fail <id> <reason>`), and every one is checked against the graph before it is recorded. A step cannot start before the steps above it are done, cannot complete without having started, and cannot complete with output that does not match its node type's shape. A rejected report changes nothing and says why.
 
+## A graph that does not know its own shape yet
+
+A graph can start out as a Plan node and nothing else decided. The Plan node's output *is* a graph — nodes and edges in exactly the shape a workflow file's are — and reporting it complete splices that proposal into the run in place of the node's own successors. The steps your agent planned become real nodes it can report against:
+
+```bash
+flow-code node done plan --output '{"nodes":[{"id":"impl","type":"implement","config":{"instructions":"…"}}],"edges":[]}'
+# flow-code: plan → done
+#   the run now holds: plan → impl → gate → ship
+```
+
+The proposal is built and validated before anything is written, by the same code path `flow-code run` uses, so a graph one accepts is never one the other refuses. That includes the rule that matters most here: **a proposal that reaches a git-writing node without passing an Approval-Gate is refused.** An agent cannot plan its way around the gate. A refusal leaves the run exactly as it was — the Plan node stays `running`, free to propose again — and says which node and which path is at fault.
+
+Because the nodes that result are in no instructions your agent has read, both reporting surfaces hand back the ids the run now holds. Those, not the brief, are what to walk from there.
+
+Expanding changes nothing about enforcement: a run that expands is reported at whatever tier it already held.
+
 ## What a reported run is, and is not
 
 flow-code validates the *order* of what an outside agent reports. It does not execute that agent, so it cannot enforce anything about what the agent actually did. Runs record which of three tiers they ran under, and every surface that displays a run says which:

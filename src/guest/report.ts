@@ -26,9 +26,15 @@ import {
 } from '../runstate/persist.js';
 import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
 import { enforcementLive } from './enforce.js';
-import type { AttemptRecord, NodeRunState, RunState } from '../runstate/types.js';
+import type { AttemptRecord, NodeRunState, RecordedGraph, RunState } from '../runstate/types.js';
 import { loadWorkflow, WorkflowValidationError, type Workflow } from '../workflow/load.js';
-import { recordGraph, RecordedGraphError, rehydrateGraph } from '../workflow/record.js';
+import {
+  expandRecordedGraph,
+  recordGraph,
+  RecordedGraphError,
+  rehydrateGraph,
+} from '../workflow/record.js';
+import type { PlanProposal } from '../workflow/splice.js';
 import { validateTransition, type AcceptedTransition, type ReportedTransition } from './validate.js';
 
 /**
@@ -173,18 +179,37 @@ export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Prom
   return { runId: state.runId, order: [...workflow.order], workflow };
 }
 
+/** What a report changed, as much of it as a reporting surface has to say back. */
+export interface ReportOutcome {
+  accepted: AcceptedTransition;
+  /**
+   * Node ids the run now holds, in graph order — present only when this report
+   * expanded the graph.
+   *
+   * Returned because after an expansion the agent's brief is stale by
+   * construction: it was generated from the workflow file, which does not
+   * contain the nodes just proposed. It cannot re-read its instructions to
+   * find them, and asking it to remember what it proposed would make the
+   * agent the authority on run-state rather than the run.
+   */
+  order?: string[];
+}
+
 /**
  * Apply one reported transition, or refuse it with a reason.
  *
  * Validation happens before anything is written and the write happens in one
  * atomic replacement, so a refused report leaves the document byte-identical —
- * which is the property the whole surface rests on.
+ * which is the property the whole surface rests on. An expansion is built
+ * before that write too, for the same reason: a proposal that does not build
+ * refuses the report and leaves the Plan node `running`, free to propose
+ * again, exactly as an engine-driven repropose loop does.
  */
 export function reportTransition(
   repoRoot: string,
   runId: string,
   reported: ReportedTransition,
-): AcceptedTransition {
+): ReportOutcome {
   const state = loadRun(repoRoot, runId);
   assertNotDriven(state);
   if (state.finishedAt !== undefined) {
@@ -195,8 +220,56 @@ export function reportTransition(
   const result = validateTransition(workflow, state, reported);
   if (!result.ok) throw new GuestReportError(result.reason);
 
-  persist(repoRoot, withTierCheck(repoRoot, applyTransition(state, result.accepted)));
-  return result.accepted;
+  const applied = applyTransition(state, result.accepted);
+  const expanded = result.accepted.expandWith
+    ? expandRun(repoRoot, workflow, applied, result.accepted.nodeId, result.accepted.expandWith)
+    : undefined;
+  persist(repoRoot, withTierCheck(repoRoot, expanded?.state ?? applied));
+  return { accepted: result.accepted, ...(expanded ? { order: expanded.order } : {}) };
+}
+
+/**
+ * The run with a completed Plan node's proposal spliced into its graph.
+ *
+ * Routed through `expandRecordedGraph` rather than splicing here, so this path
+ * and `driveEngine` cannot come to disagree about what a valid proposal is —
+ * including the git-write gate invariant, which an agent-authored proposal is
+ * the most likely thing in the system to trip. The rebuild is also the thing
+ * that produces the refusal message, so there is nothing to phrase twice.
+ *
+ * Nodes the expansion introduces are seeded `idle`; every node the run already
+ * had keeps its exact state, the Plan node included — the same bargain
+ * `RunStateStore.expandGraph` strikes for an engine-driven run.
+ */
+function expandRun(
+  repoRoot: string,
+  workflow: Workflow,
+  state: RunState,
+  planNodeId: string,
+  proposal: PlanProposal,
+): { state: RunState; order: string[] } {
+  let expansion: { workflow: Workflow; graph: RecordedGraph };
+  try {
+    expansion = expandRecordedGraph(workflow, planNodeId, proposal, {
+      repoRoot,
+      ...(state.graph?.selected !== undefined ? { selected: state.graph.selected } : {}),
+    });
+  } catch (err) {
+    if (err instanceof WorkflowValidationError) {
+      throw new GuestReportError(
+        `the graph \`${planNodeId}\` proposed is not valid, so it was not adopted and ` +
+          `\`${planNodeId}\` is still running — propose again:\n` +
+          err.problems.map((p) => `  - ${p}`).join('\n'),
+      );
+    }
+    throw err;
+  }
+  const graph = expansion.graph;
+  const nodes = { ...state.nodes };
+  for (const node of graph.nodes) {
+    if (!(node.id in nodes)) nodes[node.id] = { status: 'idle', denials: 0 };
+  }
+  return { state: { ...state, graph, nodes }, order: [...expansion.workflow.order] };
 }
 
 /**
