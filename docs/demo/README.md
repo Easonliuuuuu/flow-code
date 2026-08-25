@@ -209,7 +209,7 @@ npm run demo:capture -- --repo /path/to/a/testbed --out session.jsonl
 Nothing new is needed to capture the graph half: `src/guest/report.ts` writes to
 the same `runFilePath` the engine does, so `demo:capture` sees a reported run
 exactly as it sees a driven one. Use `.claude/skills/testbed/make-testbed.sh
---mode guest` for a repo to record in.
+--mode companion-local` for a repo to record in.
 
 Two things ruin a take, and neither is visible until you replay it:
 

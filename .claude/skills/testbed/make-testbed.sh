@@ -1,178 +1,177 @@
 #!/usr/bin/env bash
 #
-# Generate a clean throwaway repo for driving flow-code by hand.
+# Generate one of three disposable repos for hands-on flow-code testing:
 #
-# The TUI can only be judged by looking at it, and `flow-code watch` renders a
-# whole graph without an API key, an agent call, or a single cent — but only
-# once something has recorded that graph's shape into a run document (`watch`
-# never reads workflow.yaml itself, see src/cli/watch.ts). So this writes the
-# workflow *and* seeds a run file for it — the same all-idle, no-engine-ever-
-# attached document `flow-code run` writes before it starts anything — in
-# `ui` and `splash` mode. `clean` mode skips both, for exercising
-# `init`/`run` themselves. `guest` mode also skips both, for the opposite
-# reason: there the run document is what the outside agent is being tested on
-# producing, so seeding one would hide the very thing under test.
+#   engine             local CLI; the user drives `flow-code init` and `run`
+#   companion-local    local CLI + local Claude plugin via --plugin-dir
+#   companion-release  published CLI + public Claude plugin marketplace
 #
-# Usage: make-testbed.sh [--mode ui|splash|clean|guest|revise] [--dest PATH]
-#                         [--shape wide|tall|tiny] [--install connect|plugin]
-#                         [--no-build]
+# Usage: make-testbed.sh --mode engine|companion-local|companion-release
+#                        [--dest PATH] [--no-build]
 
 set -euo pipefail
 
-MARKER=.flow-code-testbed
+ROOT_MARKER=.flow-code-testbed
+GIT_MARKER=.git/flow-code-testbed
 
-DEST="${HOME}/flow-code-testbed"
-SHAPE=wide
-MODE=ui
-INSTALL=connect
+MODE=
+DEST=
 BUILD=1
-SHAPE_SET=0
-INSTALL_SET=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dest) DEST="$2"; shift 2 ;;
-    --shape) SHAPE="$2"; SHAPE_SET=1; shift 2 ;;
     --mode) MODE="$2"; shift 2 ;;
-    --install) INSTALL="$2"; INSTALL_SET=1; shift 2 ;;
+    --dest) DEST="$2"; shift 2 ;;
     --no-build) BUILD=0; shift ;;
-    -h|--help) sed -n '3,18p' "$0"; exit 0 ;;
+    -h|--help) sed -n '3,11p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1 — see --help" >&2; exit 2 ;;
   esac
 done
 
 case "$MODE" in
-  ui|splash|clean|guest|revise) ;;
-  *) echo "unknown mode: $MODE — expected ui, splash, clean, guest, or revise" >&2; exit 2 ;;
+  engine|companion-local|companion-release) ;;
+  "") echo "--mode is required: engine, companion-local, or companion-release" >&2; exit 2 ;;
+  *) echo "unknown mode: $MODE — expected engine, companion-local, or companion-release" >&2; exit 2 ;;
 esac
 
-case "$SHAPE" in
-  wide|tall|tiny|loops) ;;
-  *) echo "unknown shape: $SHAPE — expected wide, tall, tiny, or loops" >&2; exit 2 ;;
-esac
+if [ -z "$DEST" ]; then
+  DEST="${HOME}/flow-code-testbed-${MODE}"
+fi
 
-case "$INSTALL" in
-  connect|plugin) ;;
-  *) echo "unknown install: $INSTALL — expected connect or plugin" >&2; exit 2 ;;
-esac
-
-if [ "$MODE" = "clean" ] && [ "$SHAPE_SET" -eq 1 ]; then
-  echo "--shape has no effect in clean mode (nothing is scaffolded)" >&2
+if [ "$MODE" = "companion-release" ] && [ "$BUILD" -eq 0 ]; then
+  echo "--no-build only applies to engine and companion-local" >&2
   exit 2
 fi
 
-# revise mode has one graph on purpose — its whole subject is that graph's
-# rejection branch, so a shape here would silently do nothing.
-if [ "$MODE" = "revise" ] && [ "$SHAPE_SET" -eq 1 ]; then
-  echo "--shape has no effect in revise mode (its graph is fixed)" >&2
-  exit 2
-fi
-
-# guest mode has one graph on purpose (see its block below), so a shape here
-# would silently do nothing.
-if [ "$MODE" = "guest" ] && [ "$SHAPE_SET" -eq 1 ]; then
-  echo "--shape has no effect in guest mode (its graph is fixed)" >&2
-  exit 2
-fi
-
-if [ "$MODE" != "guest" ] && [ "$INSTALL_SET" -eq 1 ]; then
-  echo "--install only applies to guest mode" >&2
-  exit 2
-fi
-
-# splash mode doesn't care what the graph looks like — only that watch has
-# something to draw before the animation hands off — so shape isn't a choice.
-if [ "$MODE" = "splash" ]; then
-  SHAPE=tiny
-fi
-
-# The repo this skill lives in: .claude/skills/testbed/ → three levels up.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+LOCAL_BIN="${DEST}.flow-code-bin"
 
-# This script rm -rf's DEST. Only ever delete a directory we ourselves created,
-# identified by the marker file — otherwise a mistyped --dest is unrecoverable.
+# Refuse every deletion unless the target carries a marker written by this
+# script. Plugin-installed project files deliberately carry that marker under
+# .git, where an ordinary user's worktree cannot see it.
 if [ -e "$DEST" ]; then
-  if [ ! -f "$DEST/$MARKER" ]; then
+  if [ ! -f "$DEST/$ROOT_MARKER" ] && [ ! -f "$DEST/$GIT_MARKER" ]; then
     echo "refusing to replace $DEST: it exists and is not a testbed" >&2
-    echo "(no $MARKER file). Move it aside, or pass a different --dest." >&2
+    echo "(no testbed marker). Move it aside, or pass a different --dest." >&2
     exit 1
   fi
+fi
+
+if [ "$MODE" != "companion-release" ] && [ -e "$LOCAL_BIN" ] && [ ! -f "$LOCAL_BIN/$ROOT_MARKER" ]; then
+  echo "refusing to replace $LOCAL_BIN: it is not a testbed shim" >&2
+  echo "(no $ROOT_MARKER file). Move it aside, or pass a different --dest." >&2
+  exit 1
+fi
+
+# A release test must not inherit a shim previously generated for this path.
+# Remove only a marked shim, then require the user's published installation.
+if [ "$MODE" = "companion-release" ]; then
+  if [ -f "$LOCAL_BIN/$ROOT_MARKER" ]; then
+    rm -rf "$LOCAL_BIN"
+  fi
+  RELEASE_BIN="$(command -v flow-code || true)"
+  if [ -z "$RELEASE_BIN" ]; then
+    echo "companion-release requires the published flow-code CLI on PATH." >&2
+    echo "Install it first: npm install -g @easonliuuuuu/flow-code" >&2
+    echo "The release mode never substitutes this checkout's dist/ build." >&2
+    exit 1
+  fi
+  RELEASE_REAL="$(readlink -f "$RELEASE_BIN" 2>/dev/null || echo "$RELEASE_BIN")"
+  case "$RELEASE_BIN:$RELEASE_REAL" in
+    *"$REPO_ROOT"*|*.flow-code-bin/flow-code*)
+      echo "companion-release resolved flow-code to a local development build:" >&2
+      echo "  $RELEASE_BIN" >&2
+      echo "Install the published CLI and remove the local shim from PATH." >&2
+      exit 1
+      ;;
+  esac
+fi
+
+if [ -e "$DEST" ]; then
   rm -rf "$DEST"
 fi
 
-if [ "$BUILD" -eq 1 ]; then
-  echo "building $REPO_ROOT ..."
-  ( cd "$REPO_ROOT" && npm run build >/dev/null )
+if [ "$MODE" != "companion-release" ]; then
+  if [ "$BUILD" -eq 1 ]; then
+    echo "building $REPO_ROOT ..."
+    ( cd "$REPO_ROOT" && npm run build >/dev/null )
+  fi
+  if [ -e "$LOCAL_BIN" ]; then
+    rm -rf "$LOCAL_BIN"
+  fi
+  mkdir -p "$LOCAL_BIN"
+  cat > "$LOCAL_BIN/$ROOT_MARKER" <<EOF
+Generated by flow-code's testbed skill for $DEST. This directory exposes the
+current checkout's CLI without putting a shim inside the generated repository.
+EOF
+  cat > "$LOCAL_BIN/flow-code" <<EOF
+#!/usr/bin/env bash
+exec node "$REPO_ROOT/dist/cli.js" "\$@"
+EOF
+  chmod +x "$LOCAL_BIN/flow-code"
 fi
 
 mkdir -p "$DEST"
 cd "$DEST"
 
-cat > "$MARKER" <<EOF
-Generated by flow-code's \`testbed\` skill (mode: $MODE). Everything here is
-disposable — the generator deletes and recreates this directory, and refuses
-to touch a directory that does not contain this file.
+cat > "$ROOT_MARKER" <<EOF
+Generated by flow-code's testbed skill (mode: $MODE). This marker moves under
+.git before the initial commit so the generated worktree stays ordinary.
 EOF
 
-if [ "$MODE" = "clean" ]; then
-  cat > README.md <<EOF
-# flow-code testbed (clean)
+git init -q -b main
+git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
+git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+mv "$ROOT_MARKER" "$GIT_MARKER"
 
-An empty, otherwise-ordinary git repo with nothing flow-code-specific in it —
-no \`.flow-code/\`, no workflow, no skills. It exists so \`flow-code init\` and
-\`flow-code run\` can be driven by hand from a true first-run state, the same
-as a real project's first \`flow-code init\`.
+if [ "$MODE" = "engine" ]; then
+  cat > README.md <<'EOF'
+# Engine test project
 
-Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
+An otherwise-empty Git repository for testing flow-code's first-run path.
+There is deliberately no `.flow-code/` directory: start with `flow-code init`,
+then use `flow-code run` to exercise the local engine build.
 EOF
-  git init -q -b main
-  git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
-  git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+
   git add -A
-  git commit -qm "chore: scaffold flow-code testbed (clean)"
+  git commit -qm "chore: scaffold engine test project"
 
   echo
-  echo "testbed ready: $DEST  (mode: clean)"
+  echo "testbed ready: $DEST  (mode: engine, source: local checkout)"
+  echo
+  echo "Run in a real terminal:"
   echo
   echo "  cd $DEST"
-  echo "  node $REPO_ROOT/dist/cli.js init"
-  echo "  node $REPO_ROOT/dist/cli.js run"
+  echo "  export PATH=\"$LOCAL_BIN:\$PATH\""
+  echo "  flow-code init"
+  echo "  flow-code run"
   echo
-  echo "init prompts for a preset and, without saved credentials, walks the"
-  echo "provider wizard. run then does the real thing: it resolves a provider"
-  echo "and calls it — this is the one mode that costs real API usage."
+  echo "The exported flow-code command points at $REPO_ROOT/dist/cli.js."
+  echo "The run calls a real provider and costs actual API usage."
   exit 0
 fi
 
-if [ "$MODE" = "revise" ]; then
-  # What a rejection does, driven live by the engine. `clean` mode starts from
-  # nothing so `init` itself can be watched, and `ui` mode never runs an agent
-  # — neither can show a gate being rejected and the run coming back round. So
-  # this scaffolds the graph already wired, and `run` works immediately.
-  #
-  # A real (tiny) project, because the gate has to have a diff to show and the
-  # revision conversation has to have something concrete to talk about.
-  mkdir -p "$DEST/.flow-code" "$DEST/src" "$DEST/test"
+mkdir -p .flow-code src test
 
-  cat > package.json <<'EOF'
+cat > package.json <<'EOF'
 {
-  "name": "flow-code-revise-testbed",
+  "name": "flow-code-companion-testbed",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test 'test/**/*.test.js'"
+    "test": "node --test"
   }
 }
 EOF
 
-  cat > src/greet.js <<'EOF'
+cat > src/greet.js <<'EOF'
 export function greet(name) {
   return `hello ${name}`;
 }
 EOF
 
-  cat > test/greet.test.js <<'EOF'
+cat > test/greet.test.js <<'EOF'
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { greet } from '../src/greet.js';
@@ -182,137 +181,7 @@ test('greets by name', () => {
 });
 EOF
 
-  # The rejection branch, wired. Short on purpose: you need to reach the gate
-  # quickly and reject it more than once, and every node before it is just
-  # setup.
-  #
-  #   gate --(approved)--> ship
-  #        --(rejected)--> revise --loopback on:success--> implement
-  #
-  # `on: success` is the part worth watching. A loop-back normally fires when
-  # its source *fails*; here finishing the conversation is the signal to go
-  # back, so a return path waiting for `revise` to fail would wait forever.
-  #
-  # Both return paths point at `implement`, which shares one attempt budget
-  # between them — so it is set high enough to absorb a couple of failed test
-  # runs *and* still leave room to reject twice. The `unit` loop-back is not
-  # optional scenery: without it a failing test dead-ends before the gate, and
-  # the gate is the entire subject of this mode.
-  cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-
-nodes:
-  - id: implement
-    type: implement
-    config:
-      instructions: Make greet handle an empty name, and cover it with a test.
-
-  - id: unit
-    type: test
-    config:
-      commands: ["npm test"]
-
-  - id: gate
-    type: approval-gate
-
-  - id: revise
-    type: discuss
-    config:
-      topic: what to change before this can be approved
-
-  - id: ship
-    type: git-ops
-
-edges:
-  - { from: implement, to: unit }
-  - { from: unit, to: gate }
-  - { from: gate, to: ship, when: "gate.decision == 'approved'" }
-  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
-  - { from: unit, to: implement, loopback: { maxAttempts: 6 } }
-  - { from: revise, to: implement, loopback: { maxAttempts: 6, on: success } }
-EOF
-
-  cat > README.md <<EOF
-# flow-code testbed (revise)
-
-A small real project whose graph routes a rejected approval gate into a
-conversation, and loops that conversation's conclusion back to \`implement\`.
-
-Run it, let it reach the gate, and reject. \`ship\` should be skipped rather
-than errored, the gate should not read as a success, and \`revise\` should open
-already knowing what it is reconsidering. Reject a second time to check the
-conversation is told what changed instead of silently resuming the first one.
-
-Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
-EOF
-
-  git init -q -b main
-  git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
-  git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
-  git add -A
-  git commit -qm "chore: scaffold flow-code testbed (revise)"
-
-  echo
-  echo "testbed ready: $DEST  (mode: revise)"
-  echo
-  echo "  cd $DEST"
-  echo "  node $REPO_ROOT/dist/cli.js run"
-  echo
-  echo "No init step — the graph is already wired, so run works immediately."
-  echo "Press r at the gate. This calls a real provider and costs real API usage."
-  exit 0
-fi
-
-if [ "$MODE" = "guest" ]; then
-  # Guest mode tests the other half of flow-code: a run nobody here drives.
-  # An outside agent session walks the graph and reports each transition, the
-  # PreToolUse hook decides what that agent is allowed to touch while it does,
-  # and `watch` has to attach to a run it did not see created. So: a real
-  # (tiny) project the agent can actually change, a graph short enough to walk
-  # in one session, and deliberately no run document.
-  mkdir -p "$DEST/.flow-code" "$DEST/src" "$DEST/test"
-
-  cat > package.json <<'EOF'
-{
-  "name": "flow-code-guest-testbed",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "node --test 'test/**/*.test.js'"
-  }
-}
-EOF
-
-  cat > src/greet.js <<'EOF'
-export function greet(name) {
-  return `hello ${name}`;
-}
-EOF
-
-  cat > test/greet.test.js <<'EOF'
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { greet } from '../src/greet.js';
-
-test('greets by name', () => {
-  assert.equal(greet('world'), 'hello world');
-});
-EOF
-
-  # Five nodes, one of every enforcement-relevant kind, plus a return path:
-  #
-  #   implement  read+edit+exec — the only node allowed to write code
-  #   unit       explicit commands (a loop-back span forbids `auto`)
-  #   review     read only, so an edit attempt here must be denied
-  #   gate       no capabilities at all, and blocks git writes below it
-  #   ship       git-write, reachable only once the gate is approved
-  #
-  # The loop-back exists because nothing routes a guest back along one — the
-  # agent has to walk it itself, which is the part that is easiest to get
-  # wrong and impossible to see without driving it.
-  cat > .flow-code/workflow.yaml <<'EOF'
+cat > .flow-code/workflow.yaml <<'EOF'
 settings:
   model: sonnet
 
@@ -344,387 +213,80 @@ edges:
   - { from: unit, to: implement, loopback: true }
 EOF
 
-  cat > README.md <<EOF
-# flow-code testbed (guest)
+cat > README.md <<EOF
+# Companion test project
 
-Disposable repo for driving flow-code from *outside* — an agent session walks
-the graph in \`.flow-code/workflow.yaml\` and reports each step, instead of
-\`flow-code run\` executing it.
+An ordinary project with a flow-code workflow and no per-project integration
+files. Mode: $MODE.
 
-There is deliberately no run document here: the guest creates it with
-\`open_run\`, and attaching \`flow-code watch\` to a run it did not start is
-part of what this is for.
-
-Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
+The companion session must create the run through the plugin. Start \`watch\`
+first so the graph is already waiting when that run appears.
 EOF
 
-  git init -q -b main
-  git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
-  git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
+# Runtime state belongs to this disposable repo but not to its worktree. This
+# mirrors flow-code's own exclusion list without invoking either implementation
+# while the release/local boundary is being established.
+cat >> .git/info/exclude <<'EOF'
 
-  node --input-type=module -e "
-    import { ensureGitExclude } from '$REPO_ROOT/dist/git/exclude.js';
-    ensureGitExclude(process.cwd());
-  "
-
-  if [ "$INSTALL" = "connect" ]; then
-    echo
-    echo "installing the reporting surface with \`flow-code connect\` ..."
-    node "$REPO_ROOT/dist/cli.js" connect
-  else
-    # The plugin manifest hardcodes `flow-code` for both the MCP server and
-    # the hook, so from a checkout it installs a server that never starts and
-    # a hook that never denies — which looks exactly like a working install
-    # with nothing to report. A shim on PATH is what makes the plugin path
-    # testable without a global npm install.
-    mkdir -p bin
-    cat > bin/flow-code <<EOF
-#!/usr/bin/env bash
-exec node "$REPO_ROOT/dist/cli.js" "\$@"
+# added by flow-code testbed
+.flow-code/runs/
+.flow-code/worktrees/
+.flow-code/reconcile/
+.flow-code/enforcement.json
+.flow-code/credentials.json
 EOF
-    chmod +x bin/flow-code
-  fi
 
-  git add -A
-  git commit -qm "chore: scaffold flow-code testbed (guest, $INSTALL)"
+if [ "$MODE" = "companion-local" ]; then
+  PATH="$LOCAL_BIN:$PATH" flow-code validate >/dev/null
+else
+  flow-code validate >/dev/null
+fi
 
-  echo
-  echo "testbed ready: $DEST  (mode: guest, install: $INSTALL)"
+git add -A
+git commit -qm "chore: scaffold $MODE test project"
+
+echo
+if [ "$MODE" = "companion-local" ]; then
+  echo "testbed ready: $DEST  (mode: companion-local, source: local checkout)"
   echo
   echo "Watch it in one terminal:"
   echo
   echo "  cd $DEST"
-  echo "  node $REPO_ROOT/dist/cli.js watch"
+  echo "  export PATH=\"$LOCAL_BIN:\$PATH\""
+  echo "  flow-code watch"
   echo
   echo "Drive it from a second terminal:"
   echo
-  if [ "$INSTALL" = "connect" ]; then
-    echo "  cd $DEST"
-    echo "  claude"
-    echo
-    echo "  # then, in that session:"
-    echo "  Walk this project's flow-code graph: make greet handle an empty name."
-    echo
-    echo "Claude Code asks once whether to trust this project's .mcp.json —"
-    echo "answer yes, or no tool is reachable and the graph never fills in."
-  else
-    echo "  cd $DEST"
-    echo "  PATH=\"$DEST/bin:\$PATH\" claude"
-    echo
-    echo "  # then, in that session:"
-    echo "  /plugin marketplace add $REPO_ROOT"
-    echo "  /plugin install flow-code@flow-code"
-    echo "  # restart the session, then:"
-    echo "  /flow-code make greet handle an empty name"
-    echo
-    echo "The PATH entry is required: the plugin manifest launches a bare"
-    echo "\`flow-code\`, and \$DEST/bin/flow-code is the shim pointing at this"
-    echo "checkout. Without it the server and the hook both silently no-op."
-  fi
+  echo "  cd $DEST"
+  echo "  export PATH=\"$LOCAL_BIN:\$PATH\""
+  echo "  claude --plugin-dir $REPO_ROOT/plugin"
   echo
-  echo "This mode runs a real agent session against a real provider — it costs"
-  echo "actual API usage, and the ship node commits inside the testbed."
-  exit 0
+  echo "  # then, in that session:"
+  echo "  /flow-code make greet handle an empty name"
+  echo
+  echo "Both the CLI/MCP server and Claude plugin come from this checkout."
+else
+  RELEASE_VERSION="$(flow-code --version)"
+  echo "testbed ready: $DEST  (mode: companion-release, source: published release $RELEASE_VERSION)"
+  echo
+  echo "Watch it in one terminal:"
+  echo
+  echo "  cd $DEST"
+  echo "  flow-code watch"
+  echo
+  echo "Drive it from a second terminal:"
+  echo
+  echo "  cd $DEST"
+  echo "  claude"
+  echo
+  echo "  # then, in that session:"
+  echo "  /plugin marketplace add Easonliuuuuu/flow-code"
+  echo "  /plugin install flow-code"
+  echo "  # exit Claude, restart it from the same shell, then:"
+  echo "  /flow-code make greet handle an empty name"
+  echo
+  echo "No command or plugin in this mode points at $REPO_ROOT."
 fi
-
-mkdir -p "$DEST/.flow-code" "$DEST/.claude/skills/house-style" "$DEST/.claude/skills/perf-budget" "$DEST/src"
-
-cat > .claude/skills/house-style/SKILL.md <<'EOF'
----
-name: house-style
-description: Project conventions for naming, comments, and error messages.
----
-Match the surrounding code's comment density and naming. Error messages are
-lowercase and say what to do next.
-EOF
-
-cat > .claude/skills/perf-budget/SKILL.md <<'EOF'
----
-name: perf-budget
-description: Keep hot paths allocation-free and measure before optimising.
----
-Measure before changing anything. Do not add a dependency to a hot path.
-EOF
-
-cat > src/index.ts <<'EOF'
-export function greet(name: string): string {
-  return `hello ${name}`;
-}
-EOF
-
-case "$SHAPE" in
-  wide)
-    # Ten nodes across eight layers: far wider than any terminal, so panning and
-    # the viewport's interaction with dragging are both real. Two layers are
-    # stacked two-deep so vertical drag has somewhere to go, and three nodes
-    # carry badges so both picker paths are one click away.
-    cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-  concurrency: 2
-
-nodes:
-  - id: discuss
-    type: discuss
-    config:
-      topic: What should this change accomplish?
-
-  - id: spec
-    type: spec
-
-  # Its own model, so this card draws a badge on the type-label row.
-  - id: implement
-    type: implement
-    config:
-      instructions: Implement what the spec requires, including tests.
-      model: haiku
-
-  # Same layer as `implement`: this layer is two rows deep.
-  - id: docs
-    type: implement
-    config:
-      instructions: Update the README for whatever changed.
-      skills: [house-style]
-
-  - id: unit
-    type: test
-    config:
-      commands: ["npm test"]
-
-  - id: e2e
-    type: test
-    config:
-      commands: ["npm run test:e2e"]
-
-  - id: validate
-    type: validate
-
-  # Two skills, so this badge reads as a count. A model badge takes the corner
-  # over a skill badge, so clicking this row opens the *model* picker.
-  - id: review
-    type: review
-    config:
-      model: opus
-      skills: [house-style, perf-budget]
-
-  - id: gate
-    type: approval-gate
-
-  - id: ship
-    type: git-ops
-
-edges:
-  - { from: discuss, to: spec }
-  - { from: spec, to: implement }
-  - { from: spec, to: docs }
-  - { from: implement, to: unit }
-  - { from: implement, to: e2e }
-  - { from: docs, to: unit }
-  - { from: unit, to: validate }
-  - { from: e2e, to: validate }
-  - { from: validate, to: review }
-  - { from: review, to: gate }
-  - { from: gate, to: ship }
-EOF
-    ;;
-
-  loops)
-    # The only shape with return paths in it, and the only way to look at how
-    # they are drawn. Four loop-backs over three targets, chosen so all three
-    # of the drawing rules are visible at once and against each other:
-    #
-    #   - test, validate and review all return to `implement` — the funnel real
-    #     workflows have, and the case each loop-back drawn on its own row
-    #     turned into a stack of near-identical rows under the whole canvas.
-    #     These three have to merge onto one row with a junction apiece.
-    #   - review also returns to `spec`, a second target, so a merged bus is
-    #     visibly per-target rather than one bus for the whole graph. `review`
-    #     is deliberately an end of two different loops, so it carries the
-    #     source mark for both.
-    #   - `gate` and `ship` sit past every loop with none of their own: the
-    #     cards that should stay unmarked.
-    #
-    # Nine nodes across eight layers, one layer stacked two-deep — wide enough
-    # that a bus spans most of the canvas, short enough to read at full density
-    # without zooming first.
-    cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-  concurrency: 2
-
-nodes:
-  - id: discuss
-    type: discuss
-    config:
-      topic: What should this change accomplish?
-
-  - id: spec
-    type: spec
-
-  - id: implement
-    type: implement
-    config:
-      instructions: Make the change.
-      model: haiku
-
-  - id: docs
-    type: implement
-    config:
-      instructions: Update the docs alongside it.
-
-  - id: test
-    type: test
-    config:
-      commands: ["npm test"]
-
-  - id: validate
-    type: validate
-
-  - id: review
-    type: review
-
-  - id: gate
-    type: approval-gate
-
-  - id: ship
-    type: git-ops
-
-edges:
-  - { from: discuss, to: spec }
-  - { from: spec, to: implement }
-  - { from: spec, to: docs }
-  - { from: implement, to: test }
-  - { from: docs, to: test }
-  - { from: test, to: validate }
-  - { from: validate, to: review }
-  - { from: review, to: gate }
-  - { from: gate, to: ship }
-  # Three into one target: these must share a single row.
-  - { from: test, to: implement, loopback: { maxAttempts: 3 } }
-  - { from: validate, to: implement, loopback: { maxAttempts: 3 } }
-  - { from: review, to: implement, loopback: { maxAttempts: 3 } }
-  # A second target, so per-target merging is visible rather than assumed.
-  - { from: review, to: spec, loopback: { maxAttempts: 2 } }
-EOF
-    ;;
-
-  tall)
-    # Eight roots in a single layer: the graph is taller than the canvas, which
-    # is what trips the auto-zoom into compact on startup. Use this to check
-    # that the auto rule still fires, and that dragging a node down no longer
-    # re-densifies the whole graph.
-    cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-  concurrency: 4
-
-nodes:
-  - id: alpha
-    type: implement
-    config: { instructions: one, model: haiku }
-  - id: bravo
-    type: implement
-    config: { instructions: two }
-  - id: charlie
-    type: implement
-    config: { instructions: three, skills: [house-style] }
-  - id: delta
-    type: implement
-    config: { instructions: four }
-  - id: echo
-    type: implement
-    config: { instructions: five }
-  - id: foxtrot
-    type: implement
-    config: { instructions: six }
-  - id: golf
-    type: implement
-    config: { instructions: seven }
-  - id: hotel
-    type: implement
-    config: { instructions: eight }
-  - id: collect
-    type: review
-
-edges:
-  - { from: alpha, to: collect }
-  - { from: bravo, to: collect }
-  - { from: charlie, to: collect }
-  - { from: delta, to: collect }
-  - { from: echo, to: collect }
-  - { from: foxtrot, to: collect }
-  - { from: golf, to: collect }
-  - { from: hotel, to: collect }
-EOF
-    ;;
-
-  tiny)
-    # Small enough to fit the canvas whole: nothing off-screen, no auto-zoom.
-    # The baseline for "does this look right at rest", and what splash mode
-    # always uses since the graph is just what's on screen when the animation
-    # finishes.
-    cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-
-nodes:
-  - id: implement
-    type: implement
-    config:
-      instructions: Do the thing.
-      model: haiku
-  - id: review
-    type: review
-    config:
-      skills: [house-style]
-
-edges:
-  - { from: implement, to: review }
-EOF
-    ;;
-esac
-
-cat > README.md <<EOF
-# flow-code testbed ($SHAPE)
-
-Disposable repo for driving the flow-code TUI by hand. Nothing here is real
-code — it exists so \`flow-code watch\` has a repo root, a workflow, and a
-couple of discoverable skills to render.
-
-Regenerate with the \`testbed\` skill; this directory is deleted and rebuilt.
-EOF
-
-git init -q -b main
-git config user.email "$(git -C "$REPO_ROOT" config user.email || echo test@test)"
-git config user.name "$(git -C "$REPO_ROOT" config user.name || echo test)"
-
-# `watch` never reads workflow.yaml itself (see its doc comment in
-# src/cli/watch.ts) — it only draws the graph recorded into a run document by
-# `.flow-code/runs/<id>.json`. Without one, it has nothing to attach to and
-# shows an empty canvas. Seed exactly what `flow-code run` writes before its
-# engine ever starts: an all-idle recorded graph, no agent involved.
-node --input-type=module -e "
-  import { loadWorkflow } from '$REPO_ROOT/dist/workflow/load.js';
-  import { recordGraph } from '$REPO_ROOT/dist/workflow/record.js';
-  import { RunStateStore } from '$REPO_ROOT/dist/runstate/store.js';
-  import { FileRunStatePersister } from '$REPO_ROOT/dist/runstate/persist.js';
-  import { ensureGitExclude } from '$REPO_ROOT/dist/git/exclude.js';
-
-  const repoRoot = process.cwd();
-  ensureGitExclude(repoRoot);
-  const workflow = loadWorkflow(repoRoot);
-  const store = new RunStateStore({ repoRoot, graph: recordGraph(workflow) });
-  store.attachPersister(new FileRunStatePersister(repoRoot));
-"
-
-git add -A
-git commit -qm "chore: scaffold flow-code testbed ($SHAPE)"
-
 echo
-echo "testbed ready: $DEST  (mode: $MODE, shape: $SHAPE)"
-echo
-echo "  cd $DEST"
-echo "  node $REPO_ROOT/dist/cli.js watch"
-echo
-echo "watch needs no API key and runs no agent. Badge clicks do write to"
-echo "workflow.yaml — 'git checkout .' in the testbed resets it."
+echo "This mode runs a real agent session against a real provider — it costs"
+echo "actual API usage, and the ship node commits inside the testbed."
