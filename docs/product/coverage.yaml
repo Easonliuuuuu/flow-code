@@ -179,6 +179,22 @@ changes:
       an expansion have no dedicated tests, and none of this has been driven
       by hand in a real terminal against a real agent session.
 
+  expand-graph-on-guest-path:
+    br: BR-06
+    note: >-
+      A Plan node's proposal is spliced into the run in engine mode only — the
+      rebuild lives in `Engine.run()` and `driveEngine`. On the reported path
+      the proposal is validated against the node's output shape, stored, and
+      then ignored: the graph never grows, so the nodes the agent just planned
+      do not exist and it has nothing to report against. Nothing errors, which
+      is the problem. This routes the reported path through the same
+      `expandRecordedGraph` the engine uses, refuses a proposal that fails to
+      build (including one routing around the gate) while leaving run-state
+      untouched so the agent can repropose, and returns the run's node ids
+      afterwards because the agent's brief predates the nodes it must now
+      report. Found by driving the reporting CLI against the `planned` preset,
+      not by a failing test — no test covered it, because no code claimed it.
+
   add-mcp-driver-connector:
     br: BR-06
     status: parked
