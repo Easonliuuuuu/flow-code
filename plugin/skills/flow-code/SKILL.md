@@ -14,9 +14,22 @@ one and make the run visible to whoever is watching it.
 
 Nothing here is project-specific on purpose. **The graph is per-project, and
 `describe_workflow` is the only place it is described.** Do not assume a shape.
-If the user explicitly asks for a named preset such as OpenSpec or SpecKit,
-pass that preset to `describe_workflow` and `open_run`; do not open the project's
-default workflow first.
+
+Choose the workflow source before calling `describe_workflow` or `open_run`:
+
+- An explicit preset name wins. If the user names two presets, ask which one they want.
+- Select `openspec` only when the user names OpenSpec.
+- Select `spec-kit` only when the user names Spec Kit, SpecKit, or `spec-kit`.
+- Select `frugal` when the user names Frugal. If they only ask to reduce tokens, time,
+  or cost, ask whether they want Frugal before opening the run.
+- Select `planned` when the user names Planned or asks to create, design, or negotiate
+  the graph/workflow for this task, decide the execution steps together, or form the
+  graph before coding. A generic request to "plan the implementation" is not enough.
+- Otherwise use the project's workflow. A generic request to write a spec does not
+  select OpenSpec or Spec Kit.
+
+Pass the selected preset to both `describe_workflow` and `open_run`; do not open the
+project's default workflow first and switch afterwards.
 
 ## Do this
 

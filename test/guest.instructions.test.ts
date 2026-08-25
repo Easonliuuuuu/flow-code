@@ -84,6 +84,35 @@ describe('generated instructions describe this project and no other', () => {
   });
 });
 
+describe('companion preset routing', () => {
+  const text = generateInstructions(workflow);
+
+  it('routes graph-creation intent to the planned preset before the run opens', () => {
+    expect(text).toContain('Choose the workflow source before calling `describe_workflow` or `open_run`');
+    expect(text).toContain('create, design, or negotiate');
+    expect(text).toContain('form the graph');
+    expect(text).toContain('**Planned:**');
+  });
+
+  it('gives explicit preset names precedence and refuses ambiguous names', () => {
+    expect(text).toMatch(/explicit\s+preset name/);
+    expect(text).toContain('wins over inferred intent');
+    expect(text).toContain('If the user names two');
+    expect(text).toContain('ask which one they want');
+  });
+
+  it('does not turn generic planning, specification, or cost language into a preset silently', () => {
+    expect(text).toContain('Generic requests to "plan the implementation" do not select this preset');
+    expect(text).toContain('Generic requests to write a spec do not select OpenSpec or Spec Kit');
+    expect(text).toContain('ask whether they want Frugal');
+  });
+
+  it('uses one selector consistently instead of opening the project workflow first', () => {
+    expect(text).toContain('same `preset` to both calls');
+    expect(text).toContain('never open the project workflow first');
+  });
+});
+
 describe('a step that carries skills says which', () => {
   const SKILLED = `
 nodes:
