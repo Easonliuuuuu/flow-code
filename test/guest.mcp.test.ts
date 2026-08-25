@@ -71,6 +71,29 @@ async function call(
 }
 
 describe('completing a Plan node over MCP', () => {
+  it('lists canonical presets for explicit workflow selection', async () => {
+    const repo = plannedRepo();
+    const client = await connect(repo);
+
+    const presets = await call(client, 'list_presets');
+
+    expect(presets.refused).toBe(false);
+    expect(presets.text).toContain('openspec');
+    expect(presets.text).toContain('spec-kit');
+  });
+
+  it('opens an explicitly selected preset instead of the project workflow', async () => {
+    const repo = plannedRepo();
+    const client = await connect(repo);
+
+    const opened = await call(client, 'open_run', { preset: 'frugal' });
+
+    expect(opened.refused).toBe(false);
+    expect(opened.text).toContain('discuss → spec → spec-gate → implement');
+    expect(latestRunState(repo)!.graph!.nodes.map((node) => node.id)).toContain('spec-gate');
+    expect(latestRunState(repo)!.graph!.nodes.map((node) => node.id)).not.toContain('plan');
+  });
+
   it('carries the ids the run now holds back to the session', async () => {
     const repo = plannedRepo();
     const client = await connect(repo);

@@ -14,6 +14,7 @@
 
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import { nodeTypeReferenceLines } from '../registry/index.js';
+import { presetNamesForSelection } from '../workflow/select.js';
 
 /**
  * Delimiters around the section this owns inside a file it shares with the
@@ -243,6 +244,11 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     'complete *when* you finish it. A report that arrives after the fact describes a run nobody',
     'could have watched.',
     '',
+    `If the user explicitly selects a workflow preset (${presetNamesForSelection().join(', ')}),`,
+    'describe and open that preset for this run instead of opening the project workflow. The',
+    'preset is canonical and does not modify `.flow-code/workflow.yaml`; if its CLI or skills are',
+    'missing, stop and show the setup command rather than falling back to another workflow.',
+    '',
     '### How to report',
     '',
     '```',
@@ -254,6 +260,10 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     'flow-code node fail <id> <reason>   # when it does not',
     'flow-code node close                # once, at the end',
     '```',
+    '',
+    'When a user explicitly selects a preset, use `describe_workflow({ preset: "<name>" })` and',
+    '`open_run({ preset: "<name>" })` over MCP, or `flow-code node describe --preset <name>` and',
+    '`flow-code node open --preset <name>` over the CLI.',
     '',
     'Every transition is checked against the graph: a step cannot start before the steps above it',
     'are done, and cannot complete without having started. A rejected report changes nothing and',

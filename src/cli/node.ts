@@ -28,12 +28,17 @@ import type { PlanProposal } from '../workflow/splice.js';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { fail, repoRootFromCwd } from './context.js';
+import { enforcementLive } from '../guest/enforce.js';
+import { generateInstructions } from '../guest/instructions.js';
+import { selectWorkflow } from '../workflow/select.js';
 
 const NODE_HELP = `flow-code node — report progress through the graph from an agent flow-code is not running
 
 Usage:
-  flow-code node open [--graph <name>] [--json]
-                              Open a run against .flow-code/workflow.yaml and print its id.
+  flow-code node describe [--graph <name> | --preset <name>]
+                              Print the workflow instructions before opening a run.
+  flow-code node open [--graph <name> | --preset <name>] [--json]
+                              Open a run against the project workflow or a canonical preset and print its id.
                               Every later subcommand defaults to the newest open reported run,
                               so the id is only needed when several are open at once
   flow-code node start <id> [--run <runId>]
@@ -82,7 +87,7 @@ function positionals(args: string[], valueFlags: string[]): string[] {
   return out;
 }
 
-const VALUE_FLAGS = ['--run', '--graph', '--output', '--output-file'];
+const VALUE_FLAGS = ['--run', '--graph', '--preset', '--output', '--output-file'];
 
 /**
  * Which run a subcommand targets. An explicit `--run` wins; otherwise the
@@ -167,6 +172,8 @@ export async function cmdNode(args: string[]): Promise<void> {
 
   try {
     switch (sub) {
+      case 'describe':
+        return await cmdDescribe(repoRoot, rest);
       case 'open':
         return await cmdOpen(repoRoot, rest);
       case 'start':
@@ -222,9 +229,11 @@ function cmdAcceptPlan(repoRoot: string, args: string[]): void {
 
 async function cmdOpen(repoRoot: string, args: string[]): Promise<void> {
   const graph = flagValue(args, '--graph');
+  const preset = flagValue(args, '--preset');
   const opened = await openGuestRun(repoRoot, {
     surface: 'cli',
     ...(graph !== undefined ? { graph } : {}),
+    ...(preset !== undefined ? { preset } : {}),
   });
   if (args.includes('--json')) {
     console.log(JSON.stringify({ runId: opened.runId, order: opened.order }));
@@ -236,6 +245,16 @@ async function cmdOpen(repoRoot: string, args: string[]): Promise<void> {
       `  tier:  reported — transitions are validated, nothing is enforced\n` +
       `  watch: flow-code watch ${opened.runId.slice(0, 8)}`,
   );
+}
+
+async function cmdDescribe(repoRoot: string, args: string[]): Promise<void> {
+  const graph = flagValue(args, '--graph');
+  const preset = flagValue(args, '--preset');
+  const selected = await selectWorkflow(repoRoot, {
+    ...(graph !== undefined ? { graph } : {}),
+    ...(preset !== undefined ? { preset } : {}),
+  });
+  console.log(generateInstructions(selected.workflow, { enforced: enforcementLive(repoRoot) }));
 }
 
 function cmdTransition(repoRoot: string, kind: 'start' | 'done' | 'fail', args: string[]): void {

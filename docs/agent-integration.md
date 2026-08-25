@@ -18,6 +18,29 @@ For Claude Code specifically there is a plugin, which needs no per-project step 
 
 Either way your agent reports each transition (`flow-code node start <id>`, `… done <id> --output '{…}'`, `… fail <id> <reason>`), and every one is checked against the graph before it is recorded. A step cannot start before the steps above it are done, cannot complete without having started, and cannot complete with output that does not match its node type's shape. A rejected report changes nothing and says why.
 
+### Selecting a methodology for one companion run
+
+If the user explicitly asks for a shipped preset, select it before opening the run. Over MCP:
+
+```text
+describe_workflow({ preset: "openspec" })
+open_run({ preset: "openspec" })
+```
+
+Over the CLI:
+
+```bash
+flow-code node describe --preset openspec
+flow-code node open --preset openspec
+```
+
+This loads the canonical preset for that run only; it does not edit `.flow-code/workflow.yaml`.
+OpenSpec therefore walks its own `explore → propose → apply → test → validate → archive` shape,
+including its approval gates and attached OpenSpec skills. The preset's CLI and required skills
+must already be available. If they are not, selection stops with the install or scaffold command;
+it never silently falls back to the project's default graph. Use `flow-code init --preset openspec`
+when the project should use OpenSpec by default on future runs.
+
 ## A graph that does not know its own shape yet
 
 A graph can start out as a Plan node and nothing else decided. Keep Plan in the user-facing conversation. The agent's proposal is a graph — nodes and edges in exactly the shape a workflow file's are — but it remains a draft until the user explicitly accepts it:
