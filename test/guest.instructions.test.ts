@@ -19,6 +19,7 @@ import {
   nodeBrief,
   spliceSection,
 } from '../src/guest/instructions.js';
+import { loadWorkflowFromString } from '../src/workflow/load.js';
 import { makeTempGitRepo, workflowFromYaml } from './helpers.js';
 
 const YAML = `
@@ -80,6 +81,72 @@ describe('generated instructions describe this project and no other', () => {
     expect(enforced).not.toContain('`reported` tier');
     // The half that is still not in force is named just as plainly.
     expect(enforced).toMatch(/What is \*not\* enforced/);
+  });
+});
+
+describe('a step that carries skills says which', () => {
+  const SKILLED = `
+nodes:
+  - id: explore
+    type: discuss
+    config: { topic: what to build, skills: [openspec-explore] }
+  - id: apply
+    type: implement
+    config: { instructions: build it, skills: [openspec-apply-change, house-style] }
+edges:
+  - { from: explore, to: apply }
+`;
+
+  /** A repo with the named skills on disk, so the workflow resolves them. */
+  function repoWithSkills(names: string[]): string {
+    const repo = makeTempGitRepo();
+    for (const name of names) {
+      const dir = join(repo, '.claude', 'skills', name);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n${name} body\n`);
+    }
+    return repo;
+  }
+
+  const skilled = (): ReturnType<typeof workflowFromYaml> => {
+    const repo = repoWithSkills(['openspec-explore', 'openspec-apply-change', 'house-style']);
+    return loadWorkflowFromString(SKILLED, { repoRoot: repo });
+  };
+
+  it('names each step\'s skills in the instructions', () => {
+    const text = generateInstructions(skilled());
+
+    // Without this the openspec preset arrives as the openspec *shape* run on
+    // stock role prompts — flow-code did not start this session, so nothing
+    // else can put the method in front of the agent.
+    expect(text).toContain('`openspec-explore`');
+    expect(text).toContain('`openspec-apply-change`, `house-style`');
+  });
+
+  it('names them in the brief a delegated subagent receives', () => {
+    const wf = skilled();
+
+    const brief = nodeBrief(wf, 'explore')!;
+
+    expect(brief).toContain('`openspec-explore`');
+    // Ahead of the step's own instructions, the order `composeRolePrompt`
+    // uses for an engine-driven run: a skill says how to work.
+    expect(brief.indexOf('openspec-explore')).toBeLessThan(brief.indexOf('Topic:'));
+  });
+
+  it('says a skill governs how, not what — the output shape is still the node type\'s', () => {
+    const brief = nodeBrief(skilled(), 'apply')!;
+
+    expect(brief).toContain('not what you must produce');
+    expect(brief).toContain('changedFiles');
+  });
+
+  it('says nothing about skills for a step that carries none', () => {
+    const text = generateInstructions(workflow);
+    const brief = nodeBrief(workflow, 'implement')!;
+
+    expect(text).not.toContain('Work it with');
+    expect(brief).not.toContain('Work this step with');
   });
 });
 
