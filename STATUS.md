@@ -91,7 +91,7 @@ _No OpenSpec change serves this yet._
 
 ## M3 — Meet users in the CLI they already use
 
-`███████░░░ 54/78` tasks across 2 change(s)
+`█████░░░░░ 54/99` tasks across 3 change(s)
 
 ### BR-06 — An external agent can drive the graph
 
@@ -100,6 +100,7 @@ _No OpenSpec change serves this yet._
 | Change | State | Tasks |
 | --- | --- | --- |
 | `add-mcp-driver-connector` | parked | ░░░░░░░░░░ 0/24 |
+| `expand-graph-on-guest-path` | active | ░░░░░░░░░░ 0/21 |
 | `2026-08-17-add-guest-mode-reporter` | archived | ██████████ 54/54 |
 
 ## Parked
