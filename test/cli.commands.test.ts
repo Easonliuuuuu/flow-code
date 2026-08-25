@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CLI_COMMANDS, renderHelp } from '../src/cli/commands.js';
+import { CLI_COMMANDS, renderCommandHelp, renderHelp } from '../src/cli/commands.js';
 import { presetNames } from '../src/presets.js';
 
 /**
@@ -112,3 +112,41 @@ describe('renderHelp', () => {
     expect(lines[wide + 1]).toMatch(/^ {30}Scaffold/);
   });
 });
+
+/**
+ * `flow-code <command> --help` used to fall through into the command's own
+ * arguments, which every command but `node` ignores — so asking `connect` what
+ * it did ran it, writing five files into the project. These pin the renderer
+ * the dispatch guard depends on.
+ */
+describe('per-command help', () => {
+  it('describes a command without needing its flags spelled out', () => {
+    const help = renderCommandHelp('connect');
+
+    expect(help).toBeDefined();
+    expect(help).toContain('flow-code connect');
+    expect(help).toContain('Install the reporting surface');
+  });
+
+  it('shows every row a command has, not just the first', () => {
+    // `run` is described twice — plain, and `--resume`. Someone asking about
+    // `run` wants both, since they are two ways to invoke one word.
+    const help = renderCommandHelp('run') ?? '';
+
+    expect(help).toContain('flow-code run [--allow-dirty]');
+    expect(help).toContain('--resume');
+  });
+
+  it('does not match a command by prefix alone', () => {
+    // `node` and `node-types` share a prefix; asking for one must not answer
+    // with the other, or the guard describes the wrong command.
+    const help = renderCommandHelp('node') ?? '';
+
+    expect(help).not.toContain('node-types');
+  });
+
+  it('returns undefined for a command it does not describe, so the caller can fall back', () => {
+    expect(renderCommandHelp('bogus')).toBeUndefined();
+  });
+});
+
