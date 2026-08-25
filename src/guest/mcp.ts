@@ -19,9 +19,11 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
-import { loadWorkflow, WorkflowValidationError } from '../workflow/load.js';
+import { WorkflowValidationError } from '../workflow/load.js';
 import { rehydrateGraph } from '../workflow/record.js';
 import { planOutput } from '../registry/index.js';
+import { listPresets } from '../presets.js';
+import { selectWorkflow } from '../workflow/select.js';
 import { enforcementLive } from './enforce.js';
 import { generateInstructions, nodeBrief } from './instructions.js';
 import {
@@ -192,34 +194,60 @@ export function buildMcpServer(repoRoot: string): McpServer {
     });
 
   server.registerTool(
+    'list_presets',
+    {
+      title: 'List workflow presets',
+      description: 'List the canonical workflow presets that can be selected for the next run.',
+    },
+    async () =>
+      ok(
+        listPresets()
+          .map((preset) => `${preset.name}: ${preset.description}`)
+          .join('\n'),
+      ),
+  );
+
+  server.registerTool(
     'describe_workflow',
     {
       title: "Read this project's graph",
       description:
-        'Return the steps this project expects a task to go through, what each one must produce, ' +
-        'and how to report progress. Call this before opening a run — the graph is per-project ' +
-        'and this is the only place it is described.',
+        'Return the steps the next run will go through, what each one must produce, and how to ' +
+        'report progress. Call this before opening a run. By default it describes the project ' +
+        'workflow; when the user explicitly selects a preset, pass that preset name here.',
       inputSchema: {
         graph: z
           .string()
           .optional()
           .describe('Which declared graph to describe, for a workflow file that declares several.'),
+        preset: z
+          .string()
+          .optional()
+          .describe('Canonical preset to describe for this run, instead of the project workflow.'),
       },
     },
-    async ({ graph }) => {
+    async ({ graph, preset }) => {
       // Generated on every call rather than installed anywhere. A host reading
       // its instructions through a tool cannot be holding stale ones: there is
       // no copy to go out of date with the workflow file.
       try {
         return ok(
-          generateInstructions(loadWorkflow(repoRoot, graph !== undefined ? { graph } : {}), {
-            enforced: enforcementLive(repoRoot),
-          }),
+          generateInstructions(
+            (
+              await selectWorkflow(repoRoot, {
+                ...(graph !== undefined ? { graph } : {}),
+                ...(preset !== undefined ? { preset } : {}),
+              })
+            ).workflow,
+            {
+              enforced: enforcementLive(repoRoot),
+            },
+          ),
         );
       } catch (err) {
         if (err instanceof WorkflowValidationError) {
           return refuse(
-            `this project's workflow file is invalid:\n${err.problems.map((p) => `  - ${p}`).join('\n')}`,
+            `the selected workflow is invalid:\n${err.problems.map((p) => `  - ${p}`).join('\n')}`,
           );
         }
         throw err;
@@ -239,13 +267,18 @@ export function buildMcpServer(repoRoot: string): McpServer {
           .string()
           .optional()
           .describe('Which declared graph to run, for a workflow file that declares several.'),
+        preset: z
+          .string()
+          .optional()
+          .describe('Canonical preset to run for this session, instead of the project workflow.'),
       },
     },
-    async ({ graph }) => {
+    async ({ graph, preset }) => {
       try {
         const opened = await openGuestRun(repoRoot, {
           surface: 'mcp',
           ...(graph !== undefined ? { graph } : {}),
+          ...(preset !== undefined ? { preset } : {}),
         });
         return ok(
           `opened run ${opened.runId}\nsteps: ${opened.order.join(' → ')}\n` +

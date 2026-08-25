@@ -75,6 +75,16 @@ async function node(repo: string, ...args: string[]): Promise<Run> {
 }
 
 describe('a whole workflow driven over the CLI', () => {
+  it('describes the selected project workflow before opening it', async () => {
+    const repo = repoWithWorkflow();
+
+    const described = await node(repo, 'describe');
+
+    expect(described.exited).toBe(false);
+    expect(described.out).toContain('implement');
+    expect(described.out).toContain('check');
+  });
+
   it('walks the graph and leaves a run a viewer can render', async () => {
     const repo = repoWithWorkflow();
 

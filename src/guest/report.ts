@@ -28,7 +28,7 @@ import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
 import { enforcementLive } from './enforce.js';
 import { planOutput } from '../registry/index.js';
 import type { AttemptRecord, NodeRunState, RecordedGraph, RunState } from '../runstate/types.js';
-import { loadWorkflow, WorkflowValidationError, type Workflow } from '../workflow/load.js';
+import { WorkflowValidationError, type Workflow } from '../workflow/load.js';
 import {
   expandRecordedGraph,
   recordGraph,
@@ -36,6 +36,7 @@ import {
   rehydrateGraph,
 } from '../workflow/record.js';
 import type { PlanProposal } from '../workflow/splice.js';
+import { selectWorkflow } from '../workflow/select.js';
 import { validateTransition, type AcceptedTransition, type ReportedTransition } from './validate.js';
 
 /**
@@ -114,6 +115,8 @@ export interface OpenRunOptions {
   surface: ReportingSurface;
   /** Which declared graph to open, for a workflow file that declares several. */
   graph?: string;
+  /** Which canonical preset to open for this run, without changing the project file. */
+  preset?: string;
 }
 
 export interface OpenedRun {
@@ -134,11 +137,16 @@ export interface OpenedRun {
 export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Promise<OpenedRun> {
   let workflow: Workflow;
   try {
-    workflow = loadWorkflow(repoRoot, opts.graph !== undefined ? { graph: opts.graph } : {});
+    const selected = await selectWorkflow(repoRoot, {
+      ...(opts.graph !== undefined ? { graph: opts.graph } : {}),
+      ...(opts.preset !== undefined ? { preset: opts.preset } : {}),
+    });
+    workflow = selected.workflow;
   } catch (err) {
     if (err instanceof WorkflowValidationError) {
       throw new GuestReportError(
-        `the workflow file is invalid:\n${err.problems.map((p) => `  - ${p}`).join('\n')}`,
+        `${opts.preset !== undefined ? `preset \`${opts.preset}\` is not ready` : 'the workflow file is invalid'}:\n` +
+          err.problems.map((p) => `  - ${p}`).join('\n'),
       );
     }
     throw err;

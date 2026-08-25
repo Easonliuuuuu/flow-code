@@ -14,12 +14,16 @@ one and make the run visible to whoever is watching it.
 
 Nothing here is project-specific on purpose. **The graph is per-project, and
 `describe_workflow` is the only place it is described.** Do not assume a shape.
+If the user explicitly asks for a named preset such as OpenSpec or SpecKit,
+pass that preset to `describe_workflow` and `open_run`; do not open the project's
+default workflow first.
 
 ## Do this
 
 1. **`describe_workflow`** — read the steps this project actually has, what each one
-   must produce, and any return paths. Do this before anything else.
-2. **`open_run`** — opens the run and returns the step ids in order.
+   must produce, and any return paths. If the user selected a preset, pass its name.
+   Do this before anything else.
+2. **`open_run`** — opens the selected project workflow or preset and returns the step ids in order.
 3. For each step, in order:
    - **`start_node`** *before* you begin the work. It returns that step's brief.
    - For an interactive `discuss` or `plan` step, stay in this user-facing conversation and
