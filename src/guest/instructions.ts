@@ -45,7 +45,7 @@ function howToWork(node: WorkflowNode): string {
   if (node.type.id === 'plan') {
     return (
       'Stay in the current user-facing conversation. Settle with the user what should be built, ' +
-      'then propose the graph that carries it out by calling `propose_plan`, drawn only from the built-in node types. Revise it ' +
+      'then propose the graph that carries it out by calling `propose_plan`, drawn only from the built-in node types. Show the returned proposed graph to the user before asking whether to accept or revise it. Revise it ' +
       'as needed, and call `accept_plan` only after the user explicitly accepts it.'
     );
   }

@@ -102,6 +102,10 @@ describe('completing a Plan node over MCP', () => {
 
     const draft = await call(client, 'propose_plan', { node: 'plan', proposal: PROPOSAL });
     expect(draft.text).toContain('graph has not changed');
+    expect(draft.text).toContain('Proposed graph:');
+    expect(draft.text).toContain('- impl [implement] — {"instructions":"build it"}');
+    expect(draft.text).toContain('Edges:\n- (none)');
+    expect(draft.text).toContain('Show this proposed graph to the user');
     expect(latestRunState(repo)!.graph!.nodes.some((node) => node.id === 'impl')).toBe(false);
 
     const done = await call(client, 'accept_plan', { node: 'plan' });

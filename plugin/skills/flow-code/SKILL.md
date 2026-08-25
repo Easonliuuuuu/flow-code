@@ -46,8 +46,9 @@ project's default workflow first and switch afterwards.
    - **`complete_node`** with that step's output, in the shape `describe_workflow`
      gave for it — or **`fail_node`** with a reason if it did not succeed.
    - For a `plan` step, call **`propose_plan`** after drafting the graph, revise it as needed,
-     and call **`accept_plan`** only after the user explicitly accepts it. Do not use
-     `complete_node` for Plan.
+     and show the returned proposed graph (its nodes and edges) to the user before asking
+     whether to accept or revise it. Call **`accept_plan`** only after the user explicitly
+     accepts it. Do not use `complete_node` for Plan.
 4. If the graph has an approval gate, **ask the user** and record their answer with
    **`decide_gate`**. Never decide one yourself.
 5. **`close_run`** when the graph is finished, or when you are stopping early.

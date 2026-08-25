@@ -11,8 +11,9 @@ Start by calling `describe_workflow` to read the steps this project has — do n
 assume a shape. Then `open_run`, and work through the steps in order, calling
 `start_node` before each one. Keep interactive `discuss` and `plan` steps in this
 conversation. For Plan, use `propose_plan`, revise as needed, and use `accept_plan`
-only after the user explicitly agrees; use `complete_node` (or `fail_node`) for the
-other steps. Close the run when you are done.
+only after you have shown the returned proposed graph (its nodes and edges) and the
+user explicitly agrees; use `complete_node` (or `fail_node`) for the other steps.
+Close the run when you are done.
 
 If a report is rejected, the reason names what is unsatisfied: fix the sequence
 rather than reporting something else. If the graph declares a return path from a
