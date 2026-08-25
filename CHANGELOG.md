@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.5.1](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.5.0...flow-code-v0.5.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **cli:** describe a command on --help instead of running it ([855cebf](https://github.com/Easonliuuuuu/flow-code/commit/855cebfa923f9aa75ddb1a44d9550b32dfa839c7))
+* **package.json:** make dist/cli.js executable so npx can run it ([6b84f36](https://github.com/Easonliuuuuu/flow-code/commit/6b84f36eed41a245daaf75ca3ccf6d5e1b1d0f26))
+* **presetSetup.ts:** name the command that installs a preset's skills ([97d1766](https://github.com/Easonliuuuuu/flow-code/commit/97d1766d1979ffb8704d2f4c412b18d70074032e))
+* **warp.mjs:** window the run alongside the cast ([280f6b5](https://github.com/Easonliuuuuu/flow-code/commit/280f6b51cde1f50352c35733bb048a4751572d5d))
+
 ## [0.5.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.4.0...flow-code-v0.5.0) (2026-08-24)
 
 
