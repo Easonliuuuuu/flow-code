@@ -24,7 +24,7 @@ import {
   proposePlan,
 } from '../guest/report.js';
 import type { ReportedTransition } from '../guest/validate.js';
-import type { PlanProposal } from '../workflow/splice.js';
+import { describePlanProposal, type PlanProposal } from '../workflow/splice.js';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { fail, repoRootFromCwd } from './context.js';
@@ -207,8 +207,10 @@ function cmdProposePlan(repoRoot: string, args: string[]): void {
   const run = resolveRun(repoRoot, args);
   const saved = proposePlan(repoRoot, run.runId, nodeId, readOutput(args) as PlanProposal);
   console.log(
-    `flow-code: proposal saved for ${saved.nodeId}: ${saved.proposal.nodes.map((node) => node.id).join(' → ')}\n` +
-      '  the graph has not changed — ask the user, revise if needed, then run `flow-code node accept-plan`.',
+    `flow-code: proposal saved for ${saved.nodeId}; the graph has not changed.\n\n` +
+      `${describePlanProposal(saved.proposal)}\n\n` +
+      'Show this proposed graph to the user before asking whether to accept or revise it. ' +
+      'Run `flow-code node accept-plan` only after they explicitly agree.',
   );
 }
 

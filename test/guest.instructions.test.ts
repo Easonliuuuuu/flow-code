@@ -208,6 +208,13 @@ edges:
     expect(generateInstructions(workflowFromYaml(PLANNED))).toContain('propose again');
   });
 
+  it('requires the agent to show the proposed graph before asking for acceptance', () => {
+    const text = generateInstructions(workflowFromYaml(PLANNED));
+
+    expect(text).toContain('Show the returned proposed graph to the user');
+    expect(text).toContain('before asking whether to accept or revise it');
+  });
+
   it('asks for a graph rather than a conclusion, which is what the schema takes', () => {
     const text = generateInstructions(workflowFromYaml(PLANNED));
 

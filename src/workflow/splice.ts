@@ -7,6 +7,34 @@ export interface PlanProposal {
   edges: WorkflowFileRaw['edges'];
 }
 
+/**
+ * The exact draft a user is being asked to approve, formatted for a terminal
+ * conversation. Keeping this at the proposal boundary means MCP and the
+ * host-agnostic CLI cannot drift into showing different plans.
+ */
+export function describePlanProposal(proposal: PlanProposal): string {
+  const nodes = proposal.nodes.map((node) => {
+    const config = node.config === undefined ? '' : ` — ${JSON.stringify(node.config)}`;
+    return `- ${node.id} [${node.type}]${config}`;
+  });
+  const edges =
+    proposal.edges.length === 0
+      ? ['- (none)']
+      : proposal.edges.map((edge) => {
+          const qualifiers = [
+            ...(edge.when === undefined ? [] : [`when: ${edge.when}`]),
+            ...(edge.loopback === undefined
+              ? []
+              : [
+                  `loopback on ${edge.loopback.on ?? 'failure'}, max ${edge.loopback.maxAttempts ?? 3} attempts`,
+                ]),
+          ];
+          return `- ${edge.from} → ${edge.to}${qualifiers.length === 0 ? '' : ` (${qualifiers.join('; ')})`}`;
+        });
+
+  return ['Proposed graph:', 'Nodes:', ...nodes, 'Edges:', ...edges].join('\n');
+}
+
 function rawNodeOf(node: WorkflowNode): WorkflowFileRaw['nodes'][number] {
   return {
     id: node.id,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadWorkflowFromString } from '../src/workflow/load.js';
-import { spliceProposal, stripPlanNode } from '../src/workflow/splice.js';
+import { describePlanProposal, spliceProposal, stripPlanNode } from '../src/workflow/splice.js';
 
 const SPINE = `
 nodes:
@@ -68,6 +68,26 @@ describe('spliceProposal', () => {
       edges: [{ from: 'impl', to: 'git-ops' }],
     });
     expect(file.edges).toContainEqual({ from: 'impl', to: 'git-ops' });
+  });
+});
+
+describe('describePlanProposal', () => {
+  it('shows node types, configuration, and routing instead of reducing a graph to node order', () => {
+    const text = describePlanProposal({
+      nodes: [
+        { id: 'impl', type: 'implement', config: { instructions: 'build it' } },
+        { id: 'unit', type: 'test', config: { commands: ['npm test'] } },
+      ],
+      edges: [
+        { from: 'impl', to: 'unit' },
+        { from: 'unit', to: 'impl', loopback: { on: 'failure', maxAttempts: 2 } },
+      ],
+    });
+
+    expect(text).toContain('- impl [implement] — {"instructions":"build it"}');
+    expect(text).toContain('- unit [test] — {"commands":["npm test"]}');
+    expect(text).toContain('- impl → unit');
+    expect(text).toContain('- unit → impl (loopback on failure, max 2 attempts)');
   });
 });
 

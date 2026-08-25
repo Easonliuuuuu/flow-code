@@ -24,6 +24,7 @@ import { rehydrateGraph } from '../workflow/record.js';
 import { planOutput } from '../registry/index.js';
 import { listPresets } from '../presets.js';
 import { selectWorkflow } from '../workflow/select.js';
+import { describePlanProposal } from '../workflow/splice.js';
 import { enforcementLive } from './enforce.js';
 import { generateInstructions, nodeBrief } from './instructions.js';
 import {
@@ -326,7 +327,7 @@ export function buildMcpServer(repoRoot: string): McpServer {
     {
       title: 'Put a graph proposal on the table',
       description:
-        'Validate and save a proposed Plan graph without adopting it. Discuss it with the user, revise it as needed, and call accept_plan only after the user explicitly agrees.',
+        'Validate and save a proposed Plan graph without adopting it. Show the returned graph to the user, revise it as needed, and call accept_plan only after the user explicitly agrees.',
       inputSchema: {
         node: z.string().describe('The Plan node id.'),
         proposal: planOutput.describe('The proposed nodes and edges. This is a draft until accept_plan is approved.'),
@@ -337,8 +338,9 @@ export function buildMcpServer(repoRoot: string): McpServer {
       guard(() => {
         const saved = proposePlan(repoRoot, resolveRun(repoRoot, run).runId, node, proposal);
         return (
-          `proposal saved for \`${saved.nodeId}\`: ${saved.proposal.nodes.map((candidate) => candidate.id).join(' → ')}\n` +
-          'The graph has not changed. Discuss or revise this proposal with the user, then call `accept_plan` after they agree.'
+          `proposal saved for \`${saved.nodeId}\`. The graph has not changed.\n\n` +
+          `${describePlanProposal(saved.proposal)}\n\n` +
+          'Show this proposed graph to the user before asking whether to accept or revise it. Call `accept_plan` only after they explicitly agree.'
         );
       }),
   );

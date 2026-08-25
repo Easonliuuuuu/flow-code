@@ -212,6 +212,19 @@ edges:
     expect(done.out).toContain('plan → impl → gate → ship');
   });
 
+  it('prints the proposed graph for the agent to show before acceptance', async () => {
+    const repo = plannedRepo();
+    await node(repo, 'open');
+    await node(repo, 'start', 'plan');
+
+    const proposed = await node(repo, 'propose-plan', 'plan', '--output', PROPOSAL);
+
+    expect(proposed.out).toContain('Proposed graph:');
+    expect(proposed.out).toContain('- impl [implement] — {"instructions":"build it"}');
+    expect(proposed.out).toContain('Edges:\n- (none)');
+    expect(proposed.out).toContain('Show this proposed graph to the user');
+  });
+
   it('prints nothing extra for a step that did not grow the graph', async () => {
     const repo = plannedRepo();
     await node(repo, 'open');
