@@ -37,6 +37,36 @@ fills in beside it — no second agent, no extra tokens. Run the graph with
 Every node is customizable: provider, model, config and attached skills are set
 per node and editable mid-run with `e`, `m` or `s`, no restart.
 
+## Watch the session on the left
+
+For Claude Code specifically, there's a plugin — no per-project setup, no
+`flow-code connect` step:
+
+```
+/plugin marketplace add Easonliuuuuu/flow-code
+/plugin install flow-code
+```
+
+It reads your project's graph through a tool rather than installing a copy of
+it. Then, in a second window:
+
+```bash
+flow-code watch
+```
+
+Work normally; the graph fills in as your session reports each step. For any
+other agent CLI (`claude` without the plugin, `codex`, your own), `flow-code
+connect` installs the same reporting surface into that project instead:
+
+```bash
+flow-code connect   # once per project: installs the tools and the instructions
+flow-code watch     # second window — the graph fills in as your session reports
+```
+
+Both paths report the same way and cost nothing extra — no second agent, no
+extra tokens. What you get less of is enforcement, and the docs say exactly how
+much less: [Driving the graph from your own agent](docs/agent-integration.md).
+
 ## Try it
 
 No repository, configuration, or credential needed:
@@ -136,12 +166,10 @@ read-only from anywhere that can read the repo; `flow-code status` compresses it
 into a row sized for a status bar. See [Watching and
 status](docs/observability.md).
 
-**flow-code does not have to be the one running it.** `flow-code connect`
-installs the tools and instructions to walk the graph yourself from `claude`,
-`codex`, or any agent CLI, reporting each transition as you go — the graph fills
-in beside your own session. You get less enforcement that way, and the docs say
-exactly how much less. See [Driving the graph from your own
-agent](docs/agent-integration.md).
+**flow-code does not have to be the one running it.** That's the companion
+setup above — the plugin or `flow-code connect`, whichever fits your agent.
+See [Driving the graph from your own agent](docs/agent-integration.md) for what
+you get less of, and exactly how much less.
 
 ## Documentation
 
