@@ -82,6 +82,28 @@ function expansionNote(node: WorkflowNode, next: readonly string[]): string[] {
   ];
 }
 
+/**
+ * The skills a step is meant to be worked with, named so the agent can load
+ * them itself.
+ *
+ * An engine-driven run composes a node's attached skills into the system
+ * prompt ahead of its role prompt (`executors/helpers.ts`, `composeRolePrompt`).
+ * Nothing does that here — flow-code did not start this session and cannot put
+ * anything in its context. Left unsaid, the `skills:` a preset carries would
+ * simply vanish: the openspec preset would arrive as the openspec *shape* run
+ * on stock role prompts, with the method it exists to apply nowhere in sight.
+ *
+ * So they are named rather than inlined. A host session that resolved these
+ * skills already has them on disk and its own mechanism for loading one, and
+ * inlining four skill bodies into a brief would bury the step's own
+ * instructions under them.
+ */
+function skillsNote(node: WorkflowNode): string[] {
+  if (node.skills.length === 0) return [];
+  const named = node.skills.map((s) => `\`${s.id}\``).join(', ');
+  return [`- **Work it with:** ${named} — load the skill and follow it for this step.`];
+}
+
 function nodeSection(node: WorkflowNode, index: number, workflow: Workflow): string {
   const next = workflow.graph.directDependents(node.id);
   const lines = [
@@ -90,6 +112,7 @@ function nodeSection(node: WorkflowNode, index: number, workflow: Workflow): str
     purposeOf(node) + '.',
     '',
     `- **How:** ${howToWork(node)}`,
+    ...skillsNote(node),
     `- **Report on completion:** \`${node.type.outputSummary}\``,
     `- **Then:** ${next.length > 0 ? next.map((id) => `\`${id}\``).join(', ') : 'nothing — this is the end of the graph'}`,
     ...expansionNote(node, next),
@@ -279,6 +302,18 @@ export function nodeBrief(
     `You are the \`${node.id}\` step (${node.type.displayName}) of this project's flow-code graph.`,
     '',
     node.type.rolePrompt.trim() || purposeOf(node) + '.',
+    // Named ahead of the step's own instructions, mirroring the order
+    // `composeRolePrompt` uses for an engine-driven run: a skill says *how* to
+    // work, so it belongs before the specifics of what this step is doing.
+    ...(node.skills.length > 0
+      ? [
+          '',
+          `Work this step with the ${node.skills.map((s) => `\`${s.id}\``).join(', ')} skill` +
+            `${node.skills.length === 1 ? '' : 's'}: load ${node.skills.length === 1 ? 'it' : 'them'} ` +
+            'and follow the method described there. It governs how you work, not what you must ' +
+            'produce — the output shape below still stands, and so does the capability boundary.',
+        ]
+      : []),
     ...(instructions ? ['', `This project's instructions for this step: ${instructions}`] : []),
     ...(topic ? ['', `Topic: ${topic}`] : []),
     ...(commands ? ['', `Commands to run: ${commands.map((c) => `\`${String(c)}\``).join(', ')}`] : []),

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { skillScaffoldCommand } from '../presets.js';
 import { getNodeType, TEST_COMMANDS_AUTO, type NodeTypeDefinition } from '../registry/index.js';
 import {
   defaultSkillRoots,
@@ -398,9 +399,16 @@ export function buildWorkflow(
       for (const entry of entries) {
         const { skill, searched } = resolveSkillEntry(entry, skillRoots, repoRoot, discovered);
         if (!skill) {
+          // The remedy belongs on the problem itself, not on one command's
+          // output. A scaffolded preset that names skills fails to *load*, so
+          // this message is what `connect`, `validate`, `run` and `watch` all
+          // show — and only `init` ever had a path that could say how to fix
+          // it, which is the one command a companion-mode user never runs.
+          const remedy = skillScaffoldCommand(entry);
           problems.push(
             `node \`${node.id}\` (${node.type.id}) config at \`skills\`: no skill \`${entry}\` — searched:\n` +
-              searched.map((s) => `      ${s}`).join('\n'),
+              searched.map((s) => `      ${s}`).join('\n') +
+              (remedy !== undefined ? `\n      Run \`${remedy}\` to install it.` : ''),
           );
           continue;
         }
