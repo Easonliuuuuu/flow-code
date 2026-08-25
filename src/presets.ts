@@ -493,3 +493,22 @@ export function presetNames(): string[] {
 export function listPresets(): WorkflowPreset[] {
   return [...PRESETS];
 }
+
+/**
+ * The command that installs `skillId`, when it is a skill some preset ships
+ * with — otherwise undefined, because a skill flow-code did not scaffold is
+ * one it has no standing to suggest an installer for.
+ *
+ * Keyed on the skill name rather than on which preset a file came from: a
+ * scaffolded `workflow.yaml` records no provenance, and by the time a skill
+ * fails to resolve the only thing known about it is its name. The trailing
+ * `.` matches `scaffoldSkills`' contract of taking the target directory last.
+ */
+export function skillScaffoldCommand(skillId: string): string | undefined {
+  for (const preset of PRESETS) {
+    const scaffold = preset.cli?.scaffoldSkills;
+    if (!scaffold || !preset.requiredSkills.includes(skillId)) continue;
+    return [scaffold.command, ...scaffold.args, '.'].join(' ');
+  }
+  return undefined;
+}

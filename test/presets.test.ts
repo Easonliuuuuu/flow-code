@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_WORKFLOW_YAML } from '../src/defaultWorkflow.js';
 import { DEFAULT_PRESET, getPreset, listPresets, presetNames } from '../src/presets.js';
 import { defaultSkillRoots, type SkillRoots } from '../src/skills/discover.js';
-import { loadWorkflowFromString } from '../src/workflow/load.js';
+import { loadWorkflowFromString, WorkflowValidationError } from '../src/workflow/load.js';
+import { makeTempGitRepo } from './helpers.js';
 
 /** A fixture tree with every skill the openspec preset references. */
 function repoWithPresetSkills(names: string[]): { repoRoot: string; roots: SkillRoots } {
@@ -288,6 +289,53 @@ describe('the frugal preset scaffolds a valid workflow', () => {
     for (const node of loadWorkflowFromString(preset.yaml).nodes) {
       expect((node.config as { model?: unknown }).model).toBeUndefined();
     }
+  });
+});
+
+describe('a preset skill that is not installed names its installer', () => {
+  const preset = getPreset('openspec')!;
+
+  it('says which command scaffolds it, on the load error every surface shows', () => {
+    // Deliberately a bare repo with no skills: this is what a companion-mode
+    // user meets, and `flow-code connect` never runs the `init` path that
+    // used to be the only place the remedy was named.
+    const repoRoot = makeTempGitRepo();
+
+    let problems: string[] = [];
+    try {
+      loadWorkflowFromString(preset.yaml, { repoRoot });
+      throw new Error('expected the preset to fail to load without its skills');
+    } catch (err) {
+      problems = (err as WorkflowValidationError).problems;
+    }
+
+    expect(problems.length).toBeGreaterThan(0);
+    for (const problem of problems) {
+      expect(problem).toContain('openspec init --tools claude .');
+    }
+  });
+
+  it('suggests nothing for a skill no preset ships', () => {
+    const repoRoot = makeTempGitRepo();
+    const yaml = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: x, skills: [not-a-preset-skill] }
+`;
+
+    let problems: string[] = [];
+    try {
+      loadWorkflowFromString(yaml, { repoRoot });
+      throw new Error('expected an unresolvable skill to fail the load');
+    } catch (err) {
+      problems = (err as WorkflowValidationError).problems;
+    }
+
+    // flow-code has no standing to recommend an installer for a skill it does
+    // not ship, and a wrong guess is worse than none.
+    expect(problems[0]).toContain('not-a-preset-skill');
+    expect(problems[0]).not.toContain('Run `');
   });
 });
 
