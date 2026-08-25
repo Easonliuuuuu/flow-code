@@ -27,10 +27,21 @@ function missingPresetSkills(preset: WorkflowPreset, repoRoot: string): string[]
   const missing = missingSkillNames(preset, repoRoot);
   if (missing.length === 0) return [];
   const roots = defaultSkillRoots(repoRoot);
+  // Name the command that fixes it when the preset carries one. Without this
+  // the warning says "install them" and leaves the reader to work out how —
+  // and the scaffolded file does not merely warn later, it fails to load,
+  // because a node naming a skill that does not resolve is a validation
+  // error. The interactive path offers to run this; a non-interactive `init`
+  // (CI, a scripted setup) never gets the offer and needs the line.
+  const scaffold = preset.cli?.scaffoldSkills;
+  const remedy = scaffold
+    ? `    Run \`${[scaffold.command, ...scaffold.args].join(' ')} .\` to scaffold them, or edit the \`skills:\` entries in the scaffolded file.`
+    : '    Install them, or edit the `skills:` entries in the scaffolded file.';
   return [
     `  Warning: ${missing.length} skill(s) this preset uses are not installed: ${missing.join(', ')}`,
     `    Expected in ${roots.project}, ${roots.user}, or an installed plugin.`,
-    '    Install them, or edit the `skills:` entries in the scaffolded file.',
+    `    Until they resolve, \`flow-code validate\` and \`flow-code run\` will fail on this file.`,
+    remedy,
   ];
 }
 
