@@ -2,7 +2,7 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { fail } from './cli/context.js';
-import { renderHelp } from './cli/commands.js';
+import { renderCommandHelp, renderHelp } from './cli/commands.js';
 
 /*
  * Every subcommand is imported dynamically, and that is a performance
@@ -47,6 +47,23 @@ export function packageVersion(): string {
 
 async function main(): Promise<void> {
   const [command, ...args] = process.argv.slice(2);
+
+  // `flow-code <command> --help` describes the command rather than running it.
+  // Without this the flag falls through into the command's own arguments,
+  // which every command but `node` ignores — so asking `connect` what it does
+  // used to *do* it, writing five files into the project. A help flag must
+  // never have an effect.
+  // `node` is skipped: it has subcommands, and its own handler prints all of
+  // them. The registry entry here is one row, so routing it through the
+  // generic path would replace a reference with a summary.
+  if (command !== undefined && command !== 'node' && (args.includes('--help') || args.includes('-h'))) {
+    const help = renderCommandHelp(command);
+    if (help !== undefined) {
+      console.log(help);
+      return;
+    }
+  }
+
   switch (command) {
     case 'try':
       return (await import('./cli/try.js')).cmdTry();

@@ -169,6 +169,38 @@ function wrap(text: string, width: number): string[] {
 }
 
 /**
+ * Help for one command, for `flow-code <command> --help`.
+ *
+ * Returns undefined for a command this registry does not describe, so the
+ * caller can fall back to the full help rather than printing nothing.
+ *
+ * A command can appear here more than once (`run` and `run --resume` are
+ * separate rows), and all of its rows are shown: they are alternative ways to
+ * invoke the same word, and someone asking about `run` wants both.
+ */
+export function renderCommandHelp(name: string): string | undefined {
+  const prefix = `flow-code ${name}`;
+  const matches = CLI_COMMANDS.filter(
+    (c) => c.usage === prefix || c.usage.startsWith(`${prefix} `),
+  );
+  if (matches.length === 0) return undefined;
+
+  const lines: string[] = [];
+  for (const command of matches) {
+    lines.push(
+      command.usage,
+      '',
+      ...wrap(command.summary, HELP_WIDTH - 2).map((line) => `  ${line}`),
+    );
+    if (command.detail) {
+      lines.push('', ...wrap(command.detail, HELP_WIDTH - 2).map((line) => `  ${line}`));
+    }
+    lines.push('');
+  }
+  return `${lines.join('\n')}`;
+}
+
+/**
  * The full `flow-code help` output. A usage too wide to share a row with its
  * description gets the description on the lines below it instead of a ragged
  * second column — the same shape the hand-written help had.
