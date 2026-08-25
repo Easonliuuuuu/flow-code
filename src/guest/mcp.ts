@@ -214,7 +214,8 @@ export function buildMcpServer(repoRoot: string): McpServer {
       description:
         'Return the steps the next run will go through, what each one must produce, and how to ' +
         'report progress. Call this before opening a run. By default it describes the project ' +
-        'workflow; when the user explicitly selects a preset, pass that preset name here.',
+        'workflow. Pass a preset when the user names it; also use `planned` when they ask to ' +
+        'create, design, or negotiate the graph for this task.',
       inputSchema: {
         graph: z
           .string()
@@ -223,7 +224,9 @@ export function buildMcpServer(repoRoot: string): McpServer {
         preset: z
           .string()
           .optional()
-          .describe('Canonical preset to describe for this run, instead of the project workflow.'),
+          .describe(
+            'Canonical preset to describe instead of the project workflow; graph-creation intent selects `planned`.',
+          ),
       },
     },
     async ({ graph, preset }) => {
@@ -261,7 +264,7 @@ export function buildMcpServer(repoRoot: string): McpServer {
       title: 'Open a flow-code run',
       description:
         "Open a run against this project's workflow graph and return the node ids in order. " +
-        'Call this once, before starting the first step.',
+        'Call this once, before starting the first step, with the same preset passed to describe_workflow.',
       inputSchema: {
         graph: z
           .string()

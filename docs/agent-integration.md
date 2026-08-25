@@ -20,7 +20,24 @@ Either way your agent reports each transition (`flow-code node start <id>`, `…
 
 ### Selecting a methodology for one companion run
 
-If the user explicitly asks for a shipped preset, select it before opening the run. Over MCP:
+Select the workflow source before describing or opening the run. Explicit preset names take
+precedence over inferred intent; if the user names two presets, ask which one they want.
+
+| User request | Selection |
+| --- | --- |
+| Names OpenSpec | `preset: "openspec"` |
+| Names Spec Kit, SpecKit, or `spec-kit` | `preset: "spec-kit"` |
+| Names Frugal | `preset: "frugal"` |
+| Names Planned, or asks to create/design/negotiate the graph for this task | `preset: "planned"` |
+| Does not match a trigger | Project workflow |
+
+“Form the graph before coding” and “decide the execution steps with me” are Planned intent.
+The broader phrases “plan the implementation” and “write a spec” are not: they are too common
+inside ordinary workflows to choose a methodology safely. Likewise, a request to reduce cost
+should prompt the agent to offer Frugal rather than silently selecting it.
+
+Pass the same selection to both calls. Never open the project workflow first and then switch.
+Over MCP:
 
 ```text
 describe_workflow({ preset: "openspec" })
@@ -40,6 +57,10 @@ including its approval gates and attached OpenSpec skills. The preset's CLI and 
 must already be available. If they are not, selection stops with the install or scaffold command;
 it never silently falls back to the project's default graph. Use `flow-code init --preset openspec`
 when the project should use OpenSpec by default on future runs.
+
+Preset selection is a start-of-run decision. If the user requests a different preset after work
+has begun, close the current run early and open a new one rather than changing the graph under
+an active run.
 
 ## A graph that does not know its own shape yet
 
