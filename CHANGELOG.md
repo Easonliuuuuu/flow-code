@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.6.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.5.1...flow-code-v0.6.0) (2026-08-25)
+
+
+### Features
+
+* **guest:** expand the graph when a reported Plan node completes ([208adf1](https://github.com/Easonliuuuuu/flow-code/commit/208adf14aebf867ce6d49cf8f9115bb226995f87))
+* **guest:** name a step's skills so a companion session can load them ([49c8ded](https://github.com/Easonliuuuuu/flow-code/commit/49c8ded136f442d32bdfc886c7934fe61e755c9b))
+* **guest:** require explicit acceptance for negotiated graphs ([5fe2379](https://github.com/Easonliuuuuu/flow-code/commit/5fe2379aaee89a1e4ddedde0a7046efeaf36678d))
+* **guest:** select workflow presets in companion mode ([b04c8dc](https://github.com/Easonliuuuuu/flow-code/commit/b04c8dcd560211fdc743c0dc337b6a4cb2a4c6d6))
+
+
+### Bug Fixes
+
+* **guest:** route companion preset intent ([ae4bf2c](https://github.com/Easonliuuuuu/flow-code/commit/ae4bf2c41043be087d587f859ccf99d185446b2a))
+* **guest:** show planned graph before acceptance ([92434d7](https://github.com/Easonliuuuuu/flow-code/commit/92434d716ed4a56565dfb597a201bbb11f0fece1))
+* **plugin:** separate local and release testbeds ([7a8175a](https://github.com/Easonliuuuuu/flow-code/commit/7a8175a42f2f42d779c9978c885b01c762e8efcd))
+
 ## [0.5.1](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.5.0...flow-code-v0.5.1) (2026-08-25)
 
 
