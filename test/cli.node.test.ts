@@ -155,6 +155,77 @@ describe('refusals', () => {
   });
 });
 
+describe('a Plan node completed over the CLI', () => {
+  const PLANNED = `
+nodes:
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: ship }
+`;
+
+  const PROPOSAL = JSON.stringify({
+    nodes: [{ id: 'impl', type: 'implement', config: { instructions: 'build it' } }],
+    edges: [],
+  });
+
+  function plannedRepo(): string {
+    const repo = makeTempGitRepo();
+    mkdirSync(join(repo, '.flow-code'), { recursive: true });
+    writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), PLANNED);
+    return repo;
+  }
+
+  it('prints the ids the run now holds, in graph order', async () => {
+    const repo = plannedRepo();
+    await node(repo, 'open');
+    await node(repo, 'start', 'plan');
+
+    const done = await node(repo, 'done', 'plan', '--output', PROPOSAL);
+
+    expect(done.exited).toBe(false);
+    expect(done.out).toContain('plan → done');
+    // The proposed node appears in no instructions this session has read, so
+    // the report is the only place it can come from.
+    expect(done.out).toContain('plan → impl → gate → ship');
+  });
+
+  it('prints nothing extra for a step that did not grow the graph', async () => {
+    const repo = plannedRepo();
+    await node(repo, 'open');
+    await node(repo, 'start', 'plan');
+    await node(repo, 'done', 'plan', '--output', PROPOSAL);
+
+    const started = await node(repo, 'start', 'impl');
+
+    expect(started.out).toContain('impl → running');
+    expect(started.out).not.toContain('the run now holds');
+  });
+
+  it('exits non-zero and leaves the step running when the proposal does not build', async () => {
+    const repo = plannedRepo();
+    await node(repo, 'open');
+    await node(repo, 'start', 'plan');
+
+    const bad = await node(
+      repo,
+      'done',
+      'plan',
+      '--output',
+      JSON.stringify({ nodes: [{ id: 'sneak', type: 'git-ops', config: {} }], edges: [] }),
+    );
+
+    expect(bad.exited).toBe(true);
+    expect(bad.err).toContain('Approval-Gate');
+    expect(latestRunState(repo)!.nodes.plan!.status).toBe('running');
+  });
+});
+
 describe('help', () => {
   it('lists the subcommands and states that nothing is enforced', async () => {
     const repo = repoWithWorkflow();

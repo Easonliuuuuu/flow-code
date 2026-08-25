@@ -155,9 +155,17 @@ export function buildMcpServer(repoRoot: string): McpServer {
   const transition = (kind: ReportedTransition['kind'], run: string | undefined, rest: Omit<ReportedTransition, 'kind'>) =>
     guard(() => {
       const target = resolveRun(repoRoot, run);
-      const accepted = reportTransition(repoRoot, target.runId, { ...rest, kind });
+      const { accepted, order } = reportTransition(repoRoot, target.runId, { ...rest, kind });
       const detail = accepted.detail !== undefined ? ` — ${accepted.detail}` : '';
-      return `${accepted.nodeId} → ${accepted.status}${detail}`;
+      const line = `${accepted.nodeId} → ${accepted.status}${detail}`;
+      // The same list `flow-code node done` prints, for the same reason: the
+      // nodes a proposal introduced are in no instructions this session has
+      // read, so the result of the report is the only place they appear.
+      if (order === undefined) return line;
+      return (
+        `${line}\n\nThe graph grew. The run now holds: ${order.join(' → ')}. ` +
+        `Report against these — they replace whatever came after \`${accepted.nodeId}\` in your instructions.`
+      );
     });
 
   server.registerTool(

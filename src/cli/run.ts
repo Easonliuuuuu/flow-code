@@ -194,11 +194,12 @@ export async function driveEngine(
     const outcome = await current.run();
     if (outcome.reason !== 'awaiting-expansion') return currentWorkflow;
     const proposal = deps.store.node(outcome.planNodeId).output as PlanProposal;
+    const selected = deps.store.snapshot().graph?.selected;
     const { workflow: expanded, graph } = expandRecordedGraph(
       currentWorkflow,
       outcome.planNodeId,
       proposal,
-      { repoRoot: deps.repoRoot },
+      { repoRoot: deps.repoRoot, ...(selected !== undefined ? { selected } : {}) },
     );
     deps.store.expandGraph(graph);
     currentWorkflow = expanded;

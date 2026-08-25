@@ -212,9 +212,15 @@ function cmdTransition(repoRoot: string, kind: 'start' | 'done' | 'fail', args: 
     ...(kind === 'done' ? { output: readOutput(args) } : {}),
     ...(kind === 'fail' ? { reason: reasonWords.join(' ') } : {}),
   };
-  const accepted = reportTransition(repoRoot, run.runId, reported);
+  const { accepted, order } = reportTransition(repoRoot, run.runId, reported);
   const detail = accepted.detail !== undefined ? ` — ${accepted.detail}` : '';
   console.log(`flow-code: ${accepted.nodeId} → ${accepted.status}${detail}`);
+  // Printed only when the graph grew, and printed in full rather than as a
+  // diff: the agent has just been handed nodes that are in no instructions it
+  // has read, and the run is the only thing that knows they exist.
+  if (order !== undefined) {
+    console.log(`  the run now holds: ${order.join(' → ')}`);
+  }
 }
 
 /**
@@ -241,7 +247,7 @@ function cmdGate(repoRoot: string, decision: 'approved' | 'rejected', args: stri
     );
   }
   const run = resolveRun(repoRoot, args);
-  const accepted = reportTransition(repoRoot, run.runId, {
+  const { accepted } = reportTransition(repoRoot, run.runId, {
     nodeId,
     kind: 'gate',
     decision,

@@ -9,6 +9,10 @@ import { WorkflowHost } from '../src/ui/index.js';
 import type { ModelContext } from '../src/ui/App.js';
 import { emptyWorkflow, loadWorkflowFromString } from '../src/workflow/load.js';
 import { recordGraph } from '../src/workflow/record.js';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { openGuestRun, reportTransition } from '../src/guest/report.js';
+import { latestRunState } from '../src/runstate/watch.js';
 import { makeTempGitRepo } from './helpers.js';
 
 /**
@@ -84,6 +88,19 @@ nodes:
   - id: impl
     type: implement
     config: { instructions: x }
+`;
+
+const PLANNED = `
+nodes:
+  - id: plan
+    type: plan
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+edges:
+  - { from: plan, to: gate }
+  - { from: gate, to: ship }
 `;
 
 const GRAPH_B = `
@@ -227,6 +244,44 @@ edges:
     const frame = lastFrame(stdout);
     expect(frame).toContain('impl');
     expect(frame).toContain('review');
+    unmount();
+  });
+
+  // A guest-driven expansion reaches a viewer by a different route: the run
+  // document changes on disk and `flow-code watch` feeds it in whole through
+  // `applySnapshot` (see cli/watch.ts), rather than the engine calling
+  // `expandGraph` on a store it shares with the UI.
+  it('picks up an expansion that arrives as a whole snapshot, the way `watch` delivers one', async () => {
+    const repo = makeTempGitRepo();
+    mkdirSync(join(repo, '.flow-code'), { recursive: true });
+    writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), PLANNED);
+
+    const { runId } = await openGuestRun(repo, { surface: 'cli' });
+    reportTransition(repo, runId, { nodeId: 'plan', kind: 'start' });
+
+    const store = new RunStateStore({ repoRoot: repo, nodeIds: [] });
+    store.applySnapshot(latestRunState(repo)!);
+    const { stdout, unmount } = mountHost(repo, store, { watch: false });
+    await settle();
+    expect(lastFrame(stdout)).toContain('plan');
+    expect(lastFrame(stdout)).not.toContain('impl');
+
+    reportTransition(repo, runId, {
+      nodeId: 'plan',
+      kind: 'done',
+      output: {
+        nodes: [{ id: 'impl', type: 'implement', config: { instructions: 'build it' } }],
+        edges: [],
+      },
+    });
+    store.applySnapshot(latestRunState(repo)!);
+    await settle();
+
+    // No reattach, no reload of workflow.yaml — which still declares three
+    // nodes and knows nothing about `impl`.
+    const frame = lastFrame(stdout);
+    expect(frame).toContain('plan');
+    expect(frame).toContain('impl');
     unmount();
   });
 

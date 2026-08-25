@@ -19,6 +19,7 @@
 import { isRejectedGate } from '../runstate/types.js';
 import type { GateDecision, NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
+import type { PlanProposal } from '../workflow/splice.js';
 
 /** A transition an external agent claims to have made. */
 export interface ReportedTransition {
@@ -48,6 +49,16 @@ export interface AcceptedTransition {
   reset?: string[];
   /** Present for `gate`: how the decision was reached, recorded on the node. */
   gateDecision?: GateDecision;
+  /**
+   * Present when completing this node grows the run's graph: the proposal to
+   * splice, already parsed by the node type's own output schema.
+   *
+   * Carried on the transition rather than left for the writer to recognise in
+   * `output`, so that "this report expands the graph" is decided once, here,
+   * by the layer that already knows which node type it is looking at. A writer
+   * that had to re-derive it would be a second place the answer could differ.
+   */
+  expandWith?: PlanProposal;
 }
 
 export type TransitionResult =
@@ -269,7 +280,20 @@ function validateDone(node: WorkflowNode, current: NodeRunState, output: unknown
   // lands in `error` whichever surface reported it.
   const failed = node.type.failsWhen?.(parsed.data) === true;
   if (!failed) {
-    return { ok: true, accepted: { nodeId: node.id, status: 'done', output: parsed.data } };
+    return {
+      ok: true,
+      accepted: {
+        nodeId: node.id,
+        status: 'done',
+        output: parsed.data,
+        // A Plan node's output *is* a proposed graph — the schema it just
+        // passed is the workflow file's own `nodes`/`edges` — so completing
+        // one is the transition that grows the run. Keyed on the type the
+        // same way the engine keys on it (`freshlyCompletedPlanNode`), so
+        // both paths expand for exactly the same set of nodes.
+        ...(node.type.id === 'plan' ? { expandWith: parsed.data as PlanProposal } : {}),
+      },
+    };
   }
   const verdict = (parsed.data as { verdict?: unknown }).verdict;
   const detail =

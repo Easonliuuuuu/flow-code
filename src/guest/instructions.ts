@@ -37,10 +37,49 @@ function howToWork(node: WorkflowNode): string {
   if (!node.type.agentDriven) {
     return 'Run the commands this node is configured with, and report what they actually returned.';
   }
+  // Before the generic interactive case: what a Plan node settles with the
+  // user is a graph, and "report the conclusion you both reached" would send
+  // an agent off reporting prose against a schema that takes nodes and edges.
+  if (node.type.id === 'plan') {
+    return (
+      'Settle with the user what should be built, then propose the graph that carries it out — ' +
+      'drawn only from the built-in node types (`flow-code node-types` lists them). Do not report ' +
+      'this step complete until they have accepted the graph.'
+    );
+  }
   if (node.type.interactive) {
     return 'Talk to the user until the question is settled, then report the conclusion you both reached.';
   }
   return 'Do the work yourself, then report what you produced.';
+}
+
+/**
+ * What completing this node does to the graph — emitted for the one node type
+ * whose completion changes it.
+ *
+ * Without this the brief is quietly wrong at exactly the moment it matters
+ * most: it lists the graph as it stands *before* planning, which is every node
+ * except the ones the agent is about to be asked to walk. An agent reading only
+ * the brief would plan a graph, report the Plan node complete, and then look
+ * for its planned steps in a list that never had them.
+ *
+ * Nothing is emitted for a workflow with no Plan node, so a fixed graph's brief
+ * is not padded with a step that cannot occur there.
+ */
+function expansionNote(node: WorkflowNode, next: readonly string[]): string[] {
+  if (node.type.id !== 'plan') return [];
+  const where =
+    next.length > 0
+      ? `between this step and ${next.map((id) => `\`${id}\``).join(', ')}`
+      : 'after this step';
+  return [
+    `- **This step changes the graph:** your output *is* a proposed set of nodes and edges. ` +
+      `Reporting this step complete splices them into the run ${where}, so the steps you planned ` +
+      `become real nodes you can report against. From that point the run — not these instructions ` +
+      `— is what says which nodes exist: the report hands back the ids the run now holds, and ` +
+      `those are the ones to walk. A proposal that does not build a valid graph is refused and ` +
+      `this step stays running, so read the reason and propose again.`,
+  ];
 }
 
 function nodeSection(node: WorkflowNode, index: number, workflow: Workflow): string {
@@ -53,6 +92,7 @@ function nodeSection(node: WorkflowNode, index: number, workflow: Workflow): str
     `- **How:** ${howToWork(node)}`,
     `- **Report on completion:** \`${node.type.outputSummary}\``,
     `- **Then:** ${next.length > 0 ? next.map((id) => `\`${id}\``).join(', ') : 'nothing — this is the end of the graph'}`,
+    ...expansionNote(node, next),
   ];
   return lines.join('\n');
 }
