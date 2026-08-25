@@ -45,9 +45,30 @@ for (const line of castLines.slice(1)) {
 }
 
 // Run frames, converted onto the same clock.
-const frames = readFileSync(runIn, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
-const runStart = Date.parse(frames[0].state.createdAt) / 1000 - header.timestamp;
-const frameTimes = frames.map((f) => runStart + f.ms / 1000);
+const allFrames = readFileSync(runIn, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+const runStart = Date.parse(allFrames[0].state.createdAt) / 1000 - header.timestamp;
+const allTimes = allFrames.map((f) => runStart + f.ms / 1000);
+
+// Window the run the same way the cast is windowed. A window that opens
+// mid-run — the usual case when cutting to one moment — would otherwise
+// replay the graph from its first frame while the agent pane is already
+// half-way through, and the offset between them comes out negative.
+//
+// Each frame is a complete state document, so the last frame at or before the
+// window is exactly the state the graph was in when the window opens: keep it
+// as the opener, pinned to the window's start, and drop everything earlier.
+const firstInWindow = allTimes.findIndex((t) => t >= start);
+const openerIdx = Math.max(0, (firstInWindow === -1 ? allFrames.length : firstInWindow) - 1);
+const keep = allFrames
+  .map((f, i) => ({ frame: f, t: allTimes[i], i }))
+  .filter(({ i, t }) => i >= openerIdx && t <= end);
+if (keep.length === 0) {
+  console.error(`warp: no run frames in window ${start}-${end}s`);
+  process.exit(1);
+}
+keep[0].t = Math.max(keep[0].t, start);
+const frames = keep.map((k) => k.frame);
+const frameTimes = keep.map((k) => k.t);
 
 // One warp over the union of both streams: any interval in which neither
 // stream produced anything is capped at `maxGap`.
