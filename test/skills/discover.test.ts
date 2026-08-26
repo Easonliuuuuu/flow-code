@@ -40,6 +40,24 @@ describe('skill discovery', () => {
     expect(found[0]!.body).toBe('Do the thing.');
   });
 
+  it('finds a skill in the Codex project alternate root', () => {
+    const base = mkdtempSync(join(tmpdir(), 'flow-code-codex-skills-test-'));
+    const repoRoot = join(base, 'repo');
+    const home = join(base, 'home');
+    mkdirSync(repoRoot, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const roots = defaultSkillRoots(repoRoot, home, 'codex');
+    const alternate = roots.projectAlternates?.[0];
+    expect(alternate).toBeDefined();
+    writeSkill(alternate!, 'shared-commit', 'Shared commit workflow.');
+
+    const found = discoverSkills(roots);
+
+    expect(found).toHaveLength(1);
+    expect(found[0]!.id).toBe('shared-commit');
+    expect(found[0]!.source).toBe('project');
+  });
+
   it('finds a skill in the user root', () => {
     const { roots } = tempTree();
     writeSkill(roots.user, 'personal', 'My own skill.');

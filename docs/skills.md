@@ -32,13 +32,15 @@ misspelled skill name never becomes a node that silently runs without it.
 | Source | Location | Travels with the repo |
 | --- | --- | --- |
 | `project` | `.claude/skills/<name>/SKILL.md` in this repo | Yes |
+| `project` (Codex) | `.agents/skills/<name>/SKILL.md` in this repo | Yes |
 | `user` | `~/.claude/skills/<name>/SKILL.md` | No |
 | `plugin` | installed marketplaces, referenced as `plugin:<name>` | No |
 | `path` | any path written directly in `workflow.yaml` | Yes, if inside the repo |
 
-Resolution order for a bare name: **project shadows user.** Plugin skills always carry
-a `plugin:` prefix, so they neither shadow nor are shadowed by a local skill of the
-same name.
+Resolution order for a bare name: **project shadows user.** When the Codex host is
+selected, `.agents/skills/` is searched alongside `.codex/skills/`; the project roots
+share the same precedence. Plugin skills always carry a `plugin:` prefix, so they
+neither shadow nor are shadowed by a local skill of the same name.
 
 An entry is treated as a path when it *looks* like one — it starts with `.` or `/`, or
 contains a `/`:
@@ -57,7 +59,9 @@ clone until that skill exists there too.
 
 flow-code warns about this before a run rather than failing — it is your machine and
 your call — and `flow-code skills` marks non-portable entries in its listing. To make a
-skill portable, move it into the repo's own `.claude/skills/`.
+skill portable, move it into the repo's own `.claude/skills/` for Claude, or
+`.agents/skills/` for Codex. A shared skill can keep its canonical copy under
+`.agents/skills/` and expose a small compatibility entry under `.claude/skills/`.
 
 ## Writing a skill
 
