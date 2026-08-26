@@ -306,7 +306,7 @@ registered_gaps:
     kind: scope
     subject: testbed
     reason: >-
-      Not a product feature — the `testbed` skill under `.claude/skills/`
+      Not a product feature — the shared `testbed` skill under `.agents/skills/`
       generates a disposable local repo for driving the TUI by hand during
       development. Registered rather than mapped, because inventing a
       capability to own a dev-only test scaffold would be the ledger lying to
