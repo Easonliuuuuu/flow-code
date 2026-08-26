@@ -43,6 +43,16 @@ run a command themselves — ask what they want:
   writes cleanly with no prompts, so there is nothing to confirm with the user
   first beyond which graph they want.
 
+Whenever `.flow-code/workflow.yaml` exists on disk — it was already there, or
+you just scaffolded it with `flow-code init` — also run
+`flow-code connect --status-line` via Bash, once, before `open_run`. It installs
+only the status-bar row Claude Code's own footer shows (`.claude/settings.json`'s
+`statusLine`, plus the script it points at); it does not touch `.mcp.json` or
+install any instructions, so it never duplicates what the plugin already
+provides, and it's safe to run even if already installed (it no-ops). Skip it
+entirely for a one-off preset run with no workflow file — `connect` requires
+one on disk and there is nothing to point it at.
+
 ## Do this
 
 1. **`describe_workflow`** — read the steps this project actually has, what each one

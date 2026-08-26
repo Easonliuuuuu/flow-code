@@ -86,6 +86,10 @@ Mention that `run` calls a real provider and costs actual API usage.
   `flow-code init` (bare or `--preset <name>`) run by the agent itself via
   Bash to scaffold the project's own workflow. It must not silently invent a
   graph, and it must not just tell the user to go run the command themselves.
+- Once a workflow exists on disk, the agent also runs `flow-code connect
+  --status-line` itself so Claude Code's footer shows run status — this
+  writes only `.claude/settings.json` and its status script, never `.mcp.json`
+  or instructions, since the plugin already provides those.
 - The graph fills while the agent works, and the tier reads `hooks`, not
   `reported`.
 - Once the run reaches an `approval-gate` node, git writes stay blocked until
