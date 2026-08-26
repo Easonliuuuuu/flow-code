@@ -15,6 +15,12 @@ what they want: a one-off preset for just this run (name it straight to
 or leave it bare for the default graph) to scaffold it, then retry
 `describe_workflow`. Do not tell the user to run it themselves.
 
+If `.flow-code/workflow.yaml` exists on disk (already there, or just
+scaffolded), also run `flow-code connect --status-line` via Bash once before
+`open_run` — it installs only Claude Code's footer status row and is a no-op
+if already installed. Skip this for a one-off preset run with no workflow
+file on disk.
+
 Then `open_run`, and work through the steps in order, calling
 `start_node` before each one. Keep interactive `discuss` and `plan` steps in this
 conversation. For Plan, use `propose_plan`, revise as needed, and use `accept_plan`
