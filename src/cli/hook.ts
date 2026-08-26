@@ -126,6 +126,7 @@ export function runPreToolUseHook(raw: string, host?: CompanionHost): void {
     handleOutcome(repoRoot, toolName, originalInput, input, enforceCall(repoRoot, {
       toolName: fallback.toolName,
       toolInput: fallback.toolInput,
+      ...(input.session_id !== undefined ? { sessionId: input.session_id } : {}),
       ...(input.agent_id !== undefined ? { agentId: input.agent_id } : {}),
       ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),
       ...(input.tool_use_id !== undefined ? { toolUseId: input.tool_use_id } : {}),
@@ -137,6 +138,7 @@ export function runPreToolUseHook(raw: string, host?: CompanionHost): void {
     const outcome = enforceCall(repoRoot, {
       toolName: call.toolName,
       toolInput: call.toolInput,
+      ...(input.session_id !== undefined ? { sessionId: input.session_id } : {}),
       ...(call.repositoryMutation !== undefined ? { repositoryMutation: call.repositoryMutation } : {}),
       ...(input.agent_id !== undefined ? { agentId: input.agent_id } : {}),
       ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),

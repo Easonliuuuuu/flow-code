@@ -78,8 +78,8 @@ function guard(fn: () => string): ToolResult {
 }
 
 /**
- * The run a tool call targets. An explicit id wins; otherwise the newest open
- * reported run, which is what a session working through one graph means.
+ * The run a tool call targets. An explicit id wins; otherwise the open run
+ * bound to this host session, with a single-open-run fallback.
  */
 function resolveRun(repoRoot: string, run: string | undefined): RunState {
   const states = listRunStates(repoRoot);
@@ -140,7 +140,7 @@ const runArg = {
   run: z
     .string()
     .optional()
-    .describe('Run id. Omit to use the run this session opened most recently.'),
+    .describe('Run id. Omit to use the open run bound to this host session.'),
 };
 
 /** A node's brief, resolved against the graph the run recorded. */
@@ -164,16 +164,37 @@ function briefFor(repoRoot: string, run: string | undefined, nodeId: string): st
   }
 }
 
-function isInteractiveNode(repoRoot: string, run: string | undefined, nodeId: string): boolean {
+/**
+ * Tell the host how the started node is meant to be worked.
+ *
+ * `interactive` is not the same as "not a fresh subagent": deterministic
+ * nodes and approval gates are both non-interactive in the registry, but the
+ * former must run its commands in the current session and the latter belongs
+ * to the user. Frugal workflows also deliberately disable delegation, so an
+ * agent-driven node must stay in the current session there too.
+ */
+function workModeFor(repoRoot: string, run: string | undefined, nodeId: string): string | undefined {
   try {
     const state = resolveRun(repoRoot, run);
-    if (!state.graph) return false;
-    return (
-      rehydrateGraph(state.graph, { repoRoot }).nodes.find((node) => node.id === nodeId)?.type
-        .interactive === true
-    );
+    if (!state.graph) return undefined;
+    const workflow = rehydrateGraph(state.graph, { repoRoot });
+    const node = workflow.nodes.find((candidate) => candidate.id === nodeId);
+    if (!node) return undefined;
+    if (node.type.id === 'approval-gate') {
+      return 'This is an approval gate. Stop and ask the user directly for the decision; do not delegate or decide it yourself.';
+    }
+    if (node.type.interactive) {
+      return 'This is an interactive step. Continue the discussion in the current user-facing conversation; do not delegate it to a fresh subagent.';
+    }
+    if (!node.type.agentDriven) {
+      return 'This is a deterministic step. Run its configured commands in the current session and report their actual results; do not delegate it.';
+    }
+    if (workflow.settings.subagents === false) {
+      return 'Delegation is disabled for this workflow. Do this step in the current session and do not spawn a subagent.';
+    }
+    return 'Run this step in a fresh subagent with the brief above, so it does not inherit this conversation\'s context. Report it complete when the subagent returns.';
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -244,19 +265,19 @@ export function buildMcpServer(repoRoot: string): McpServer {
       // its instructions through a tool cannot be holding stale ones: there is
       // no copy to go out of date with the workflow file.
       try {
+        const host = liveHeartbeat(repoRoot)?.host;
         return ok(
           generateInstructions(
             (
               await selectWorkflow(repoRoot, {
                 ...(graph !== undefined ? { graph } : {}),
                 ...(preset !== undefined ? { preset } : {}),
+                ...(host !== undefined ? { host } : {}),
               })
             ).workflow,
             {
               enforced: enforcementLive(repoRoot),
-              ...(liveHeartbeat(repoRoot)?.host !== undefined
-                ? { host: liveHeartbeat(repoRoot)!.host }
-                : {}),
+              ...(host !== undefined ? { host } : {}),
             },
           ),
         );
@@ -327,9 +348,7 @@ export function buildMcpServer(repoRoot: string): McpServer {
         ? result
         : ok(
             `${result.content[0]!.text}\n\n--- brief for \`${node}\` ---\n${brief}\n\n` +
-              (isInteractiveNode(repoRoot, run, node)
-                ? 'This is an interactive step. Continue the discussion in the current user-facing conversation; do not delegate it to a fresh subagent.'
-                : 'Run this step in a fresh subagent with the brief above, so it does not inherit this conversation\'s context. Report it complete when the subagent returns.'),
+              (workModeFor(repoRoot, run, node) ?? 'Work this step in the current session and report it complete when finished.'),
           );
     },
   );

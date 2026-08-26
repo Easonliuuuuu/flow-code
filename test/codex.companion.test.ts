@@ -109,6 +109,7 @@ describe('Codex tool adaptation', () => {
 
   it('enforces an apply_patch call through the shared policy', async () => {
     const dir = repo();
+    recordHeartbeat(dir, 'codex-session', 'codex');
     const { runId } = await openGuestRun(dir, { surface: 'mcp' });
     reportTransition(dir, runId, { nodeId: 'implement', kind: 'start' });
     expect(

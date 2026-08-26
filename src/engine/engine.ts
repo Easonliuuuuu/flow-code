@@ -4,6 +4,7 @@ import type { RunBaseline } from '../runstate/types.js';
 import { evaluateCondition } from '../workflow/condition.js';
 import type { ConditionalEdge } from '../workflow/graph.js';
 import type { LoopbackTrigger } from '../workflow/schema.js';
+import { loopbackTriggerFor } from '../workflow/routing.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import type {
   ExecuteContext,
@@ -240,18 +241,7 @@ export class Engine {
    * many paths reach it.
    */
   private upstreamNodeIds(id: string): string[] {
-    const collected: string[] = [];
-    const seen = new Set<string>();
-    const visit = (nodeId: string): void => {
-      for (const depId of this.wf.graph.directDependencies(nodeId)) {
-        if (seen.has(depId)) continue;
-        seen.add(depId);
-        if (this.nodeById(depId).type.contextTransparent) visit(depId);
-        collected.push(depId);
-      }
-    };
-    visit(id);
-    return collected;
+    return this.wf.graph.upstreamDependencies(id, (depId) => this.nodeById(depId).type.contextTransparent === true);
   }
 
   /**
@@ -526,24 +516,13 @@ export class Engine {
     const failed = sawError || this.store.node(node.id).status === 'error';
     // A rejected gate did not fail, but it is the same kind of event to a
     // return path: the run did not get what it came for.
-    const trigger: LoopbackTrigger = failed || this.wasRejectedGate(node) ? 'failure' : 'success';
+    const trigger: LoopbackTrigger =
+      loopbackTriggerFor(node, this.store.node(node.id)) ?? (failed ? 'failure' : 'success');
     const looped = !stoppedByBudget && this.fireLoopback(node.id, trigger);
     // Only a real failure cascades. A rejected gate ends at `done`, and the
     // approved-conditions on its out-edges already skip the branch it held —
     // cascading here as well would take down nodes the rejection branch needs.
     if (!looped && failed) this.markDownstreamSkipped(node.id);
-  }
-
-  /**
-   * A rejected Approval-Gate is a loop-back source even though it completed:
-   * `{ from: gate, to: implement, loopback: … }` predates rejection branches and
-   * stays supported. Its terminal status is `done`, so the failure path above
-   * would otherwise stop looking at it.
-   */
-  private wasRejectedGate(node: WorkflowNode): boolean {
-    if (node.type.id !== 'approval-gate') return false;
-    const output = this.store.node(node.id).output as { decision?: unknown } | undefined;
-    return output?.decision === 'rejected';
   }
 
   private startEligible(): void {

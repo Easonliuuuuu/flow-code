@@ -159,18 +159,32 @@ export function capabilitiesForNode(node: WorkflowNode): ReturnType<typeof capab
 }
 
 /**
- * The run enforcement applies to: the newest open run that flow-code's own
- * engine is not driving.
+ * The run enforcement applies to the open run bound to the current host
+ * session, or to the only open run when no host session id is available, that
+ * flow-code's own engine is not driving.
  *
  * An engine-driven run is deliberately skipped. That session already has the
  * real harness compiled into it, and a host session in the same repository is
  * doing something else entirely — applying that run's current node to it would
  * be enforcing one piece of work's envelope on another.
  */
-export function runUnderEnforcement(repoRoot: string): RunState | undefined {
-  return listRunStates(repoRoot)
+export function runUnderEnforcement(
+  repoRoot: string,
+  sessionId = liveHeartbeat(repoRoot)?.sessionId,
+): RunState | undefined {
+  const open = listRunStates(repoRoot)
     .filter((s) => s.finishedAt === undefined && s.enforcement?.tier !== 'engine')
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (open.length === 0) return undefined;
+  if (sessionId !== undefined) {
+    const matching = open.filter((s) => s.companionSessionId === sessionId);
+    if (matching.length > 0) return matching[0];
+    throw new Error('could not identify an open flow-code run for this host session');
+  }
+  if (open.length > 1) {
+    throw new Error('multiple open flow-code runs require an identifiable host session');
+  }
+  return open[0];
 }
 
 /**
@@ -212,6 +226,8 @@ export function blockingGate(workflow: Workflow, state: RunState, nodeId: string
 export interface EnforceInput {
   toolName: string;
   toolInput: Record<string, unknown>;
+  /** Host session id used to isolate concurrent companion runs in one checkout. */
+  sessionId?: string;
   /** Set when the call came from a delegated subagent rather than the session itself. */
   agentId?: string;
   agentType?: string;
@@ -236,7 +252,7 @@ export function enforceCall(repoRoot: string, input: EnforceInput): EnforcementO
 
   let state: RunState | undefined;
   try {
-    state = runUnderEnforcement(repoRoot);
+    state = runUnderEnforcement(repoRoot, input.sessionId);
   } catch (err) {
     return { kind: 'failed', reason: `could not read this repository's runs: ${message(err)}` };
   }

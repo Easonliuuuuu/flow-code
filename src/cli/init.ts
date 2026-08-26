@@ -9,6 +9,7 @@ import type { WorkflowPreset } from '../presets.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
 import { fail, repoRootFromCwd } from './context.js';
 import { preparePreset, scaffoldWorkflow, selectPresetInteractively } from './presetSetup.js';
+import { liveHeartbeat } from '../guest/enforce.js';
 
 export async function cmdInit(args: string[]): Promise<void> {
   const presetIdx = args.indexOf('--preset');
@@ -22,6 +23,7 @@ export async function cmdInit(args: string[]): Promise<void> {
   }
 
   const repoRoot = await repoRootFromCwd();
+  const host = liveHeartbeat(repoRoot)?.host;
   const path = join(repoRoot, WORKFLOW_RELATIVE_PATH);
 
   let preset: WorkflowPreset;
@@ -31,10 +33,10 @@ export async function cmdInit(args: string[]): Promise<void> {
     // (see below) — this just gives it the same CLI/skill prompts the
     // interactive picker gets, when there's a terminal to show them on.
     if (process.stdin.isTTY) {
-      await preparePreset(preset, repoRoot);
+      await preparePreset(preset, repoRoot, host);
     }
   } else if (!existsSync(path) && process.stdin.isTTY) {
-    const chosen = await selectPresetInteractively(repoRoot);
+    const chosen = await selectPresetInteractively(repoRoot, host);
     if (!chosen) {
       console.log('flow-code: setup cancelled — run `flow-code init` again when ready.');
       process.exit(0);
@@ -44,8 +46,13 @@ export async function cmdInit(args: string[]): Promise<void> {
     preset = DEFAULT_PRESET;
   }
 
-  const { justScaffolded } = await scaffoldWorkflow(repoRoot, path, preset, presetIdx >= 0, () =>
-    confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`),
+  const { justScaffolded } = await scaffoldWorkflow(
+    repoRoot,
+    path,
+    preset,
+    presetIdx >= 0,
+    () => confirm(`  Overwrite it with the \`${preset.name}\` preset? Existing content will be replaced.`),
+    host,
   );
 
   const existing = loadCredentials(repoRoot);

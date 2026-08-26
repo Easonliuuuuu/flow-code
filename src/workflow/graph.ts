@@ -99,6 +99,29 @@ export class Graph {
     return this.out.get(id) ?? [];
   }
 
+  /**
+   * Dependencies whose outputs should be carried into `id`.
+   *
+   * A context-transparent dependency contributes its own dependencies before
+   * its own output, so a gate that records a decision does not hide the result
+   * that led to it. The predicate belongs to the caller because transparency
+   * is a node-type property, not a property of the graph structure itself.
+   */
+  upstreamDependencies(id: string, isTransparent: (nodeId: string) => boolean): string[] {
+    const collected: string[] = [];
+    const seen = new Set<string>();
+    const visit = (nodeId: string): void => {
+      for (const dependencyId of this.directDependencies(nodeId)) {
+        if (seen.has(dependencyId)) continue;
+        seen.add(dependencyId);
+        if (isTransparent(dependencyId)) visit(dependencyId);
+        collected.push(dependencyId);
+      }
+    };
+    visit(id);
+    return collected;
+  }
+
   /** Every node reachable downstream of `id` (transitive, excluding `id`). */
   downstreamOf(id: string): Set<string> {
     const seen = new Set<string>();

@@ -136,10 +136,23 @@ function loopbackSection(workflow: Workflow): string {
   const loopbacks = workflow.graph.allLoopbacks();
   if (loopbacks.length === 0) return '';
   const rows = loopbacks.map(
-    (l) =>
-      `- When \`${l.from}\` fails, go back to \`${l.to}\` and work forward again ` +
-      `(up to ${l.maxAttempts} attempt${l.maxAttempts === 1 ? '' : 's'} at \`${l.from}\`). ` +
-      `Report \`${l.from}\` failed with the reason, then report \`${l.to}\` started.`,
+    (l) => {
+      const source = workflow.nodes.find((node) => node.id === l.from);
+      const trigger =
+        l.on === 'success'
+          ? `When \`${l.from}\` completes successfully`
+          : source?.type.id === 'approval-gate'
+            ? `When the user rejects \`${l.from}\``
+            : `When \`${l.from}\` fails`;
+      const report =
+        l.on === 'success'
+          ? `Report \`${l.from}\` complete, then report \`${l.to}\` started.`
+          : `Report \`${l.from}\` failed with the reason, then report \`${l.to}\` started.`;
+      return (
+        `- ${trigger}, go back to \`${l.to}\` and work forward again ` +
+        `(up to ${l.maxAttempts} attempt${l.maxAttempts === 1 ? '' : 's'} at \`${l.from}\`). ${report}`
+      );
+    },
   );
   return [
     '## When a step fails',
@@ -341,7 +354,7 @@ export function nodeBrief(
   const commands = Array.isArray(config?.['commands']) ? (config['commands'] as unknown[]) : undefined;
 
   const upstream = workflow.graph
-    .directDependencies(nodeId)
+    .upstreamDependencies(nodeId, (id) => workflow.nodes.find((candidate) => candidate.id === id)?.type.contextTransparent === true)
     .flatMap((id) => {
       const output = outputs[id];
       if (output === undefined) return [];

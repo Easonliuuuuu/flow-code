@@ -5,14 +5,17 @@ import { isCliAvailable, runCliInstall } from '../init/cliInstall.js';
 import { selectFromList } from '../init/SelectList.js';
 import { DEFAULT_PRESET, listPresets } from '../presets.js';
 import type { WorkflowPreset } from '../presets.js';
+import { presetScaffoldCommand } from '../presets.js';
 import { defaultSkillRoots, discoverSkills } from '../skills/discover.js';
 import { ensureFlowCodeGitignore } from '../workflow/gitignore.js';
 import { WORKFLOW_RELATIVE_PATH } from '../workflow/load.js';
+import { missingProjectPaths } from '../workflow/select.js';
+import type { CompanionHost } from '../guest/host.js';
 
 /** Which of `preset.requiredSkills` aren't discoverable from this repo yet. */
-export function missingSkillNames(preset: WorkflowPreset, repoRoot: string): string[] {
+export function missingSkillNames(preset: WorkflowPreset, repoRoot: string, host?: CompanionHost): string[] {
   if (preset.requiredSkills.length === 0) return [];
-  const available = new Set(discoverSkills(defaultSkillRoots(repoRoot)).map((s) => s.id));
+  const available = new Set(discoverSkills(defaultSkillRoots(repoRoot, undefined, host)).map((s) => s.id));
   return preset.requiredSkills.filter((name) => !available.has(name));
 }
 
@@ -23,24 +26,30 @@ export function missingSkillNames(preset: WorkflowPreset, repoRoot: string): str
  * starting point, and the run would fail with the same names anyway. This is
  * the fallback for whatever `resolvePresetSkills` didn't (or couldn't) fix.
  */
-function missingPresetSkills(preset: WorkflowPreset, repoRoot: string): string[] {
-  const missing = missingSkillNames(preset, repoRoot);
-  if (missing.length === 0) return [];
-  const roots = defaultSkillRoots(repoRoot);
+function missingPresetSkills(preset: WorkflowPreset, repoRoot: string, host?: CompanionHost): string[] {
+  const missing = missingSkillNames(preset, repoRoot, host);
+  const missingPaths = missingProjectPaths(preset, repoRoot);
+  if (missing.length === 0 && missingPaths.length === 0) return [];
+  const roots = defaultSkillRoots(repoRoot, undefined, host);
   // Name the command that fixes it when the preset carries one. Without this
   // the warning says "install them" and leaves the reader to work out how —
   // and the scaffolded file does not merely warn later, it fails to load,
   // because a node naming a skill that does not resolve is a validation
   // error. The interactive path offers to run this; a non-interactive `init`
   // (CI, a scripted setup) never gets the offer and needs the line.
-  const scaffold = preset.cli?.scaffoldSkills;
+  const scaffold = presetScaffoldCommand(preset, host);
   const remedy = scaffold
     ? `    Run \`${[scaffold.command, ...scaffold.args].join(' ')} .\` to scaffold them, or edit the \`skills:\` entries in the scaffolded file.`
     : '    Install them, or edit the `skills:` entries in the scaffolded file.';
   return [
-    `  Warning: ${missing.length} skill(s) this preset uses are not installed: ${missing.join(', ')}`,
-    `    Expected in ${roots.project}, ${roots.user}, or an installed plugin.`,
-    `    Until they resolve, \`flow-code validate\` and \`flow-code run\` will fail on this file.`,
+    ...(missing.length > 0
+      ? [`  Warning: ${missing.length} skill(s) this preset uses are not installed: ${missing.join(', ')}`]
+      : []),
+    ...(missingPaths.length > 0
+      ? [`  Warning: this preset is not initialized in this project; missing: ${missingPaths.join(', ')}`]
+      : []),
+    ...(missing.length > 0 ? [`    Expected in ${roots.project}, ${roots.user}, or an installed plugin.`] : []),
+    `    Until setup is complete, \`flow-code validate\` and \`flow-code run\` will fail on this file.`,
     remedy,
   ];
 }
@@ -66,6 +75,7 @@ export async function scaffoldWorkflow(
   preset: WorkflowPreset,
   presetExplicit: boolean,
   confirmOverwrite: () => Promise<boolean>,
+  host?: CompanionHost,
 ): Promise<ScaffoldResult> {
   const alreadyScaffolded = existsSync(path);
   let overwrite = false;
@@ -83,7 +93,7 @@ export async function scaffoldWorkflow(
     ensureGitExclude(repoRoot);
     console.log(`flow-code: ${overwrite ? 'overwrote' : 'created'} ${WORKFLOW_RELATIVE_PATH}`);
     console.log(`  ${preset.name === 'default' ? 'Default graph' : `Preset \`${preset.name}\``}: ${preset.summary}`);
-    for (const line of missingPresetSkills(preset, repoRoot)) console.log(line);
+    for (const line of missingPresetSkills(preset, repoRoot, host)) console.log(line);
   } else {
     console.log(`flow-code: ${WORKFLOW_RELATIVE_PATH} already exists — leaving it untouched.`);
   }
@@ -145,21 +155,26 @@ export async function resolvePresetSkills(
   repoRoot: string,
   deps: {
     missingSkillNames: (preset: WorkflowPreset, repoRoot: string) => string[];
+    missingProjectPaths?: (preset: WorkflowPreset, repoRoot: string) => string[];
     runScaffold: (command: { command: string; args: string[] }) => Promise<boolean>;
     promptAction: (preset: WorkflowPreset, missing: string[]) => Promise<SkillScaffoldAction | undefined>;
   },
+  host?: CompanionHost,
 ): Promise<void> {
-  if (!preset.cli?.scaffoldSkills) return;
+  const scaffold = presetScaffoldCommand(preset, host);
+  if (!scaffold) return;
   const missing = deps.missingSkillNames(preset, repoRoot);
-  if (missing.length === 0) return;
-  const action = await deps.promptAction(preset, missing);
+  const paths = deps.missingProjectPaths?.(preset, repoRoot) ?? [];
+  if (missing.length === 0 && paths.length === 0) return;
+  const needsSetup = [...missing, ...paths.map((path) => `project path ${path}`)];
+  const action = await deps.promptAction(preset, needsSetup);
   if (action !== 'run') return;
-  await deps.runScaffold({ ...preset.cli.scaffoldSkills, args: [...preset.cli.scaffoldSkills.args, repoRoot] });
+  await deps.runScaffold({ ...scaffold, args: [...scaffold.args, repoRoot] });
 }
 
 /** Yes/No picker for scaffolding a preset's missing skills via its CLI (e.g. `openspec init`). */
-function promptSkillScaffoldAction(preset: WorkflowPreset, missing: string[]): Promise<SkillScaffoldAction | undefined> {
-  const { command, args } = preset.cli!.scaffoldSkills!;
+function promptSkillScaffoldAction(preset: WorkflowPreset, missing: string[], host?: CompanionHost): Promise<SkillScaffoldAction | undefined> {
+  const { command, args } = presetScaffoldCommand(preset, host)!;
   const scaffoldCmd = `${command} ${args.join(' ')}`;
   return selectFromList(
     [
@@ -178,7 +193,7 @@ function promptSkillScaffoldAction(preset: WorkflowPreset, missing: string[]): P
  * (explicit `--preset` and the interactive picker) run the same two steps, so
  * they share one implementation rather than repeating the dependency literals.
  */
-export async function preparePreset(preset: WorkflowPreset, repoRoot: string): Promise<boolean> {
+export async function preparePreset(preset: WorkflowPreset, repoRoot: string, host?: CompanionHost): Promise<boolean> {
   const ready = await resolvePresetCli(preset, {
     isCliAvailable,
     runInstall: runCliInstall,
@@ -186,10 +201,11 @@ export async function preparePreset(preset: WorkflowPreset, repoRoot: string): P
   });
   if (!ready) return false;
   await resolvePresetSkills(preset, repoRoot, {
-    missingSkillNames,
+    missingSkillNames: (candidate, root) => missingSkillNames(candidate, root, host),
+    missingProjectPaths,
     runScaffold: runCliInstall,
-    promptAction: promptSkillScaffoldAction,
-  });
+    promptAction: (candidate, missing) => promptSkillScaffoldAction(candidate, missing, host),
+  }, host);
   return true;
 }
 
@@ -202,7 +218,7 @@ export async function preparePreset(preset: WorkflowPreset, repoRoot: string): P
  * the CLI missing) rather than bailing out of `init` — the user just picks
  * again, same as if that preset had no CLI dependency at all.
  */
-export async function selectPresetInteractively(repoRoot: string): Promise<WorkflowPreset | undefined> {
+export async function selectPresetInteractively(repoRoot: string, host?: CompanionHost): Promise<WorkflowPreset | undefined> {
   const presets = [DEFAULT_PRESET, ...listPresets()];
   for (;;) {
     const chosen = await selectFromList(
@@ -213,7 +229,7 @@ export async function selectPresetInteractively(repoRoot: string): Promise<Workf
       { prompt: 'Starting workflow:' },
     );
     if (!chosen) return undefined; // Esc/Ctrl+C on the picker itself still cancels init
-    if (!(await preparePreset(chosen, repoRoot))) {
+    if (!(await preparePreset(chosen, repoRoot, host))) {
       console.log(`flow-code: \`${chosen.cli!.command}\` still not found on PATH — pick another preset or install it manually.`);
       continue;
     }

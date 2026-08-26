@@ -39,8 +39,8 @@ Usage:
                               Print the workflow instructions before opening a run.
   flow-code node open [--graph <name> | --preset <name>] [--json]
                               Open a run against the project workflow or a canonical preset and print its id.
-                              Every later subcommand defaults to the newest open reported run,
-                              so the id is only needed when several are open at once
+                              Every later subcommand defaults to this host session's open run,
+                              so the id is only needed when the session cannot be identified
   flow-code node start <id> [--run <runId>]
                               Report that node <id> has started
   flow-code node done <id> [--output <json>|--output-file <path>] [--run <runId>]
@@ -91,8 +91,7 @@ const VALUE_FLAGS = ['--run', '--graph', '--preset', '--output', '--output-file'
 
 /**
  * Which run a subcommand targets. An explicit `--run` wins; otherwise the
- * newest open reported run, which is what an agent working through one graph
- * in one session always means.
+ * current host session's open run, with a single-open-run fallback.
  *
  * Never falls back to an engine-driven run: those belong to the process
  * driving them, and silently targeting one is exactly the mistake ownership
@@ -252,11 +251,12 @@ async function cmdOpen(repoRoot: string, args: string[]): Promise<void> {
 async function cmdDescribe(repoRoot: string, args: string[]): Promise<void> {
   const graph = flagValue(args, '--graph');
   const preset = flagValue(args, '--preset');
+  const host = liveHeartbeat(repoRoot)?.host;
   const selected = await selectWorkflow(repoRoot, {
     ...(graph !== undefined ? { graph } : {}),
     ...(preset !== undefined ? { preset } : {}),
+    ...(host !== undefined ? { host } : {}),
   });
-  const host = liveHeartbeat(repoRoot)?.host;
   console.log(
     generateInstructions(selected.workflow, {
       enforced: enforcementLive(repoRoot),

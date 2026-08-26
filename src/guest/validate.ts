@@ -16,9 +16,9 @@
  * is reconciliation's job, against the tree.
  */
 
-import { isRejectedGate } from '../runstate/types.js';
-import type { GateDecision, NodeRunState, NodeStatus, RunState } from '../runstate/types.js';
+import { isRejectedGate, type GateDecision, type NodeRunState, type NodeStatus, type RunState } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
+import { loopbackMatches, reportedDependencyCleared, unmetCondition } from '../workflow/routing.js';
 import type { PlanProposal } from '../workflow/splice.js';
 
 /** A transition an external agent claims to have made. */
@@ -69,26 +69,6 @@ export type TransitionResult =
 
 function reject(reason: string): TransitionResult {
   return { ok: false, reason };
-}
-
-/**
- * Whether an upstream node lets its dependents start.
- *
- * Mirrors the engine's own scheduling rule rather than restating it loosely: a
- * node skipped because a routing condition sent the run elsewhere did not
- * fail, so it does not hold up a node that also has a live path in. A node
- * skipped *because* something above it broke does.
- */
-function upstreamSatisfied(node: NodeRunState | undefined): boolean {
-  if (!node) return false;
-  // A gate the user said no to never clears, whatever status it carries. The
-  // guest path records a rejection as `error`, so this is belt-and-braces
-  // today — but it is the check that actually holds the property, and it holds
-  // it the same way `enforce.ts` blocks git writes: on the recorded decision,
-  // not on a status whose meaning differs between the engine and this path.
-  if (isRejectedGate(node)) return false;
-  if (node.status === 'done') return true;
-  return node.status === 'skipped' && node.skipReason === 'condition';
 }
 
 function nodeOf(workflow: Workflow, nodeId: string): WorkflowNode | undefined {
@@ -184,6 +164,16 @@ function validateStart(
   current: NodeRunState,
 ): TransitionResult {
   if (current.status === 'running') return reject(`node \`${node.id}\` is already running`);
+  if (current.status === 'skipped') {
+    return reject(
+      `node \`${node.id}\` was skipped (${current.skipReason ?? 'unknown'}); do not report it started on this route`,
+    );
+  }
+  if (current.status === 'error' && node.type.id === 'approval-gate' && isRejectedGate(current)) {
+    return reject(
+      `gate \`${node.id}\` already has a rejected decision; follow its selected return path instead of answering it again`,
+    );
+  }
   // A completed node is re-entered only by a loop-back — and under a reported
   // run the agent *is* the loop-back, because nothing routes it. Refusing this
   // would make the return path the generated instructions describe impossible
@@ -192,9 +182,24 @@ function validateStart(
   if (current.status === 'done') return validateLoopbackReentry(workflow, state, node);
   // `error` is startable on purpose: retrying a node that failed on its own is
   // a further attempt at it. `idle` is the ordinary first attempt.
-  const unsatisfied = workflow.graph
-    .directDependencies(node.id)
-    .filter((id) => !upstreamSatisfied(state.nodes[id]));
+  const dependencies = workflow.graph.directDependencies(node.id);
+  const unsettled = dependencies.filter((id) => {
+    const upstream = state.nodes[id];
+    return upstream?.status !== 'done' && upstream?.status !== 'error' && upstream?.status !== 'skipped';
+  });
+  if (unsettled.length > 0) {
+    const which = unsettled.map((id) => `\`${id}\` (${state.nodes[id]?.status ?? 'unknown'})`).join(', ');
+    return reject(`node \`${node.id}\` cannot start while its upstream is unfinished: ${which}`);
+  }
+  const unmet = unmetCondition(workflow.graph, state, node.id);
+  if (unmet) {
+    return reject(
+      `node \`${node.id}\` is not on the selected route — condition \`${unmet.condition.source}\` is not met`,
+    );
+  }
+  const unsatisfied = dependencies.filter(
+    (id) => !reportedDependencyCleared(workflow.graph, state, node.id, id),
+  );
   if (unsatisfied.length > 0) {
     const which = unsatisfied
       .map((id) => `\`${id}\` (${state.nodes[id]?.status ?? 'unknown'})`)
@@ -206,11 +211,11 @@ function validateStart(
 
 /**
  * Re-entering a finished node, which is only legal as the target of a
- * loop-back whose source has actually failed.
+ * loop-back whose source reached the loop-back's declared outcome.
  *
  * The engine routes this; here the agent walks it, so the check is the same
  * one the engine makes before it reroutes — is there a declared return path,
- * did the node it returns from fail, and has it any attempts left. Without the
+ * did the node it returns from reach that outcome, and has it any attempts left. Without the
  * attempt ceiling a reported run could loop for ever and record it as
  * progress, which is the failure `maxAttempts` exists to bound.
  */
@@ -219,12 +224,14 @@ function validateLoopbackReentry(
   state: RunState,
   node: WorkflowNode,
 ): TransitionResult {
-  const returning = workflow.graph
-    .allLoopbacks()
-    .filter((l) => l.to === node.id && state.nodes[l.from]?.status === 'error');
+  const returning = workflow.graph.allLoopbacks().filter((l) => {
+    if (l.to !== node.id) return false;
+    const source = nodeOf(workflow, l.from);
+    return source !== undefined && loopbackMatches(l, source, state.nodes[l.from]);
+  });
   if (returning.length === 0) {
     return reject(
-      `node \`${node.id}\` is already done, and no failing step declares a return path to it`,
+      `node \`${node.id}\` is already done, and no step with the declared loop-back outcome returns to it`,
     );
   }
   const live = returning.find((l) => (state.nodes[l.from]?.attempt ?? 1) < l.maxAttempts);

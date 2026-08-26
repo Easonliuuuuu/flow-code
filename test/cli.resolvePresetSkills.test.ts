@@ -52,9 +52,10 @@ describe('resolvePresetSkills', () => {
     await expect(resolvePresetSkills(OPENSPEC, '/repo', d)).resolves.toBeUndefined();
   });
 
-  it('is a no-op for spec-kit, which has no skills to scaffold', async () => {
+  it('checks Spec Kit skills when its initializer is configured', async () => {
     const d = deps({ missing: [] });
     await resolvePresetSkills(SPEC_KIT, '/repo', d);
-    expect(d.missingSkillNames).not.toHaveBeenCalled();
+    expect(d.missingSkillNames).toHaveBeenCalledWith(SPEC_KIT, '/repo');
+    expect(d.promptAction).not.toHaveBeenCalled();
   });
 });

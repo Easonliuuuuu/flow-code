@@ -231,13 +231,13 @@ describe('walking a loop-back by hand', () => {
     expect(result.accepted.reset).toEqual(['check']);
   });
 
-  it('refuses to re-enter a finished node no failing step returns to', () => {
+  it('refuses to re-enter a finished node no matching loop-back returns to', () => {
     // `discuss` is done and nothing loops back to it.
     const reason = reasonFor(
       stateWith({ discuss: node('done'), implement: node('error') }),
       { nodeId: 'discuss', kind: 'start' },
     );
-    expect(reason).toContain('no failing step declares a return path');
+    expect(reason).toContain('no step with the declared loop-back outcome returns to it');
   });
 
   it('refuses once the failing step has spent its attempts', () => {
@@ -303,6 +303,17 @@ edges:
       node('error', { output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' } }),
     );
     expect(result.ok).toBe(false);
+  });
+
+  it('does not let a rejected gate be answered a second time', () => {
+    const result = validateTransition(
+      gated,
+      gatedState(
+        node('error', { output: { decision: 'rejected', decidedAt: '2026-08-15T00:00:00.000Z' } }),
+      ),
+      { nodeId: 'gate', kind: 'start' },
+    );
+    expect(result).toMatchObject({ ok: false, reason: expect.stringContaining('already has a rejected decision') });
   });
 
   it('lets the dependent start once the gate is approved', () => {
