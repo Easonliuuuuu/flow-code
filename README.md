@@ -144,7 +144,7 @@ with the expensive parts removed. Full measurement and five ways to spend less:
 | `flow-code watch [runId]` | Follow a run started elsewhere — same graph, read-only |
 | `flow-code status [--line] [--json] [--script] [--width N] [--dir <path>]` | Summarize the current run in one or two rows |
 | `flow-code node <sub> …` | Report graph progress from an agent flow-code is not running |
-| `flow-code connect [--check] [--status-line]` | Install the reporting surface into this project's agent config |
+| `flow-code connect [--host claude\|codex\|all] [--check] [--status-line]` | Install the reporting surface into this project's agent config |
 | `flow-code mcp` | Serve the reporting tools over MCP |
 | `flow-code hook <event>` | Apply the current step's capabilities to a host tool call |
 | `flow-code reconcile [runId] [--json]` | Check a run's claims against the repository |

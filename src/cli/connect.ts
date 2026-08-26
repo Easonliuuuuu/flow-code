@@ -28,6 +28,7 @@ import {
   type InstructionState,
 } from '../guest/instructions.js';
 import type { Workflow } from '../workflow/load.js';
+import type { CompanionHost } from '../guest/host.js';
 import { fail, loadWorkflowOrFail, repoRootFromCwd } from './context.js';
 import { statusLineScript } from './status.js';
 
@@ -38,6 +39,11 @@ const SKILL_PATH = join('.claude', 'skills', 'flow-code-workflow', 'SKILL.md');
 const MCP_CONFIG = '.mcp.json';
 const HOST_SETTINGS = join('.claude', 'settings.json');
 const STATUS_SCRIPT = join('.claude', 'flow-code-status.sh');
+const CODEX_CONFIG = join('.codex', 'config.toml');
+const CODEX_HOOKS = join('.codex', 'hooks.json');
+const CODEX_SKILL_PATH = join('.agents', 'skills', 'flow-code-workflow', 'SKILL.md');
+const CODEX_BEGIN = '# flow-code:begin';
+const CODEX_END = '# flow-code:end';
 const SERVER_NAME = 'flow-code';
 
 /**
@@ -83,8 +89,11 @@ export function launch(entry: Launcher, ...subcommand: string[]): { command: str
 }
 
 /** The same thing as one shell string, which is how a hook is registered. */
-export function hookCommand(entry: Launcher): string {
-  const { command, args } = launch(entry, 'hook', 'pretooluse');
+export function hookCommand(entry: Launcher, host: CompanionHost = 'claude'): string {
+  const { command, args } =
+    host === 'claude'
+      ? launch(entry, 'hook', 'pretooluse')
+      : launch(entry, 'hook', 'pretooluse', '--host', host);
   return [command, ...args].map((part) => (part.includes(' ') ? JSON.stringify(part) : part)).join(' ');
 }
 
@@ -226,6 +235,65 @@ export function mergeMcpConfig(existing: string | undefined, entry: unknown): st
   return `${JSON.stringify({ ...config, mcpServers: servers }, null, 2)}\n`;
 }
 
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function codexConfigBlock(entry: { command: string; args: string[] }): string {
+  return [
+    CODEX_BEGIN,
+    '[mcp_servers.flow-code]',
+    `command = ${tomlString(entry.command)}`,
+    `args = ${JSON.stringify(entry.args)}`,
+    'required = true',
+    'default_tools_approval_mode = "approve"',
+    '',
+    '[mcp_servers.flow-code.tools.decide_gate]',
+    'approval_mode = "prompt"',
+    '',
+    '[mcp_servers.flow-code.tools.accept_plan]',
+    'approval_mode = "prompt"',
+    CODEX_END,
+  ].join('\n');
+}
+
+/** Merge the flow-code-owned TOML block into Codex's project config. */
+export function mergeCodexConfig(
+  existing: string | undefined,
+  entry: { command: string; args: string[] },
+): string | undefined {
+  const block = codexConfigBlock(entry);
+  const text = existing ?? '';
+  const owned = new RegExp(`${escapeRegExp(CODEX_BEGIN)}[\\s\\S]*?${escapeRegExp(CODEX_END)}`, 'm');
+  const withoutOwned = text.replace(owned, '').trim();
+  if (/^\[mcp_servers\.flow-code\]$/m.test(withoutOwned)) {
+    throw new Error(`${CODEX_CONFIG} already configures flow-code outside its managed section — merge it manually before connecting.`);
+  }
+  if (text.match(owned)?.[0] === block && withoutOwned === text.replace(owned, '').trim()) return undefined;
+  if (owned.test(text)) return `${text.replace(owned, block).replace(/\n*$/, '\n')}`;
+  return text.trim() === '' ? `${block}\n` : `${text.trimEnd()}\n\n${block}\n`;
+}
+
+/** Merge the Codex hook using the same protocol shape as Claude's hook. */
+export function mergeCodexHooks(existing: string | undefined, command: string): string | undefined {
+  let hooks: HostSettings = {};
+  if (existing !== undefined && existing.trim() !== '') {
+    try {
+      hooks = JSON.parse(existing) as HostSettings;
+    } catch {
+      throw new Error(`${CODEX_HOOKS} is not valid JSON — fix it before connecting.`);
+    }
+  }
+  if (hasHook(hooks, command)) return undefined;
+  const preToolUse = [...(hooks.hooks?.['PreToolUse'] ?? [])];
+  preToolUse.push({ matcher: '*', hooks: [{ type: 'command', command, timeout: 10 }] });
+  return `${JSON.stringify({ ...hooks, hooks: { ...hooks.hooks, PreToolUse: preToolUse } }, null, 2)}\n`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function read(path: string): string | undefined {
   try {
     return readFileSync(path, 'utf8');
@@ -246,6 +314,10 @@ function writeIfChanged(path: string, content: string): boolean {
 function instructionTargets(repoRoot: string): string[] {
   const present = INSTRUCTION_FILES.filter((f) => existsSync(join(repoRoot, f)));
   return present.length > 0 ? [...present] : ['AGENTS.md'];
+}
+
+function codexInstructionTargets(): string[] {
+  return ['AGENTS.md'];
 }
 
 export interface SurfaceReport {
@@ -310,6 +382,53 @@ export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
   return reports;
 }
 
+/** What the Codex project surface has installed right now. */
+export function inspectCodex(repoRoot: string, workflow: Workflow): SurfaceReport[] {
+  const reports: SurfaceReport[] = [];
+  const enforced = { enforced: true };
+  const skill = read(join(repoRoot, CODEX_SKILL_PATH));
+  reports.push({
+    path: CODEX_SKILL_PATH,
+    state:
+      skill === undefined
+        ? 'absent'
+        : skill === skillDocument(workflow, { enforced: true, host: 'codex' })
+          ? 'current'
+          : 'stale',
+  });
+
+  const agents = read(join(repoRoot, 'AGENTS.md'));
+  const section = agents === undefined ? undefined : installedSection(agents);
+  const instructionStateValue = instructionState(section, workflow, enforced);
+  reports.push({
+    path: 'AGENTS.md',
+    state: instructionStateValue,
+    ...(instructionStateValue === 'stale' && section ? { drift: describeDrift(section, workflow) } : {}),
+  });
+
+  const config = read(join(repoRoot, CODEX_CONFIG));
+  let configState: InstructionState = 'absent';
+  try {
+    if (config !== undefined) {
+      configState = mergeCodexConfig(config, launch(serverCommand(), 'mcp')) === undefined ? 'current' : 'stale';
+    }
+  } catch {
+    configState = 'stale';
+  }
+  reports.push({ path: CODEX_CONFIG, state: configState });
+
+  const hooks = read(join(repoRoot, CODEX_HOOKS));
+  let hooked = false;
+  try {
+    const parsed = hooks === undefined ? {} : (JSON.parse(hooks) as HostSettings);
+    hooked = hooks !== undefined && hasHook(parsed, hookCommand(serverCommand(), 'codex'));
+  } catch {
+    hooked = false;
+  }
+  reports.push({ path: CODEX_HOOKS, state: hooked ? 'current' : 'absent' });
+  return reports;
+}
+
 /**
  * What the user gets, and — just as important — what they do not.
  *
@@ -317,29 +436,70 @@ export function inspect(repoRoot: string, workflow: Workflow): SurfaceReport[] {
  * because the failure this whole surface guards against is someone reading a
  * green graph as a stronger claim than it is.
  */
-const WHAT_YOU_GET =
-  'Installed: the reporting tools, this project\'s instructions, the enforcement hook, and a\n' +
-  '  status row showing the run in your session — no second terminal needed.\n' +
-  '  While a step is in progress, tool calls outside that step\'s capability set are denied, and\n' +
-  '  git writes stay blocked behind an unapproved approval gate.\n\n' +
-  '  Still not in force, because flow-code did not start your session: process-level guards\n' +
-  '  (working directory, environment, push url), per-node model selection, which subagent types\n' +
-  '  are available, token accounting, and\n' +
-  '  automatic loop-back routing. A run records the `hooks` tier only when the hook is verified\n' +
-  '  to be running; otherwise it records `reported` and says so.';
+function whatYouGet(host: ConnectHost): string {
+  const hosts = host === 'all' ? 'Claude Code and Codex' : host === 'codex' ? 'Codex' : 'Claude Code';
+  const status = host === 'codex' ? '' : ' and a\n  status row showing the run in your session';
+  const limitation =
+    host === 'codex'
+      ? '\n  Codex hosted tools such as web search are not visible to this local hook, so the run records\n  that limitation rather than claiming complete tool-call observation.'
+      : '';
+  const installed = host === 'claude' ? 'Installed' : `Installed for ${hosts}`;
+  return (
+    `${installed}: the reporting tools, this project's instructions, and the enforcement hook${status} —\n` +
+    '  no second terminal needed.\n' +
+    '  While a step is in progress, observable local tool calls outside that step\'s capability set\n' +
+    '  are denied, and git writes stay blocked behind an unapproved approval gate.' +
+    limitation +
+    '\n\n  Still not in force, because flow-code did not start your session: process-level guards\n' +
+    '  (working directory, environment, push url), per-node model selection, which subagent types\n' +
+    '  are available, token accounting, and automatic loop-back routing. A run records the `hooks`\n' +
+    '  tier only when the hook is verified to be running; otherwise it records `reported` and says so.'
+  );
+}
+
+type ConnectHost = CompanionHost | 'all';
+
+function parseHost(args: string[]): ConnectHost {
+  const values = args.flatMap((arg, index) => {
+    if (arg === '--host') return [args[index + 1]];
+    if (arg.startsWith('--host=')) return [arg.slice('--host='.length)];
+    return [];
+  });
+  if (values.length === 0) return 'claude';
+  if (values.length > 1 || values[0] === undefined || !['claude', 'codex', 'all'].includes(values[0])) {
+    throw new Error('connect --host expects exactly one of: claude, codex, all');
+  }
+  return values[0] as ConnectHost;
+}
+
+function selectedHosts(host: ConnectHost): CompanionHost[] {
+  return host === 'all' ? ['claude', 'codex'] : [host];
+}
 
 export async function cmdConnect(args: string[]): Promise<void> {
   const repoRoot = await repoRootFromCwd();
   const workflow = loadWorkflowOrFail(repoRoot);
+  let host: ConnectHost;
+  try {
+    host = parseHost(args);
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+    return;
+  }
+  const hosts = selectedHosts(host);
 
   if (args.includes('--check')) {
-    for (const report of inspect(repoRoot, workflow)) {
-      const label =
-        report.state === 'current' ? 'ok     ' : report.state === 'stale' ? 'stale  ' : 'missing';
-      console.log(`  ${label} ${report.path}`);
-      for (const line of report.drift ?? []) console.log(`          ${line}`);
+    for (const selected of hosts) {
+      console.log(`  ${selected}:`);
+      const reports = selected === 'codex' ? inspectCodex(repoRoot, workflow) : inspect(repoRoot, workflow);
+      for (const report of reports) {
+        const label =
+          report.state === 'current' ? 'ok     ' : report.state === 'stale' ? 'stale  ' : 'missing';
+        console.log(`    ${label} ${report.path}`);
+        for (const line of report.drift ?? []) console.log(`            ${line}`);
+      }
     }
-    console.log(`\n  ${WHAT_YOU_GET}`);
+    console.log(`\n  ${whatYouGet(host)}`);
     return;
   }
 
@@ -352,6 +512,11 @@ export async function cmdConnect(args: string[]): Promise<void> {
   // plugin user still has to install per project. This flag is that install and
   // nothing else, so running it in a plugin-managed repo does not also scatter
   // a second copy of the instructions the plugin is already serving.
+  if (args.includes('--status-line') && hosts.includes('codex') && !hosts.includes('claude')) {
+    fail('Codex does not expose a project status-line setting; use `flow-code status --line` from your own status bar.');
+    return;
+  }
+
   if (args.includes('--status-line')) {
     try {
       for (const path of installStatusLine(repoRoot, entry)) written.push(path);
@@ -372,32 +537,74 @@ export async function cmdConnect(args: string[]): Promise<void> {
       for (const path of written) console.log(`  ${path}`);
       console.log('\n  Start a new session to pick it up.');
     }
-    return;
-  }
-
-  // `connect` installs the enforcement hook, so the instructions it writes
-  // describe a session in which calls really are checked.
-  if (writeIfChanged(join(repoRoot, SKILL_PATH), skillDocument(workflow, { enforced: true })))
-    written.push(SKILL_PATH);
-
-  const section = instructionsSection(workflow, { enforced: true });
-  for (const file of instructionTargets(repoRoot)) {
-    const path = join(repoRoot, file);
-    if (writeIfChanged(path, spliceSection(read(path) ?? '', section))) written.push(file);
+    if (host === 'claude') return;
   }
 
   try {
-    const merged = mergeMcpConfig(read(join(repoRoot, MCP_CONFIG)), launch(entry, 'mcp'));
-    if (merged !== undefined && writeIfChanged(join(repoRoot, MCP_CONFIG), merged)) {
-      written.push(MCP_CONFIG);
-    }
-    const settings = mergeHookSettings(read(join(repoRoot, HOST_SETTINGS)), hookCommand(entry));
-    if (settings !== undefined && writeIfChanged(join(repoRoot, HOST_SETTINGS), settings)) {
-      written.push(HOST_SETTINGS);
+    if (hosts.includes('claude')) {
+      // `connect` installs the enforcement hook, so the instructions it writes
+      // describe a session in which calls really are checked.
+      if (writeIfChanged(join(repoRoot, SKILL_PATH), skillDocument(workflow, { enforced: true })))
+        written.push(SKILL_PATH);
+
+      const section = instructionsSection(workflow, { enforced: true });
+      for (const file of instructionTargets(repoRoot)) {
+        const path = join(repoRoot, file);
+        if (writeIfChanged(path, spliceSection(read(path) ?? '', section))) written.push(file);
+      }
+
+      const merged = mergeMcpConfig(read(join(repoRoot, MCP_CONFIG)), launch(entry, 'mcp'));
+      if (merged !== undefined && writeIfChanged(join(repoRoot, MCP_CONFIG), merged)) {
+        written.push(MCP_CONFIG);
+      }
+      const settings = mergeHookSettings(read(join(repoRoot, HOST_SETTINGS)), hookCommand(entry));
+      if (settings !== undefined && writeIfChanged(join(repoRoot, HOST_SETTINGS), settings)) {
+        written.push(HOST_SETTINGS);
+      }
+
+      if (!args.includes('--status-line')) {
+        for (const path of installStatusLine(repoRoot, entry)) {
+          if (!written.includes(path)) written.push(path);
+        }
+      }
     }
 
-    for (const path of installStatusLine(repoRoot, entry)) {
-      if (!written.includes(path)) written.push(path);
+    if (hosts.includes('codex')) {
+      const codexSkillInstructions = { enforced: true, host: 'codex' as const };
+      if (
+        writeIfChanged(
+          join(repoRoot, CODEX_SKILL_PATH),
+          skillDocument(workflow, codexSkillInstructions),
+        )
+      )
+        written.push(CODEX_SKILL_PATH);
+
+      // AGENTS.md is shared by both hosts when --host all is used. Keep that
+      // section host-neutral; the Codex skill and runtime MCP brief carry the
+      // Codex-only hosted-tool disclosure.
+      const sharedInstructions = { enforced: true };
+      for (const file of codexInstructionTargets()) {
+        const path = join(repoRoot, file);
+        if (
+          writeIfChanged(
+            path,
+            spliceSection(read(path) ?? '', instructionsSection(workflow, sharedInstructions)),
+          )
+        )
+          written.push(file);
+      }
+
+      const codexConfig = mergeCodexConfig(read(join(repoRoot, CODEX_CONFIG)), launch(entry, 'mcp'));
+      if (codexConfig !== undefined && writeIfChanged(join(repoRoot, CODEX_CONFIG), codexConfig)) {
+        written.push(CODEX_CONFIG);
+      }
+      const codexHooks = mergeCodexHooks(
+        read(join(repoRoot, CODEX_HOOKS)),
+        hookCommand(entry, 'codex'),
+      );
+      if (codexHooks !== undefined && writeIfChanged(join(repoRoot, CODEX_HOOKS), codexHooks)) {
+        written.push(CODEX_HOOKS);
+      }
     }
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
@@ -411,10 +618,10 @@ export async function cmdConnect(args: string[]): Promise<void> {
   }
   if (!entry.portable) {
     console.log(
-      `\n  \`flow-code\` is not on your PATH, so ${MCP_CONFIG} points at this checkout directly.\n` +
+      `\n  \`flow-code\` is not on your PATH, so the generated host config points at this checkout directly.\n` +
         '  Install it globally and re-run `flow-code connect` if you intend to commit that file.',
     );
   }
-  console.log(`\n  ${WHAT_YOU_GET}`);
+  console.log(`\n  ${whatYouGet(host)}`);
   console.log('\n  Start a new agent session to pick up the change, then watch with `flow-code watch`.');
 }

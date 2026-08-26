@@ -564,7 +564,7 @@ export function App({
   // tiers did — so that layout, and everything measured against it, is
   // untouched for them.
   const tier = effectiveTier(runState.enforcement);
-  const tierLine = tierDisclosure(tier);
+  const tierLine = tierDisclosure(tier, runState.enforcement);
   const headerRows = HEADER_ROWS + (tierLine ? 1 : 0) + (demo ? 1 : 0);
   const docked = dockedLayout(
     { columns, rows },

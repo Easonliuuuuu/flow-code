@@ -25,7 +25,8 @@ import {
   unattributedOwner,
 } from '../runstate/persist.js';
 import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
-import { enforcementLive } from './enforce.js';
+import { enforcementLive, liveHeartbeat } from './enforce.js';
+import { hostSurface } from './host.js';
 import { planOutput } from '../registry/index.js';
 import type { AttemptRecord, NodeRunState, RecordedGraph, RunState } from '../runstate/types.js';
 import { WorkflowValidationError, type Workflow } from '../workflow/load.js';
@@ -168,6 +169,9 @@ export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Prom
     baseline = null;
   }
 
+  const heartbeat = liveHeartbeat(repoRoot);
+  const enforcementTier = enforcementLive(repoRoot) ? 'hooks' : 'reported';
+  const host = hostSurface(heartbeat?.host);
   const state: RunState = {
     runId: randomUUID(),
     createdAt: new Date().toISOString(),
@@ -177,7 +181,10 @@ export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Prom
     // Verified, never assumed from an installed plugin: hooks can be turned
     // off after installation, and a settings file states an intention rather
     // than a fact. `enforcementLive` reads evidence the hook itself wrote.
-    enforcement: enforcementOf(enforcementLive(repoRoot) ? 'hooks' : 'reported', opts.surface),
+    enforcement: {
+      ...enforcementOf(enforcementTier, opts.surface),
+      ...(host !== undefined ? { host: host.host, limitations: host.limitations } : {}),
+    },
     baseline,
     graph: recordGraph(workflow, opts.graph),
     nodes,
