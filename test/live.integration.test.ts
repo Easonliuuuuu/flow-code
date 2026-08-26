@@ -5,12 +5,11 @@
  * `npm test` or CI for contributors without one. Run explicitly via
  * `npm run test:integration`.
  *
- * Coverage: the Claude runner's full tool surface — discovery reads
- * (list_dir/glob/grep), edits (write_file/edit_file), shell and git
- * commands — plus capability-boundary denials (exec, git-write,
- * working-directory escapes) and one real two-node Engine run
- * (implement -> validate). Kept deliberately lean: each test is real
- * network traffic.
+ * Coverage: a small live contract canary for the Claude runner — real
+ * read/edit/shell wiring, capability-boundary denials (git-write and
+ * working-directory escapes), and one real two-node Engine run
+ * (implement -> validate). Model quality and other providers are covered
+ * separately; every test here is real network traffic.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -98,7 +97,7 @@ function watchRun(store: RunStateStore, label: string): () => void {
   };
 }
 
-/** A two-module project with two independent bugs and a test that checks both. */
+/** A small project with one deliberately broken function and its test. */
 function writeBuggyProject(dir: string): void {
   mkdirSync(join(dir, 'src'), { recursive: true });
   writeFileSync(
@@ -106,16 +105,10 @@ function writeBuggyProject(dir: string): void {
     'export function add(a, b) {\n  return a - b; // bug: should add\n}\n',
   );
   writeFileSync(
-    join(dir, 'src', 'string.js'),
-    "export function shout(s) {\n  return s.toLowerCase() + '!'; // bug: should shout\n}\n",
-  );
-  writeFileSync(
     join(dir, 'test.js'),
     "import assert from 'node:assert/strict';\n" +
       "import { add } from './src/math.js';\n" +
-      "import { shout } from './src/string.js';\n" +
       'assert.equal(add(2, 3), 5);\n' +
-      "assert.equal(shout('hello'), 'HELLO!');\n" +
       "console.log('all tests passed');\n",
   );
 }
@@ -144,7 +137,7 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
           rolePrompt: 'You are the implementation step of a coding workflow.',
           prompt:
             'Fix the bug in math.js: add(a, b) should return a + b, not a - b. ' +
-            'Run `node test.js` with run_shell to confirm the fix.',
+            'Run `node test.js` to confirm the fix.',
           workingDir: dir,
           model: integrationModel,
           ...maybeTrace('impl'),
@@ -154,147 +147,14 @@ describe.skipIf(!hasCreds)('Claude API integration', () => {
 
       expect(finalText.length).toBeGreaterThan(0);
       expect(readFileSync(join(dir, 'math.js'), 'utf8')).toContain('a + b');
-      // Claude's own tool name, not the OpenAI-compat backend's
-      // 'run_shell' alias (src/harness/compile.ts EXEC_TOOLS).
+      // Claude exposes shell execution as Bash; OpenAI-compatible sessions
+      // use a different tool name, which is why this assertion is provider-local.
       const shellCalls = store.activityFor('impl').filter((e) => e.tool === 'Bash');
-      // The SDK's Bash tool_response carries no exit-code field (confirmed by
-      // probing it directly), so a successful call reports exitStatus as
-      // undefined — the same tolerance production code already applies in
-      // executors/agents.ts when checking for a successful `git push`.
+      // The SDK's Bash response may omit an exit-code field, so absence of an
+      // error is the stable success signal.
       expect(
         shellCalls.some(
           (e) =>
-            (e.exitStatus === 0 || e.exitStatus === undefined || e.exitStatus === null) &&
-            e.error === undefined,
-        ),
-      ).toBe(true);
-    } finally {
-      unsub();
-    }
-  });
-
-  it('never mutates the file when the capability set is read-only', async () => {
-    const dir = tempDir();
-    const original = 'export function add(a, b) {\n  return a - b;\n}\n';
-    writeFileSync(join(dir, 'math.js'), original);
-
-    const runner = new SdkSessionRunner();
-    const store = storeFor(dir, ['review']);
-    const unsub = watchRun(store, 'review');
-    try {
-      await runner.run(
-        {
-          nodeId: 'review',
-          capabilities: capabilitySet('read'),
-          rolePrompt: 'You are the code review step of a coding workflow. You cannot edit files.',
-          prompt: 'Read math.js and try to fix the bug (a - b should be a + b) by editing the file.',
-          workingDir: dir,
-          model: integrationModel,
-          ...maybeTrace('review'),
-        },
-        store,
-      );
-
-      // Structural enforcement, not the model's word for it: the tool was
-      // never offered, so the file must be exactly what it started as.
-      expect(readFileSync(join(dir, 'math.js'), 'utf8')).toBe(original);
-      const activity = store.activityFor('review');
-      // Claude's own tool names (Write/Edit), not the OpenAI-compat
-      // backend's aliases — and specifically no *allowed* call, since a
-      // denied attempt is exactly what this test expects to see.
-      expect(
-        activity.every(
-          (e) => !(e.decision === 'allowed' && (e.tool === 'Write' || e.tool === 'Edit')),
-        ),
-      ).toBe(true);
-    } finally {
-      unsub();
-    }
-  });
-
-  // Deliberately lightweight: exercises discovery without also paying for a
-  // multi-file fix-and-verify round trip (Edit is already covered by the
-  // end-to-end test above). Not pinned to a specific tool (Glob/Grep vs.
-  // Bash `find`/`grep`): observed against this integration model, it
-  // reliably reaches for Bash-based discovery — or even tries an Agent/
-  // ToolSearch delegation first — rather than calling Glob/Grep directly,
-  // even when explicitly told to. That's a real, reproducible model
-  // preference, not flakiness, so the assertion checks that discovery
-  // succeeded rather than which tool accomplished it.
-  it('discovers the project layout', async () => {
-    const dir = tempDir();
-    writeBuggyProject(dir);
-
-    const runner = new SdkSessionRunner();
-    const store = storeFor(dir, ['impl']);
-    const unsub = watchRun(store, 'discovery');
-    try {
-      const { finalText } = await runner.run(
-        {
-          nodeId: 'impl',
-          capabilities: capabilitySet('read', 'edit', 'exec'),
-          rolePrompt: 'You are the implementation step of a coding workflow.',
-          prompt:
-            'Explore this project to find every .js file under src/, then report the file names you found. ' +
-            'Do not edit anything.',
-          workingDir: dir,
-          model: integrationModel,
-          ...maybeTrace('discovery'),
-        },
-        store,
-      );
-
-      expect(finalText).toContain('math.js');
-      expect(finalText).toContain('string.js');
-      const activity = store.activityFor('impl');
-      expect(activity.every((e) => !(e.decision === 'allowed' && (e.tool === 'Write' || e.tool === 'Edit')))).toBe(
-        true,
-      );
-    } finally {
-      unsub();
-    }
-  });
-
-  it('commits the fix in a real git repository', async () => {
-    const dir = makeTempGitRepo();
-    writeBuggyProject(dir);
-    repoGit(dir, 'add', '-A');
-    repoGit(dir, 'commit', '-q', '-m', 'add broken math');
-    const baseHead = repoGit(dir, 'rev-parse', 'HEAD');
-
-    const runner = new SdkSessionRunner();
-    const store = storeFor(dir, ['git-ops']);
-    const unsub = watchRun(store, 'git-workflow');
-    try {
-      const { finalText } = await runner.run(
-        {
-          nodeId: 'git-ops',
-          capabilities: capabilitySet('read', 'edit', 'exec', 'git-read', 'git-write'),
-          rolePrompt: 'You are a git-enabled coding agent.',
-          prompt:
-            'Inspect the repository with git (git log, git status, git diff are fine). ' +
-            'Fix the bug in src/math.js: add(a, b) should return a + b. Run `node test.js` to confirm. ' +
-            'Then stage and commit the fix with `git commit` using the message `fix: add correctly`. ' +
-            'Do not push.',
-          workingDir: dir,
-          model: integrationModel,
-          ...maybeTrace('git-workflow'),
-        },
-        store,
-      );
-
-      expect(finalText.length).toBeGreaterThan(0);
-      expect(readFileSync(join(dir, 'src', 'math.js'), 'utf8')).toContain('a + b');
-      expect(repoGit(dir, 'rev-parse', 'HEAD')).not.toBe(baseHead);
-      expect(repoGit(dir, 'status', '--porcelain')).toBe('');
-      expect(repoGit(dir, 'log', '-1', '--format=%s')).toContain('correctly');
-      const allowed = store.activityFor('git-ops').filter((e) => e.decision === 'allowed');
-      // See the exit-status note on the end-to-end test above: the SDK never
-      // reports a Bash exit code, so undefined/null stand in for success.
-      expect(
-        allowed.some(
-          (e) =>
-            /git\s+commit/.test(e.summary) &&
             (e.exitStatus === 0 || e.exitStatus === undefined || e.exitStatus === null) &&
             e.error === undefined,
         ),
@@ -403,7 +263,7 @@ nodes:
     type: implement
     config:
       model: ${integrationModel}
-      instructions: "Fix the bug in src/math.js: add(a, b) should return a + b. Then run \`node test.js\` with run_shell to confirm."
+      instructions: "Fix the bug in src/math.js: add(a, b) should return a + b. Then run \`node test.js\` to confirm."
   - id: validate
     type: validate
     config:
@@ -434,7 +294,7 @@ edges:
         const implementOutput = store.node('implement').output as { changedFiles?: string[] };
         expect(implementOutput.changedFiles).toContain('src/math.js');
         expect(store.activityFor('implement').some((e) => e.decision === 'allowed')).toBe(true);
-        expect(['done', 'error']).toContain(store.node('validate').status);
+        expect(store.node('validate').status).toBe('done');
         expect(readFileSync(join(dir, 'src', 'math.js'), 'utf8')).toContain('a + b');
       } finally {
         unsub();

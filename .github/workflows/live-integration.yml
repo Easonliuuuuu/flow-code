@@ -1,17 +1,16 @@
 name: Live Integration
 
-# Separate from ci.yml on purpose: this job makes real calls to the Claude
-# Agent SDK (cost + latency + external-service variance), so it must never
-# block the fast, always-required lint/typecheck/test gate. Runs nightly
-# rather than on every push to main — a real-API suite doesn't need to gate
-# every commit, and a previous version of this suite ran on every push
-# against a different provider and failed the large majority of the time
-# against that provider's rate limiting. Use workflow_dispatch to run it on
-# demand against a branch.
+# Separate from ci.yml on purpose: these jobs make real provider calls (cost +
+# latency + external-service variance), so they must never block the fast,
+# always-required lint/typecheck/test gate. Runs nightly rather than on every
+# push to main — a real-API suite doesn't need to gate every commit, and a
+# previous version ran on every push against a different provider and failed
+# the large majority of the time against that provider's rate limiting. Use
+# workflow_dispatch to run it on demand against a branch.
 #
 # Named for what it is (a live-API suite) rather than which provider it
-# currently exercises — Claude today, the same slot a second provider's live
-# suite would occupy later, run separately rather than folded into this file.
+# exercises. Each provider job is independently gated so adding a smoke test
+# never causes another provider's credentials to be used accidentally.
 on:
   schedule:
     - cron: '0 9 * * *' # nightly, 09:00 UTC
@@ -34,11 +33,36 @@ jobs:
             echo "has_key=false" >> "$GITHUB_OUTPUT"
           fi
 
+  check-codex-secret:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.CODEX_API_KEY }}" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  check-openai-secret:
+    runs-on: ubuntu-latest
+    outputs:
+      has_key: ${{ steps.check.outputs.has_key }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.OPENAI_API_KEY }}" ]; then
+            echo "has_key=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_key=false" >> "$GITHUB_OUTPUT"
+          fi
+
   integration:
     needs: check-secret
     runs-on: ubuntu-latest
-    # Skips cleanly (not "fails") when the secret isn't configured, e.g.
-    # before CLAUDE_CODE_OAUTH_TOKEN is added to this repo's secrets.
+    # Skips cleanly (not "fails") when neither Claude secret is configured.
     if: needs.check-secret.outputs.has_key == 'true'
     steps:
       - uses: actions/checkout@v4
@@ -54,3 +78,40 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  codex-integration:
+    needs: check-codex-secret
+    runs-on: ubuntu-latest
+    if: needs.check-codex-secret.outputs.has_key == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:integration
+        env:
+          CODEX_INTEGRATION: '1'
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+
+  openai-integration:
+    needs: check-openai-secret
+    runs-on: ubuntu-latest
+    if: needs.check-openai-secret.outputs.has_key == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test:integration
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
