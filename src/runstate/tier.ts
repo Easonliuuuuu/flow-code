@@ -88,6 +88,10 @@ export interface RunEnforcement {
   surface: ReportingSurface;
   /** Enumerated, never implied — see {@link absentGuarantees}. */
   absent: Guarantee[];
+  /** Host that supplied a companion hook, when known. */
+  host?: CompanionHost;
+  /** Material host limitations that are not represented by an enforcement tier. */
+  limitations?: CompanionLimitation[];
   /** Present once a run has lost enforcement it opened with. */
   downgrades?: TierDowngrade[];
 }
@@ -148,14 +152,20 @@ export const TIER_LABELS: Record<EnforcementTier, string> = {
  * Built from the same table the run records rather than written out per tier,
  * so a guarantee added here cannot go unmentioned in the place a user reads.
  */
-export function tierDisclosure(tier: EnforcementTier): string | undefined {
+export function tierDisclosure(
+  tier: EnforcementTier,
+  enforcement?: RunEnforcement,
+): string | undefined {
   if (tier === 'engine') return undefined;
   const missing = absentGuarantees(tier).map((g) => GUARANTEE_LABELS[g]);
   const what =
     tier === 'reported'
       ? 'self-reported: transitions were checked against the graph; the work behind them was not'
       : 'host session: flow-code enforced tool policy inside a session it did not start';
-  return `${what}. Not in force — ${missing.join('; ')}.`;
+  const limitation = enforcement?.limitations?.includes('hosted-tools-unobserved')
+    ? ' Hosted tools such as web search were not observable to the local hook.'
+    : '';
+  return `${what}. Not in force — ${missing.join('; ')}.${limitation}`;
 }
 
 /**
@@ -166,3 +176,4 @@ export function tierDisclosure(tier: EnforcementTier): string | undefined {
 export function weakestTier(a: EnforcementTier, b: EnforcementTier): EnforcementTier {
   return ENFORCEMENT_TIERS.indexOf(a) >= ENFORCEMENT_TIERS.indexOf(b) ? a : b;
 }
+import type { CompanionHost, CompanionLimitation } from '../guest/host.js';

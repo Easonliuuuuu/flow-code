@@ -25,6 +25,8 @@ import {
   recordDenial,
   recordHeartbeat,
 } from '../guest/enforce.js';
+import type { CompanionHost } from '../guest/host.js';
+import { normalizeCodexTool, type NormalizedHostCall } from '../guest/hostTools.js';
 import { findProjectRoot } from './status.js';
 
 /** The subset of a host's PreToolUse payload this needs. Everything else is ignored. */
@@ -75,7 +77,7 @@ function readStdin(): string {
   }
 }
 
-export function runPreToolUseHook(raw: string): void {
+export function runPreToolUseHook(raw: string, host?: CompanionHost): void {
   let input: HookInput;
   try {
     input = JSON.parse(raw) as HookInput;
@@ -103,7 +105,7 @@ export function runPreToolUseHook(raw: string): void {
   // this is the evidence a run uses to claim the `hooks` tier, and it has to
   // exist by the time `open_run` runs — which it does, because `open_run` is
   // itself a tool call that passes through here first.
-  recordHeartbeat(repoRoot, input.session_id);
+  recordHeartbeat(repoRoot, input.session_id, host);
 
   const toolName = input.tool_name ?? '';
   if (toolName === '' || isReportingTool(toolName)) {
@@ -111,26 +113,60 @@ export function runPreToolUseHook(raw: string): void {
     return;
   }
 
-  const outcome = enforceCall(repoRoot, {
-    toolName,
-    toolInput: input.tool_input ?? {},
-    ...(input.agent_id !== undefined ? { agentId: input.agent_id } : {}),
-    ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),
-    ...(input.tool_use_id !== undefined ? { toolUseId: input.tool_use_id } : {}),
-  });
+  const originalInput = input.tool_input ?? {};
+  const normalized =
+    host === 'codex'
+      ? normalizeCodexTool(toolName, originalInput)
+      : { calls: [{ toolName, toolInput: originalInput }] };
+  if (normalized.error !== undefined) {
+    // Let the shared policy decide whether an unrecognized or malformed call
+    // matters. With no open companion run it must remain an ordinary session;
+    // with one open it fails closed like every other unknown call.
+    const fallback: NormalizedHostCall = { toolName, toolInput: originalInput };
+    handleOutcome(repoRoot, toolName, originalInput, input, enforceCall(repoRoot, {
+      toolName: fallback.toolName,
+      toolInput: fallback.toolInput,
+      ...(input.agent_id !== undefined ? { agentId: input.agent_id } : {}),
+      ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),
+      ...(input.tool_use_id !== undefined ? { toolUseId: input.tool_use_id } : {}),
+    }), normalized.error);
+    return;
+  }
 
+  for (const call of normalized.calls ?? []) {
+    const outcome = enforceCall(repoRoot, {
+      toolName: call.toolName,
+      toolInput: call.toolInput,
+      ...(call.repositoryMutation !== undefined ? { repositoryMutation: call.repositoryMutation } : {}),
+      ...(input.agent_id !== undefined ? { agentId: input.agent_id } : {}),
+      ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),
+      ...(input.tool_use_id !== undefined ? { toolUseId: input.tool_use_id } : {}),
+    });
+    if (outcome.kind === 'not-in-force' || outcome.kind === 'allow') continue;
+    handleOutcome(repoRoot, toolName, originalInput, input, outcome);
+    return;
+  }
+  respondAllow();
+}
+
+function handleOutcome(
+  repoRoot: string,
+  originalTool: string,
+  originalInput: Record<string, unknown>,
+  input: HookInput,
+  outcome: ReturnType<typeof enforceCall>,
+  normalizationError?: string,
+): void {
   switch (outcome.kind) {
     case 'not-in-force':
-      respondAllow();
-      return;
     case 'allow':
       respondAllow();
       return;
     case 'deny':
       recordDenial(repoRoot, outcome.runId, {
         nodeId: outcome.nodeId,
-        tool: toolName,
-        summary: summarize(toolName, input.tool_input ?? {}),
+        tool: originalTool,
+        summary: summarize(originalTool, originalInput),
         ...(outcome.decision.missingCapability !== undefined
           ? { missingCapability: outcome.decision.missingCapability }
           : {}),
@@ -138,15 +174,17 @@ export function runPreToolUseHook(raw: string): void {
         ...(input.agent_type !== undefined ? { agentType: input.agent_type } : {}),
         ...(input.tool_use_id !== undefined ? { toolUseId: input.tool_use_id } : {}),
       });
-      respondDeny(outcome.decision.message ?? 'flow-code: denied by this run\'s capability set.');
+      respondDeny(
+        normalizationError !== undefined
+          ? `flow-code: ${normalizationError}`
+          : outcome.decision.message ?? 'flow-code: denied by this run\'s capability set.',
+      );
       return;
     case 'failed':
-      // Distinct wording from a capability denial on purpose: "this node may
-      // not do that" and "flow-code could not work out whether it may" are
-      // different facts, and an agent that cannot tell them apart will try to
-      // work around the wrong one.
       respondDeny(
-        `flow-code could not determine whether this call is permitted, so it was denied: ${outcome.reason}`,
+        `flow-code could not determine whether this call is permitted, so it was denied: ${
+          normalizationError ?? outcome.reason
+        }`,
       );
       return;
   }
@@ -164,10 +202,14 @@ function summarize(toolName: string, input: Record<string, unknown>): string {
 }
 
 export function cmdHook(args: string[]): void {
-  const [event] = args;
   try {
+    const [event] = args;
+    const hostArg = args.findIndex((arg) => arg === '--host');
+    const hostValue = hostArg >= 0 ? args[hostArg + 1] : args.find((arg) => arg.startsWith('--host='))?.slice(7);
+    const host = hostValue === undefined ? undefined : hostValue === 'codex' || hostValue === 'claude' ? hostValue : undefined;
+    if (hostValue !== undefined && host === undefined) throw new Error(`unknown hook host: ${hostValue}`);
     if (event === 'pretooluse') {
-      runPreToolUseHook(readStdin());
+      runPreToolUseHook(readStdin(), host);
       return;
     }
     // An event this build does not implement must not block the session.

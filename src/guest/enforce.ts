@@ -24,6 +24,7 @@ import { listRunStates, readRunState, runFilePath } from '../runstate/persist.js
 import type { ActivityEntry, RunState } from '../runstate/types.js';
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import { rehydrateGraph } from '../workflow/record.js';
+import type { CompanionHost } from './host.js';
 
 /**
  * Where the hook records that it ran.
@@ -55,13 +56,15 @@ export interface Heartbeat {
   pid: number;
   /** The session the hook was firing in, when the host tells us. */
   sessionId?: string;
+  host?: CompanionHost;
 }
 
-export function recordHeartbeat(repoRoot: string, sessionId?: string): void {
+export function recordHeartbeat(repoRoot: string, sessionId?: string, host?: CompanionHost): void {
   const beat: Heartbeat = {
     at: new Date().toISOString(),
     pid: process.pid,
     ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(host !== undefined ? { host } : {}),
   };
   try {
     writeFileSync(join(repoRoot, HEARTBEAT_FILE), JSON.stringify(beat));
@@ -84,12 +87,18 @@ export function recordHeartbeat(repoRoot: string, sessionId?: string): void {
  * narrowing this needs a session id the MCP server is not given.
  */
 export function enforcementLive(repoRoot: string, now = Date.now()): boolean {
+  return liveHeartbeat(repoRoot, now) !== undefined;
+}
+
+/** Return the recent heartbeat, including the host that produced it. */
+export function liveHeartbeat(repoRoot: string, now = Date.now()): Heartbeat | undefined {
   try {
     const beat = JSON.parse(readFileSync(join(repoRoot, HEARTBEAT_FILE), 'utf8')) as Heartbeat;
     const at = Date.parse(beat.at);
-    return Number.isFinite(at) && now - at < HEARTBEAT_TTL_MS && now - at > -HEARTBEAT_TTL_MS;
+    if (!(Number.isFinite(at) && now - at < HEARTBEAT_TTL_MS && now - at > -HEARTBEAT_TTL_MS)) return undefined;
+    return beat;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -207,6 +216,8 @@ export interface EnforceInput {
   agentId?: string;
   agentType?: string;
   toolUseId?: string;
+  /** True for a host adapter call that mutates files without being Bash. */
+  repositoryMutation?: boolean;
 }
 
 /**
@@ -307,6 +318,7 @@ export function enforceCall(repoRoot: string, input: EnforceInput): EnforcementO
  * classification rather than a second opinion about what "a git write" means.
  */
 function mutatesRepository(input: EnforceInput): boolean {
+  if (input.repositoryMutation === true) return true;
   if (input.toolName !== 'Bash') return false;
   const command = typeof input.toolInput['command'] === 'string' ? input.toolInput['command'] : '';
   return classifyCommand(command).some((segment) => segment.kind === 'git-write');

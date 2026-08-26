@@ -3,11 +3,36 @@
 `flow-code run` executing the graph is not the only way to use it. You can stay in the agent CLI you already use — `claude`, `codex`, whatever it is — walk the graph yourself, and have the run fill in beside you:
 
 ```bash
-flow-code connect   # once per project: installs the tools and the instructions
+flow-code connect   # once per project: installs Claude Code by default
 flow-code watch     # second window — the graph fills in as your session reports
 ```
 
-`connect` writes four things and names each one: an MCP server entry in `.mcp.json`, a skill at `.claude/skills/flow-code-workflow/SKILL.md`, a delimited section in your `CLAUDE.md`/`AGENTS.md`, and a `PreToolUse` hook in `.claude/settings.json`. It only ever edits inside its own delimiters or its own entries, leaving the rest of each file byte-identical. Run it again after changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it still matches.
+`connect` writes the project surfaces for the selected host and names each one. With no host it
+preserves the Claude Code setup: `.mcp.json`, `.claude/skills/flow-code-workflow/SKILL.md`, a
+delimited section in `CLAUDE.md`/`AGENTS.md`, and `.claude/settings.json`. Run it again after
+changing `workflow.yaml`; `flow-code connect --check` reports what is installed and whether it
+still matches.
+
+### Codex companion mode
+
+Install the Codex project surface explicitly:
+
+```bash
+flow-code connect --host codex
+flow-code connect --host codex --check
+```
+
+This adds a flow-code MCP server to `.codex/config.toml`, a `PreToolUse` hook to
+`.codex/hooks.json`, the workflow skill at `.agents/skills/flow-code-workflow/SKILL.md`, and the
+generated section in `AGENTS.md`. Existing user configuration is preserved; flow-code owns only
+its marked TOML block and its hook entry. Use `--host all` when the same checkout is used by both
+Claude Code and Codex. Codex may ask you to trust project hooks; review them with `/hooks` and
+inspect the MCP server with `/mcp`, then start a new session.
+
+Codex's local shell, edit, read, image, subagent, and MCP calls are checked against the active
+node. Hosted tools such as web search do not pass through this local hook, so Codex companion runs
+record `hosted-tools-unobserved` and do not claim complete tool-call observation. No project-wide
+web-search setting is changed by `connect`.
 
 For Claude Code specifically there is a plugin, which needs no per-project step at all — it reads the graph through a tool rather than installing a copy of it:
 

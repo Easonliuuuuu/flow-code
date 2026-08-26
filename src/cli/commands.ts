@@ -90,13 +90,13 @@ export const CLI_COMMANDS: CliCommand[] = [
       'beside your own session. `flow-code node` on its own lists the subcommands.',
   },
   {
-    usage: 'flow-code connect [--check] [--status-line]',
+    usage: 'flow-code connect [--host claude|codex|all] [--check] [--status-line]',
     summary: "Install the reporting surface into this project's agent config",
     detail:
-      'Installs the MCP server, the workflow skill, an instructions section, the ' +
-      "enforcement hook, and a row for the host's status line. --check reports what is " +
-      'installed and whether it is still current; --status-line installs only the status ' +
-      'row, which is the one piece the Claude Code plugin cannot install for you.',
+      'Without --host, installs the Claude Code MCP server, workflow skill, instructions, ' +
+      'enforcement hook, and status row. --host codex installs the project Codex MCP config, ' +
+      'PreToolUse hook, AGENTS.md section, and .agents skill. --host all installs both. ' +
+      '--check reports what is installed; --status-line is Claude-only.',
   },
   {
     usage: 'flow-code mcp',

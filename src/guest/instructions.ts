@@ -15,6 +15,7 @@
 import type { Workflow, WorkflowNode } from '../workflow/load.js';
 import { nodeTypeReferenceLines } from '../registry/index.js';
 import { presetNamesForSelection } from '../workflow/select.js';
+import type { CompanionHost } from './host.js';
 
 /**
  * Delimiters around the section this owns inside a file it shares with the
@@ -162,6 +163,8 @@ export interface InstructionOptions {
    * which is the one part of this document that must never be generic.
    */
   enforced?: boolean;
+  /** Host-specific limitations to disclose in a companion session. */
+  host?: CompanionHost;
 }
 
 /**
@@ -187,7 +190,7 @@ const MODEL_NOTE = [
  * in fact being denied will read a denial as a bug and work around it; one
  * told it is enforced when it is not will trust a boundary that is not there.
  */
-function whatThisIsSection(enforced: boolean): string[] {
+function whatThisIsSection(enforced: boolean, host?: CompanionHost): string[] {
   if (!enforced) {
     return [
       '### What this does not do',
@@ -199,6 +202,15 @@ function whatThisIsSection(enforced: boolean): string[] {
       ...MODEL_NOTE,
     ];
   }
+  const hostLimitation =
+    host === 'codex'
+      ? [
+          '',
+          'Codex hosted tools, such as web search, do not pass through this local hook. They are',
+          'not observed by flow-code, and the run records that limitation; local shell, edit, read,',
+          'image, subagent, and MCP calls remain subject to the observable hook policy.',
+        ]
+      : [];
   return [
     '### What is enforced, and what is not',
     '',
@@ -212,6 +224,7 @@ function whatThisIsSection(enforced: boolean): string[] {
     'what your session costs, the directory and environment you run in, which subagent types you',
     'delegate to, and routing you back along a return path. Those remain yours to get right. A',
     'subagent you spawn is still held to the step\'s capability set — its calls arrive here too.',
+    ...hostLimitation,
     ...MODEL_NOTE,
   ];
 }
@@ -289,7 +302,7 @@ export function generateInstructions(workflow: Workflow, opts: InstructionOption
     ...(planningVocabulary.length > 0 ? ['', ...planningVocabulary] : []),
     ...(loopbacks ? ['', loopbacks] : []),
     '',
-    ...whatThisIsSection(opts.enforced === true),
+    ...whatThisIsSection(opts.enforced === true, opts.host),
   ].join('\n');
 }
 

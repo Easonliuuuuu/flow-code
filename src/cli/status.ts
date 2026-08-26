@@ -30,6 +30,7 @@ import {
 } from '../runstate/types.js';
 import { STATUS_GLYPHS } from '../ui/canvas.js';
 import { columnWidth, fitText } from '../ui/textwrap.js';
+import type { CompanionLimitation } from '../guest/host.js';
 
 /**
  * How much of flow-code's enforcement was in force for a run. Defined in
@@ -84,6 +85,7 @@ export interface RunSummary {
   budgetPct?: number;
   denials: number;
   tier: EnforcementTier;
+  limitations?: CompanionLimitation[];
   nodes: SummaryNode[];
   /** Set only when more than one run in the repository is live, so one row is not read as the only run. */
   liveRuns?: number;
@@ -172,6 +174,9 @@ export function summarize(state: RunState | undefined, now: number = Date.now())
     denials: Object.values(state.nodes).reduce((sum, n) => sum + (n.denials ?? 0), 0),
     tier,
     nodes,
+    ...(state.enforcement?.limitations && state.enforcement.limitations.length > 0
+      ? { limitations: [...state.enforcement.limitations] }
+      : {}),
     ...(state.runId ? { runId: state.runId } : {}),
     ...(tokens !== undefined ? { tokens } : {}),
     ...(budgetPct !== undefined ? { budgetPct } : {}),
@@ -381,6 +386,7 @@ function metaSpans(s: RunSummary): Span[] {
   if (s.liveRuns && s.liveRuns > 1) push(`${s.liveRuns} live runs`, 'yellow');
   // Only worth columns when it is not the tier every run used to have.
   if (s.tier !== 'engine') push(s.tier === 'hooks' ? 'host session' : 'self-reported', 'yellow');
+  if (s.limitations?.includes('hosted-tools-unobserved')) push('hosted tools unobserved', 'yellow');
   return parts;
 }
 

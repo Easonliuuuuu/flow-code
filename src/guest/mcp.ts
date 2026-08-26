@@ -25,7 +25,7 @@ import { planOutput } from '../registry/index.js';
 import { listPresets } from '../presets.js';
 import { selectWorkflow } from '../workflow/select.js';
 import { describePlanProposal } from '../workflow/splice.js';
-import { enforcementLive } from './enforce.js';
+import { enforcementLive, liveHeartbeat } from './enforce.js';
 import { generateInstructions, nodeBrief } from './instructions.js';
 import {
   closeGuestRun,
@@ -44,6 +44,12 @@ interface ToolResult {
   isError?: boolean;
   [key: string]: unknown;
 }
+
+export const MCP_INSTRUCTIONS =
+  'Use flow-code companion tools to walk this repository graph. Before coding, call describe_workflow; ' +
+  'select an explicit preset when the user names one, then open_run with the same preset. Report each ' +
+  'node before and after its work. Keep Plan proposals and approval decisions in the user-facing ' +
+  'conversation, and call accept_plan or decide_gate only after explicit user approval.';
 
 function ok(text: string): ToolResult {
   return { content: [{ type: 'text', text }] };
@@ -176,7 +182,10 @@ function isInteractiveNode(repoRoot: string, run: string | undefined, nodeId: st
  * hold one without a transport attached.
  */
 export function buildMcpServer(repoRoot: string): McpServer {
-  const server = new McpServer({ name: 'flow-code', version: '1' });
+  const server = new McpServer(
+    { name: 'flow-code', version: '1' },
+    { instructions: MCP_INSTRUCTIONS },
+  );
 
   const transition = (kind: ReportedTransition['kind'], run: string | undefined, rest: Omit<ReportedTransition, 'kind'>) =>
     guard(() => {
@@ -245,6 +254,9 @@ export function buildMcpServer(repoRoot: string): McpServer {
             ).workflow,
             {
               enforced: enforcementLive(repoRoot),
+              ...(liveHeartbeat(repoRoot)?.host !== undefined
+                ? { host: liveHeartbeat(repoRoot)!.host }
+                : {}),
             },
           ),
         );

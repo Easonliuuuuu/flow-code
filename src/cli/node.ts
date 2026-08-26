@@ -28,7 +28,7 @@ import { describePlanProposal, type PlanProposal } from '../workflow/splice.js';
 import { listRunStates } from '../runstate/persist.js';
 import type { RunState } from '../runstate/types.js';
 import { fail, repoRootFromCwd } from './context.js';
-import { enforcementLive } from '../guest/enforce.js';
+import { enforcementLive, liveHeartbeat } from '../guest/enforce.js';
 import { generateInstructions } from '../guest/instructions.js';
 import { selectWorkflow } from '../workflow/select.js';
 
@@ -256,7 +256,13 @@ async function cmdDescribe(repoRoot: string, args: string[]): Promise<void> {
     ...(graph !== undefined ? { graph } : {}),
     ...(preset !== undefined ? { preset } : {}),
   });
-  console.log(generateInstructions(selected.workflow, { enforced: enforcementLive(repoRoot) }));
+  const host = liveHeartbeat(repoRoot)?.host;
+  console.log(
+    generateInstructions(selected.workflow, {
+      enforced: enforcementLive(repoRoot),
+      ...(host !== undefined ? { host } : {}),
+    }),
+  );
 }
 
 function cmdTransition(repoRoot: string, kind: 'start' | 'done' | 'fail', args: string[]): void {
