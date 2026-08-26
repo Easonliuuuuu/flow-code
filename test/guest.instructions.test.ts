@@ -41,6 +41,34 @@ edges:
 
 const workflow = workflowFromYaml(YAML);
 
+const gatedWorkflow = workflowFromYaml(`
+nodes:
+  - id: spec
+    type: spec
+    config: { title: define the change }
+  - id: spec-gate
+    type: approval-gate
+  - id: implement
+    type: implement
+    config: { instructions: build it }
+edges:
+  - { from: spec, to: spec-gate }
+  - { from: spec-gate, to: implement }
+`);
+
+const successLoopWorkflow = workflowFromYaml(`
+nodes:
+  - id: revise
+    type: discuss
+    config: { topic: what should change }
+  - id: implement
+    type: implement
+    config: { instructions: build it }
+edges:
+  - { from: implement, to: revise }
+  - { from: revise, to: implement, loopback: { on: success, maxAttempts: 3 } }
+`);
+
 describe('generated instructions describe this project and no other', () => {
   const text = generateInstructions(workflow);
 
@@ -65,6 +93,14 @@ describe('generated instructions describe this project and no other', () => {
     expect(text).toContain('When `check` fails, go back to `implement`');
     expect(text).toContain('3 attempts');
     expect(text).toMatch(/Nothing routes you back/);
+  });
+
+  it('describes success-triggered loop-backs as success, not failure', () => {
+    const text = generateInstructions(successLoopWorkflow);
+
+    expect(text).toContain('When `revise` completes successfully, go back to `implement`');
+    expect(text).not.toContain('When `revise` fails, go back to `implement`');
+    expect(text).toContain('Report `revise` complete, then report `implement` started.');
   });
 
   it('says plainly that nothing is enforced, when nothing is', () => {
@@ -416,6 +452,17 @@ describe('flow-code connect', () => {
     // Only what it directly depends on: `discuss` is upstream of `implement`,
     // not of `check`, and carrying the whole ancestry would bury the diff.
     expect(brief).not.toContain('build the thing');
+  });
+
+  it('forwards context through transparent gates', () => {
+    const brief = nodeBrief(gatedWorkflow, 'implement', {
+      spec: { title: 'Add companion mode', acceptanceCriteria: ['preserve context'] },
+      'spec-gate': { approved: true },
+    })!;
+
+    expect(brief).toContain('`spec`');
+    expect(brief).toContain('preserve context');
+    expect(brief).toContain('`spec-gate`');
   });
 
   it('truncates a large upstream output rather than dropping it', () => {

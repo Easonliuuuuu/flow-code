@@ -110,7 +110,7 @@ describe('when nothing is being enforced', () => {
     reportTransition(repo, runId, { nodeId: 'implement', kind: 'start' });
     expect(enforceCall(repo, WRITE).kind).toBe('allow');
 
-    closeGuestRun(repo, runId);
+    closeGuestRun(repo, runId, true);
     expect(enforceCall(repo, WRITE).kind).toBe('not-in-force');
   });
 });
@@ -161,6 +161,26 @@ describe('the current node decides what is permitted', () => {
     // Same session, same process, different answer — the envelope belongs to
     // the run's position, not to how the session was started.
     expect(enforceCall(repo, WRITE).kind).toBe('deny');
+  });
+
+  it('isolates enforcement by companion session when two runs share a checkout', async () => {
+    const repo = repoWithWorkflow();
+    recordHeartbeat(repo, 'session-a', 'codex');
+    const first = await openGuestRun(repo, { surface: 'mcp' });
+    reportTransition(repo, first.runId, { nodeId: 'implement', kind: 'start' });
+    recordHeartbeat(repo, 'session-b', 'codex');
+    const second = await openGuestRun(repo, { surface: 'mcp' });
+    reportTransition(repo, second.runId, { nodeId: 'implement', kind: 'start' });
+
+    expect(enforceCall(repo, { ...WRITE, sessionId: 'session-a' })).toMatchObject({
+      kind: 'allow',
+      runId: first.runId,
+    });
+    expect(enforceCall(repo, { ...WRITE, sessionId: 'session-b' })).toMatchObject({
+      kind: 'allow',
+      runId: second.runId,
+    });
+    expect(enforceCall(repo, { ...WRITE, sessionId: 'other-session' }).kind).toBe('failed');
   });
 });
 
@@ -555,9 +575,10 @@ describe('an approval gate is answered by a person', () => {
     });
 
     expect(latestRunState(repo)!.nodes.gate!.status).toBe('error');
-    // Downstream cannot proceed: a rejected gate is not a satisfied upstream.
+    // The rejected arm is recorded as a condition skip, so reporting it as
+    // started is refused as a non-taken route rather than as unfinished work.
     expect(() => reportTransition(repo, runId, { nodeId: 'ship', kind: 'start' })).toThrow(
-      /upstream is unfinished/,
+      /was skipped/,
     );
   });
 

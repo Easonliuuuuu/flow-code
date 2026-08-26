@@ -26,7 +26,7 @@ import {
 } from '../runstate/persist.js';
 import { enforcementOf, type ReportingSurface } from '../runstate/tier.js';
 import { enforcementLive, liveHeartbeat } from './enforce.js';
-import { hostSurface } from './host.js';
+import { hostSurface, type CompanionHost } from './host.js';
 import { planOutput } from '../registry/index.js';
 import type { AttemptRecord, NodeRunState, RecordedGraph, RunState } from '../runstate/types.js';
 import { WorkflowValidationError, type Workflow } from '../workflow/load.js';
@@ -38,6 +38,7 @@ import {
 } from '../workflow/record.js';
 import type { PlanProposal } from '../workflow/splice.js';
 import { selectWorkflow } from '../workflow/select.js';
+import { conditionHolds, routingSettled } from '../workflow/routing.js';
 import { validateTransition, type AcceptedTransition, type ReportedTransition } from './validate.js';
 
 /**
@@ -114,6 +115,8 @@ function persist(repoRoot: string, state: RunState): void {
 
 export interface OpenRunOptions {
   surface: ReportingSurface;
+  /** Companion host whose project skill roots and integration are in use. */
+  host?: CompanionHost;
   /** Which declared graph to open, for a workflow file that declares several. */
   graph?: string;
   /** Which canonical preset to open for this run, without changing the project file. */
@@ -136,11 +139,14 @@ export interface OpenedRun {
  * with no way to tell which parts are which.
  */
 export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Promise<OpenedRun> {
+  const heartbeat = liveHeartbeat(repoRoot);
+  const selectedHost = opts.host ?? heartbeat?.host;
   let workflow: Workflow;
   try {
     const selected = await selectWorkflow(repoRoot, {
       ...(opts.graph !== undefined ? { graph: opts.graph } : {}),
       ...(opts.preset !== undefined ? { preset: opts.preset } : {}),
+      ...(selectedHost !== undefined ? { host: selectedHost } : {}),
     });
     workflow = selected.workflow;
   } catch (err) {
@@ -169,13 +175,13 @@ export async function openGuestRun(repoRoot: string, opts: OpenRunOptions): Prom
     baseline = null;
   }
 
-  const heartbeat = liveHeartbeat(repoRoot);
   const enforcementTier = enforcementLive(repoRoot) ? 'hooks' : 'reported';
-  const host = hostSurface(heartbeat?.host);
+  const host = hostSurface(selectedHost);
   const state: RunState = {
     runId: randomUUID(),
     createdAt: new Date().toISOString(),
     repoRoot,
+    ...(heartbeat?.sessionId !== undefined ? { companionSessionId: heartbeat.sessionId } : {}),
     pid: 0,
     owner: unattributedOwner(),
     // Verified, never assumed from an installed plugin: hooks can be turned
@@ -299,7 +305,11 @@ export function reportTransition(
   const result = validateTransition(workflow, state, reported);
   if (!result.ok) throw new GuestReportError(result.reason);
 
-  const applied = applyTransition(state, result.accepted);
+  let applied = applyTransition(state, result.accepted);
+  if (result.accepted.status === 'running') {
+    applied = clearConditionSkips(workflow, applied, result.accepted.nodeId);
+  }
+  applied = routeConditionSkips(workflow, applied);
   const expanded = result.accepted.expandWith
     ? expandRun(repoRoot, workflow, applied, result.accepted.nodeId, result.accepted.expandWith)
     : undefined;
@@ -423,6 +433,53 @@ function applyTransition(state: RunState, accepted: AcceptedTransition): RunStat
   return { ...state, nodes };
 }
 
+/** Clear branch skips when a loop-back sends work through the branch again. */
+function clearConditionSkips(workflow: Workflow, state: RunState, targetId: string): RunState {
+  const nodes = { ...state.nodes };
+  for (const id of workflow.graph.downstreamOf(targetId)) {
+    const node = nodes[id];
+    if (node?.status !== 'skipped' || node.skipReason !== 'condition') continue;
+    const { statusDetail: _detail, skipReason: _reason, endedAt: _endedAt, ...rest } = node;
+    nodes[id] = { ...rest, status: 'idle' };
+  }
+  return { ...state, nodes };
+}
+
+/** Persist the non-taken side of every settled conditional branch. */
+function routeConditionSkips(workflow: Workflow, state: RunState): RunState {
+  let next = state;
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const nodes = { ...next.nodes };
+    const now = new Date().toISOString();
+    for (const id of workflow.order) {
+      const node = nodes[id];
+      if (!node || node.status !== 'idle') continue;
+      const dependencies = workflow.graph.directDependencies(id);
+      if (dependencies.length === 0 || !dependencies.every((dep) => routingSettled(nodes[dep]))) continue;
+
+      const allBranchesUntaken = dependencies.every(
+        (dep) => nodes[dep]?.status === 'skipped' && nodes[dep]?.skipReason === 'condition',
+      );
+      const unmet = workflow.graph.conditionsInto(id).find((edge) => !conditionHolds(edge, next));
+      if (!allBranchesUntaken && unmet === undefined) continue;
+      nodes[id] = {
+        ...node,
+        status: 'skipped',
+        statusDetail: allBranchesUntaken
+          ? 'upstream branch was not taken'
+          : `condition not met: \`${unmet!.condition.source}\``,
+        skipReason: 'condition',
+        endedAt: now,
+      };
+      changed = true;
+    }
+    if (changed) next = { ...next, nodes };
+  }
+  return next;
+}
+
 /** The terminal outcome of the attempt being replaced, appended to the node's history. */
 function priorAttemptsAfter(previous: NodeRunState, at: string): AttemptRecord[] {
   return [
@@ -465,22 +522,47 @@ export function closeGuestRun(repoRoot: string, runId: string, interrupted = fal
   const state = loadRun(repoRoot, runId);
   assertNotDriven(state);
   if (state.finishedAt !== undefined) return state;
+  if (!interrupted) {
+    const unfinished = Object.entries(state.nodes).filter(
+      ([, node]) => !TERMINAL_NODE_STATUSES.has(node.status),
+    );
+    if (unfinished.length > 0) {
+      throw new GuestReportError(
+        `run ${runId.slice(0, 8)} is not finished — unresolved steps: ${unfinished
+          .map(([id, node]) => `\`${id}\` (${node.status})`)
+          .join(', ')}. Use \`interrupted: true\` only when stopping early.`,
+      );
+    }
+  }
   const closed: RunState = { ...state, finishedAt: new Date().toISOString(), interrupted };
   persist(repoRoot, closed);
   return closed;
 }
 
+const TERMINAL_NODE_STATUSES = new Set(['done', 'error', 'skipped']);
+
 /**
  * The reported run a surface should target when the agent does not name one:
- * the most recently opened run that is still open. Undefined when there is
- * none, which callers turn into "open one first" rather than opening one
+ * the open run bound to the current host session. With no host session id,
+ * only a single open run is safe to infer. Undefined when there is no safe
+ * target, which callers turn into "open one first" rather than opening one
  * implicitly — an agent that reports a transition against a run it never
  * opened has lost track of where it is, and papering over that would hide it.
  */
-export function currentGuestRun(repoRoot: string, states: RunState[]): RunState | undefined {
-  return states
+export function currentGuestRun(
+  repoRoot: string,
+  states: RunState[],
+  sessionId = liveHeartbeat(repoRoot)?.sessionId,
+): RunState | undefined {
+  const open = states
     .filter((s) => s.finishedAt === undefined && isReportedRun(s))
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  if (sessionId !== undefined) {
+    return open.filter((s) => s.companionSessionId === sessionId)[0];
+  }
+  // Without a host session id, guessing among concurrent companion runs is
+  // unsafe. An explicit --run/run argument remains available to disambiguate.
+  return open.length === 1 ? open[0] : undefined;
 }
 
 /**

@@ -22,6 +22,7 @@ import { FileRunStatePersister, listRunStates, runFilePath } from '../src/runsta
 import { RunStateStore } from '../src/runstate/store.js';
 import type { RunState } from '../src/runstate/types.js';
 import { latestRunState } from '../src/runstate/watch.js';
+import { HEARTBEAT_FILE, recordHeartbeat } from '../src/guest/enforce.js';
 import { recordGraph } from '../src/workflow/record.js';
 import { makeTempGitRepo, workflowFromYaml } from './helpers.js';
 
@@ -37,10 +38,36 @@ edges:
   - { from: implement, to: check }
 `;
 
+const ROUTED_YAML = `
+nodes:
+  - id: build
+    type: implement
+    config: { instructions: build it }
+  - id: gate
+    type: approval-gate
+  - id: ship
+    type: git-ops
+  - id: revise
+    type: discuss
+    config: { topic: what should change }
+edges:
+  - { from: build, to: gate }
+  - { from: gate, to: ship, when: "gate.decision == 'approved'" }
+  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  - { from: revise, to: build, loopback: { maxAttempts: 2, on: success } }
+`;
+
 function repoWithWorkflow(): string {
   const repo = makeTempGitRepo();
   mkdirSync(join(repo, '.flow-code'), { recursive: true });
   writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), YAML);
+  return repo;
+}
+
+function repoWithYaml(yaml: string): string {
+  const repo = makeTempGitRepo();
+  mkdirSync(join(repo, '.flow-code'), { recursive: true });
+  writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), yaml);
   return repo;
 }
 
@@ -81,6 +108,19 @@ describe('opening a reported run', () => {
     // The reporting process exits between transitions. Stamping its pid would
     // make a healthy run read as abandoned the moment the command returned.
     expect(latestRunState(repo)!.owner?.pid).toBe(0);
+  });
+
+  it('binds a companion run to the host session that opened it', async () => {
+    const repo = repoWithWorkflow();
+    recordHeartbeat(repo, 'session-a', 'codex');
+
+    const { runId } = await openGuestRun(repo, { surface: 'mcp' });
+
+    expect(latestRunState(repo)!.companionSessionId).toBe('session-a');
+    // The heartbeat is real evidence written by the hook, not a field invented
+    // by the reporting call; keep the fixture honest for the targeting tests.
+    expect(readFileSync(join(repo, HEARTBEAT_FILE), 'utf8')).toContain('session-a');
+    expect(runId).toBe(latestRunState(repo)!.runId);
   });
 
   it('carries no activity log or token counts, so absent guarantees are not faked as data', async () => {
@@ -158,10 +198,28 @@ describe('reporting transitions', () => {
   it('refuses to report into a run that has been closed', async () => {
     const repo = repoWithWorkflow();
     const { runId } = await openGuestRun(repo, { surface: 'cli' });
-    closeGuestRun(repo, runId);
+    closeGuestRun(repo, runId, true);
     expect(() => reportTransition(repo, runId, { nodeId: 'implement', kind: 'start' })).toThrow(
       /already closed/,
     );
+  });
+
+  it('refuses to close an incomplete run as normally finished', async () => {
+    const repo = repoWithWorkflow();
+    const { runId } = await openGuestRun(repo, { surface: 'cli' });
+
+    expect(() => closeGuestRun(repo, runId)).toThrow(/unresolved steps.*implement.*idle/);
+    expect(latestRunState(repo)!.finishedAt).toBeUndefined();
+  });
+
+  it('allows an explicit interrupted close before every step is done', async () => {
+    const repo = repoWithWorkflow();
+    const { runId } = await openGuestRun(repo, { surface: 'cli' });
+
+    const closed = closeGuestRun(repo, runId, true);
+
+    expect(closed.finishedAt).toBeDefined();
+    expect(closed.interrupted).toBe(true);
   });
 });
 
@@ -211,6 +269,19 @@ describe('a run the engine is driving', () => {
     expect(runId).not.toBe(engine.runId);
     // The engine's claims and the guest's are never merged into one history.
     expect(listRunStates(repo)).toHaveLength(2);
+  });
+
+  it('selects the matching companion run instead of the newest one', async () => {
+    const repo = repoWithWorkflow();
+    recordHeartbeat(repo, 'session-a', 'codex');
+    const first = await openGuestRun(repo, { surface: 'mcp' });
+    recordHeartbeat(repo, 'session-b', 'codex');
+    const second = await openGuestRun(repo, { surface: 'mcp' });
+    const states = listRunStates(repo);
+
+    expect(currentGuestRun(repo, states, 'session-a')?.runId).toBe(first.runId);
+    expect(currentGuestRun(repo, states, 'session-b')?.runId).toBe(second.runId);
+    expect(currentGuestRun(repo, states, 'other-session')).toBeUndefined();
   });
 });
 
@@ -310,5 +381,55 @@ edges:
     expect(() => reportTransition(repo, runId, { nodeId: 'implement', kind: 'start' })).toThrow(
       /all 2 of its attempts/,
     );
+  });
+});
+
+describe('reported conditional routing', () => {
+  it('skips the non-taken branch and allows the rejected branch to loop back on success', async () => {
+    const repo = repoWithYaml(ROUTED_YAML);
+    const { runId } = await openGuestRun(repo, { surface: 'cli' });
+
+    reportTransition(repo, runId, { nodeId: 'build', kind: 'start' });
+    reportTransition(repo, runId, { nodeId: 'build', kind: 'done', output: IMPLEMENT_OUTPUT });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'start' });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'gate', decision: 'rejected', surface: 'terminal' });
+
+    let state = latestRunState(repo)!;
+    expect(state.nodes.ship).toMatchObject({ status: 'skipped', skipReason: 'condition' });
+    expect(state.nodes.revise!.status).toBe('idle');
+
+    expect(() => reportTransition(repo, runId, { nodeId: 'ship', kind: 'start' })).toThrow(
+      /was skipped/,
+    );
+    reportTransition(repo, runId, { nodeId: 'revise', kind: 'start' });
+    reportTransition(repo, runId, {
+      nodeId: 'revise',
+      kind: 'done',
+      output: { conclusion: 'change the implementation', constraints: [] },
+    });
+    reportTransition(repo, runId, { nodeId: 'build', kind: 'start' });
+
+    state = latestRunState(repo)!;
+    expect(state.nodes.build!.status).toBe('running');
+    expect(state.nodes.gate!.status).toBe('idle');
+    expect(state.nodes.ship!.status).toBe('idle');
+    expect(state.nodes.revise!.status).toBe('idle');
+  });
+
+  it('skips the rejection branch when the gate is approved', async () => {
+    const repo = repoWithYaml(ROUTED_YAML);
+    const { runId } = await openGuestRun(repo, { surface: 'cli' });
+
+    reportTransition(repo, runId, { nodeId: 'build', kind: 'start' });
+    reportTransition(repo, runId, { nodeId: 'build', kind: 'done', output: IMPLEMENT_OUTPUT });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'start' });
+    reportTransition(repo, runId, { nodeId: 'gate', kind: 'gate', decision: 'approved', surface: 'terminal' });
+
+    const state = latestRunState(repo)!;
+    expect(state.nodes.revise).toMatchObject({ status: 'skipped', skipReason: 'condition' });
+    expect(() => reportTransition(repo, runId, { nodeId: 'revise', kind: 'start' })).toThrow(
+      /was skipped/,
+    );
+    expect(() => reportTransition(repo, runId, { nodeId: 'ship', kind: 'start' })).not.toThrow();
   });
 });

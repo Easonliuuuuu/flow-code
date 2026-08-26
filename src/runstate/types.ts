@@ -333,6 +333,8 @@ export interface RunState {
   runId: string;
   createdAt: string;
   repoRoot: string;
+  /** Host session that opened/walks a companion run, when the host provides one. */
+  companionSessionId?: string;
   /**
    * The owning process's pid, kept for run documents written before {@link
    * RunState.owner} existed and for readers that only ever wanted this. New

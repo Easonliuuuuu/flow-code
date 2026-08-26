@@ -18,6 +18,9 @@ function repoWithPresetSkills(names: string[]): { repoRoot: string; roots: Skill
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: d\n---\n\n${name} body\n`);
   }
+  for (const path of ['openspec/changes', 'openspec/archive', 'openspec/specs', '.specify']) {
+    mkdirSync(join(repoRoot, path), { recursive: true });
+  }
   return { repoRoot, roots };
 }
 
@@ -32,13 +35,34 @@ describe('preset registry', () => {
       command: 'openspec',
       install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] },
       scaffoldSkills: { command: 'openspec', args: ['init', '--tools', 'claude'] },
+      scaffoldSkillsByHost: {
+        codex: { command: 'openspec', args: ['init', '--tools', 'codex'] },
+      },
     });
   });
 
-  it('declares how to check for and install the spec-kit CLI', () => {
+  it('requires an initialized OpenSpec project structure', () => {
+    expect(getPreset('openspec')?.requiredPaths).toEqual([
+      'openspec/changes',
+      'openspec/archive',
+      'openspec/specs',
+    ]);
+  });
+
+  it('declares how to check, install, and initialize the spec-kit CLI', () => {
     expect(getPreset('spec-kit')?.cli).toEqual({
       command: 'specify',
       install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] },
+      scaffoldSkills: {
+        command: 'specify',
+        args: ['init', '--here', '--integration', 'claude'],
+      },
+      scaffoldSkillsByHost: {
+        codex: {
+          command: 'specify',
+          args: ['init', '--here', '--integration', 'codex', '--integration-options=--skills'],
+        },
+      },
     });
   });
 
@@ -79,9 +103,9 @@ describe('the openspec preset scaffolds a valid workflow', () => {
       'apply',
       'test',
       'validate',
-      'gate',
       'archive',
-      'revise',
+      'gate',
+      'git-ops',
     ]);
   });
 
@@ -94,7 +118,7 @@ describe('the openspec preset scaffolds a valid workflow', () => {
     expect(skillsOf('explore')).toEqual(['openspec-explore']);
     expect(skillsOf('propose')).toEqual(['openspec-propose']);
     expect(skillsOf('apply')).toEqual(['openspec-apply-change']);
-    expect(skillsOf('archive')).toEqual(['openspec-archive-change']);
+    expect(skillsOf('archive')).toEqual(['openspec-archive-change', 'openspec-sync-specs']);
   });
 
   it('puts the only conversational skill on the only interactive node', () => {
@@ -104,22 +128,19 @@ describe('the openspec preset scaffolds a valid workflow', () => {
 
     const explore = wf.nodes.find((n) => n.id === 'explore')!;
     expect(explore.type.interactive).toBe(true);
-    // `revise` is the second interactive node, and deliberately carries no
-    // skill: it exists to ask why a diff was rejected, not to run a method.
-    const revise = wf.nodes.find((n) => n.id === 'revise')!;
-    expect(revise.type.interactive).toBe(true);
-    expect((revise.config as { skills?: unknown }).skills).toBeUndefined();
-    for (const node of wf.nodes.filter((n) => n.id !== 'explore' && n.id !== 'revise')) {
+    for (const node of wf.nodes.filter((n) => n.id !== 'explore')) {
       expect(node.type.interactive).toBe(false);
     }
   });
 
-  it('gates the git-mutating step, and does not retry a rejected gate', () => {
+  it('runs archive before the final gate and gates the git-mutating step', () => {
     const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
 
     const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
-    expect(wf.graph.directDependencies('archive')).toEqual(['gate']);
+    expect(wf.nodes.find((n) => n.id === 'archive')!.type.id).toBe('implement');
+    expect(wf.graph.directDependencies('gate')).toEqual(['archive']);
+    expect(wf.graph.directDependencies('git-ops')).toEqual(['gate']);
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
   });
 
@@ -143,18 +164,26 @@ describe('the openspec preset scaffolds a valid workflow', () => {
 describe('the spec-kit preset scaffolds a valid workflow', () => {
   const preset = getPreset('spec-kit')!;
 
-  it('is registered with no required skills — there is no canonical Spec Kit skill package', () => {
+  it('requires the official Spec Kit skills and project marker', () => {
     expect(presetNames()).toContain('spec-kit');
-    expect(preset.requiredSkills).toEqual([]);
+    expect(preset.requiredSkills).toEqual([
+      'speckit-specify',
+      'speckit-plan',
+      'speckit-tasks',
+      'speckit-implement',
+    ]);
+    expect(preset.requiredPaths).toEqual(['.specify']);
   });
 
-  it('loads and validates like any hand-written workflow, with no skill fixtures needed', () => {
-    const wf = loadWorkflowFromString(preset.yaml);
+  it('loads and validates like any hand-written workflow after Spec Kit initialization', () => {
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
     expect(wf.order).toEqual([
       'specify',
       'plan',
       'plan-gate',
+      'tasks',
       'implement',
       'test',
       'validate',
@@ -165,7 +194,8 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
   });
 
   it('puts the only conversational skill on the only interactive node', () => {
-    const wf = loadWorkflowFromString(preset.yaml);
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
     const specify = wf.nodes.find((n) => n.id === 'specify')!;
     expect(specify.type.interactive).toBe(true);
@@ -178,14 +208,16 @@ describe('the spec-kit preset scaffolds a valid workflow', () => {
   });
 
   it('gates the git-mutating step, and does not retry a rejected gate', () => {
-    const wf = loadWorkflowFromString(preset.yaml);
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
     expect(wf.graph.directDependencies('git-ops')).toEqual(['gate']);
     expect(wf.graph.loopbacksFrom('gate')).toEqual([]);
   });
 
   it('judges validate against the plan directly, so a retry never rewrites its own contract', () => {
-    const wf = loadWorkflowFromString(preset.yaml);
+    const { repoRoot, roots } = repoWithPresetSkills(preset.requiredSkills);
+    const wf = loadWorkflowFromString(preset.yaml, { repoRoot, skillRoots: roots });
 
     expect(wf.graph.directDependencies('validate').sort()).toEqual(['plan', 'test']);
   });

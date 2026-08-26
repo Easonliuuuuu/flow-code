@@ -1,6 +1,9 @@
-import { getPreset, listPresets, type WorkflowPreset } from '../presets.js';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { getPreset, listPresets, presetScaffoldCommand, type WorkflowPreset } from '../presets.js';
 import { isCliAvailable } from '../init/cliInstall.js';
 import { defaultSkillRoots, discoverSkills, type SkillRoots } from '../skills/discover.js';
+import type { CompanionHost } from '../guest/host.js';
 import {
   loadWorkflow,
   loadWorkflowFromString,
@@ -12,6 +15,7 @@ import {
 export interface WorkflowSelection {
   graph?: string;
   preset?: string;
+  host?: CompanionHost;
 }
 
 export interface SelectedWorkflow {
@@ -26,15 +30,24 @@ function missingSkills(preset: WorkflowPreset, roots: SkillRoots): string[] {
   return preset.requiredSkills.filter((name) => !available.has(name));
 }
 
-function skillProblems(preset: WorkflowPreset, roots: SkillRoots): string[] {
+export function missingProjectPaths(preset: WorkflowPreset, repoRoot: string): string[] {
+  return (preset.requiredPaths ?? []).filter((path) => !existsSync(join(repoRoot, path)));
+}
+
+function skillProblems(preset: WorkflowPreset, roots: SkillRoots, repoRoot: string, host?: CompanionHost): string[] {
   const missing = missingSkills(preset, roots);
-  if (missing.length === 0) return [];
-  const scaffold = preset.cli?.scaffoldSkills;
+  const missingPaths = missingProjectPaths(preset, repoRoot);
+  const scaffold = presetScaffoldCommand(preset, host);
+  const remedy = scaffold !== undefined
+    ? ` — run \`${[scaffold.command, ...scaffold.args, '.'].join(' ')}\``
+    : ' — initialize the project before opening this preset';
   return [
-    `preset \`${preset.name}\` is missing skill(s): ${missing.join(', ')}` +
-      (scaffold !== undefined
-        ? ` — run \`${[scaffold.command, ...scaffold.args, '.'].join(' ')}\` to scaffold them`
-        : ' — install them before opening this preset'),
+    ...(missing.length > 0
+      ? [`preset \`${preset.name}\` is missing skill(s): ${missing.join(', ')}${remedy}`]
+      : []),
+    ...(missingPaths.length > 0
+      ? [`preset \`${preset.name}\` is not initialized in this project; missing: ${missingPaths.join(', ')}${remedy}`]
+      : []),
   ];
 }
 
@@ -61,7 +74,11 @@ export async function selectWorkflow(
   }
 
   if (selection.preset === undefined) {
-    const loadOptions: LoadOptions = selection.graph !== undefined ? { graph: selection.graph } : {};
+    const roots = options.skillRoots ?? defaultSkillRoots(repoRoot, undefined, selection.host);
+    const loadOptions: LoadOptions = {
+      ...(selection.graph !== undefined ? { graph: selection.graph } : {}),
+      skillRoots: roots,
+    };
     return {
       workflow: loadWorkflow(repoRoot, loadOptions),
       ...(selection.graph !== undefined ? { graph: selection.graph } : {}),
@@ -75,8 +92,8 @@ export async function selectWorkflow(
       'file-schema',
     );
   }
-  const roots = options.skillRoots ?? defaultSkillRoots(repoRoot);
-  const problems = skillProblems(preset, roots);
+  const roots = options.skillRoots ?? defaultSkillRoots(repoRoot, undefined, selection.host);
+  const problems = skillProblems(preset, roots, repoRoot, selection.host);
   const cliIssue = await (options.isCliAvailable === undefined
     ? cliProblem(preset)
     : preset.cli !== undefined && !(await options.isCliAvailable(preset.cli.command))

@@ -1,4 +1,10 @@
 import { DEFAULT_WORKFLOW_YAML } from './defaultWorkflow.js';
+import type { CompanionHost } from './guest/host.js';
+
+export interface PresetCommand {
+  command: string;
+  args: string[];
+}
 
 /**
  * A named starting workflow. A preset is a scaffolded file and nothing more —
@@ -16,18 +22,22 @@ export interface WorkflowPreset {
   yaml: string;
   /** Skills the scaffolded graph references, checked after writing. */
   requiredSkills: string[];
+  /** Project paths created by the methodology's own initializer. */
+  requiredPaths?: string[];
   /** External CLI the preset's skills depend on, if any — checked interactively before scaffolding. */
   cli?: {
     /** Binary name checked on PATH. */
     command: string;
     /** How to install it; shown to the user and run on confirmation. */
-    install: { command: string; args: string[] };
+    install: PresetCommand;
     /**
      * Command that scaffolds `requiredSkills` into the current project (e.g.
      * `openspec init`), offered when the CLI is available but the skills
      * still aren't. The repo root is appended as the final argument.
      */
-    scaffoldSkills?: { command: string; args: string[] };
+    scaffoldSkills?: PresetCommand;
+    /** Host-specific initializer arguments, when a methodology writes host skills. */
+    scaffoldSkillsByHost?: Partial<Record<CompanionHost, PresetCommand>>;
   };
 }
 
@@ -56,9 +66,12 @@ nodes:
       topic: What should this change accomplish?
       skills: [openspec-explore]
 
+  # Proposal creation is an artifact-writing operation: the real OpenSpec
+  # skill runs the CLI and writes proposal/design/spec/task files.
   - id: propose
-    type: spec
+    type: implement
     config:
+      instructions: Create the OpenSpec change and all artifacts needed before implementation, then report the change name and artifact paths.
       skills: [openspec-propose]
 
   # No config: it reads the proposal from \`propose\`, the node it depends on
@@ -83,25 +96,23 @@ nodes:
   - id: validate
     type: validate
 
+  # Archive/sync mutates OpenSpec artifacts (mkdir/mv and sometimes spec
+  # synchronization), so it needs the same bounded write envelope as Apply.
+  # It intentionally runs before the final gate, so the user approves the
+  # exact tree Git-ops will commit.
+  - id: archive
+    type: implement
+    config:
+      instructions: Sync any approved OpenSpec delta specs and archive the completed change. Report the resulting archive path and any synced specs.
+      skills: [openspec-archive-change, openspec-sync-specs]
+
   - id: gate
     type: approval-gate
     config:
-      title: Review the pending diff before archiving the change
+      title: Review the complete change and archived OpenSpec artifacts before committing
 
-  # Where a rejected diff goes: an ordinary Discuss node, reached only when
-  # \`gate\` is rejected. The gate itself cannot say *why* it was rejected —
-  # approve/reject carries no text — so without this the retry knows only that
-  # a human said no. Delete it and both conditioned edges below, leaving a bare
-  # \`- { from: gate, to: archive }\`, to make a rejection end the run instead.
-  - id: revise
-    type: discuss
-    config:
-      topic: What has to change about this diff before it can be approved?
-
-  - id: archive
+  - id: git-ops
     type: git-ops
-    config:
-      skills: [openspec-archive-change]
 
 edges:
   - { from: explore, to: propose }
@@ -114,12 +125,11 @@ edges:
   # depends on \`propose\` directly — and that dependency is also what keeps a
   # retry from rewriting the contract it is being judged against.
   - { from: propose, to: validate }
-  - { from: validate, to: gate }
-  # Both arms spelled out. An unconditional edge out of a gate already means
-  # \`when: "gate.decision == 'approved'"\`, but mixing the implicit form with
-  # the explicit one beside it reads badly even though it works.
-  - { from: gate, to: archive, when: "gate.decision == 'approved'" }
-  - { from: gate, to: revise, when: "gate.decision == 'rejected'" }
+  - { from: validate, to: archive }
+  - { from: archive, to: gate }
+  # Only the approved final tree reaches Git-ops. A rejected final gate leaves
+  # the commit step skipped; start a new run after changing the artifacts.
+  - { from: gate, to: git-ops, when: "gate.decision == 'approved'" }
 
   # Rejecting the proposal reopens the discussion that produced it, rather
   # than ending the run: a proposal is rejected to be rewritten, not
@@ -129,13 +139,6 @@ edges:
   # \`defaultWorkflow.ts\` for the full explanation).
   - { from: propose-gate, to: explore, loopback: true }
 
-  # The way back from a rejected diff. \`on: success\` because finishing the
-  # conversation is the signal to go back — a return path waiting for \`revise\`
-  # to fail would wait forever. maxAttempts matches the loop-backs below
-  # because all three point at \`apply\` and the bound is counted once on the
-  # target: a lower number here would starve the revision path first.
-  - { from: revise, to: apply, loopback: { maxAttempts: 3, on: success } }
-
   - { from: test, to: apply, loopback: { maxAttempts: 3 } }
   - { from: validate, to: apply, loopback: { maxAttempts: 3 } }
 `;
@@ -144,15 +147,9 @@ const SPEC_KIT_YAML = `# flow-code workflow (spec-kit preset) — checked into y
 # Run \`flow-code node-types\` for every node type, and \`flow-code skills\` for
 # every skill you can attach to one.
 #
-# Shaped after GitHub Spec Kit's specify → plan → tasks → implement loop,
-# built from the same node types every other preset uses — Spec Kit is a
-# methodology, not a new kind of node. "tasks" has no node of its own: an
-# Implement node's own agent turn breaks its instructions into whatever
-# tasks satisfy them as a normal part of implementing, the same way it
-# already would without a name for that step. Unlike the openspec preset,
-# this one names no \`skills:\` — there's no single canonical Spec Kit skill
-# package to point at, so attach one yourself (\`flow-code skills\`) if you
-# have it, or leave every step on its built-in role prompt.
+# Follows GitHub Spec Kit's specify → plan → tasks → implement lifecycle.
+# The official initializer installs these named skills into the selected host's
+# project skill root; flow-code requires that setup before opening this preset.
 
 settings:
   concurrency: 1
@@ -171,16 +168,12 @@ nodes:
       topic: >-
         What should this feature accomplish? Capture the user scenarios and
         requirements — not the implementation — before any design starts.
-      # skills: [your-spec-kit-skill]
+      skills: [speckit-specify]
 
   - id: plan
     type: spec
-    # No config: the technical plan and acceptance criteria are derived from
-    # the specify discussion above. To write them by hand instead:
-    #   config:
-    #     title: What we're building
-    #     acceptanceCriteria:
-    #       - Running \`foo --bar\` prints the parsed config and exits 0
+    config:
+      skills: [speckit-plan]
 
   # No config: it reads the plan from \`plan\`, the node it depends on
   # directly, and needs no pointer to a path.
@@ -189,12 +182,19 @@ nodes:
     config:
       title: Review the plan before implementation begins
 
+  - id: tasks
+    type: implement
+    config:
+      instructions: Generate the Spec Kit task list from the approved plan before implementation begins.
+      skills: [speckit-tasks]
+
   - id: implement
     type: implement
     config:
       instructions: >-
         Implement the plan above: break it into the tasks needed to satisfy
         every acceptance criterion, including tests covering them.
+      skills: [speckit-implement]
 
   # No \`commands\`: this node works out how the project runs its tests on its
   # first execution and asks you to confirm before running anything, then saves
@@ -230,7 +230,8 @@ edges:
   - { from: specify, to: plan }
   - { from: plan, to: plan-gate }
   # Unconditional out of a gate is read as \`when: "plan-gate.decision == 'approved'"\`.
-  - { from: plan-gate, to: implement }
+  - { from: plan-gate, to: tasks }
+  - { from: tasks, to: implement }
   - { from: implement, to: test }
   - { from: test, to: validate }
   # Validate is judged against the plan's acceptance criteria, so it depends
@@ -439,23 +440,47 @@ edges:
 const PRESETS: WorkflowPreset[] = [
   {
     name: 'openspec',
-    description: 'explore → propose → gate → apply → test → validate → gate → archive, using the openspec skills',
-    summary: 'explore → propose → gate → apply → test → validate → gate → archive',
+    description: 'explore → propose → gate → apply → test → validate → archive → gate → git-ops, using the openspec skills',
+    summary: 'explore → propose → gate → apply → test → validate → archive → gate → git-ops',
     yaml: OPENSPEC_YAML,
-    requiredSkills: ['openspec-explore', 'openspec-propose', 'openspec-apply-change', 'openspec-archive-change'],
+    requiredSkills: [
+      'openspec-explore',
+      'openspec-propose',
+      'openspec-apply-change',
+      'openspec-archive-change',
+      'openspec-sync-specs',
+    ],
+    requiredPaths: ['openspec/changes', 'openspec/archive', 'openspec/specs'],
     cli: {
       command: 'openspec',
       install: { command: 'npm', args: ['install', '-g', '@fission-ai/openspec@latest'] },
       scaffoldSkills: { command: 'openspec', args: ['init', '--tools', 'claude'] },
+      scaffoldSkillsByHost: {
+        codex: { command: 'openspec', args: ['init', '--tools', 'codex'] },
+      },
     },
   },
   {
     name: 'spec-kit',
-    description: 'specify → plan → gate → implement → test → validate → gate → git-ops, after GitHub Spec Kit',
-    summary: 'specify → plan → gate → implement → test → validate → gate → git-ops',
+    description: 'specify → plan → gate → tasks → implement → test → validate → gate → git-ops, after GitHub Spec Kit',
+    summary: 'specify → plan → gate → tasks → implement → test → validate → gate → git-ops',
     yaml: SPEC_KIT_YAML,
-    requiredSkills: [],
-    cli: { command: 'specify', install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] } },
+    requiredSkills: ['speckit-specify', 'speckit-plan', 'speckit-tasks', 'speckit-implement'],
+    requiredPaths: ['.specify'],
+    cli: {
+      command: 'specify',
+      install: { command: 'uv', args: ['tool', 'install', 'specify-cli'] },
+      scaffoldSkills: {
+        command: 'specify',
+        args: ['init', '--here', '--integration', 'claude'],
+      },
+      scaffoldSkillsByHost: {
+        codex: {
+          command: 'specify',
+          args: ['init', '--here', '--integration', 'codex', '--integration-options=--skills'],
+        },
+      },
+    },
   },
   {
     name: 'frugal',
@@ -494,6 +519,14 @@ export function listPresets(): WorkflowPreset[] {
   return [...PRESETS];
 }
 
+/** The initializer that matches the companion host, falling back to the preset default. */
+export function presetScaffoldCommand(
+  preset: WorkflowPreset,
+  host?: CompanionHost,
+): PresetCommand | undefined {
+  return (host !== undefined ? preset.cli?.scaffoldSkillsByHost?.[host] : undefined) ?? preset.cli?.scaffoldSkills;
+}
+
 /**
  * The command that installs `skillId`, when it is a skill some preset ships
  * with — otherwise undefined, because a skill flow-code did not scaffold is
@@ -504,9 +537,9 @@ export function listPresets(): WorkflowPreset[] {
  * fails to resolve the only thing known about it is its name. The trailing
  * `.` matches `scaffoldSkills`' contract of taking the target directory last.
  */
-export function skillScaffoldCommand(skillId: string): string | undefined {
+export function skillScaffoldCommand(skillId: string, host?: CompanionHost): string | undefined {
   for (const preset of PRESETS) {
-    const scaffold = preset.cli?.scaffoldSkills;
+    const scaffold = presetScaffoldCommand(preset, host);
     if (!scaffold || !preset.requiredSkills.includes(skillId)) continue;
     return [scaffold.command, ...scaffold.args, '.'].join(' ');
   }

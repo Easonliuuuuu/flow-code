@@ -38,10 +38,41 @@ const PROPOSAL = {
   edges: [],
 };
 
+const GATED = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: build it }
+  - id: gate
+    type: approval-gate
+    config: { title: review it }
+edges:
+  - { from: impl, to: gate }
+`;
+
+const DETERMINISTIC = `
+nodes:
+  - id: impl
+    type: implement
+    config: { instructions: build it }
+  - id: test
+    type: test
+    config: { commands: ["true"] }
+edges:
+  - { from: impl, to: test }
+`;
+
 function plannedRepo(): string {
   const repo = makeTempGitRepo();
   mkdirSync(join(repo, '.flow-code'), { recursive: true });
   writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), PLANNED);
+  return repo;
+}
+
+function workflowRepo(workflow: string): string {
+  const repo = makeTempGitRepo();
+  mkdirSync(join(repo, '.flow-code'), { recursive: true });
+  writeFileSync(join(repo, '.flow-code', 'workflow.yaml'), workflow);
   return repo;
 }
 
@@ -208,5 +239,70 @@ describe('both reporting surfaces describe the same expansion', () => {
     const { order } = rehydrateGraph(latestRunState(repo)!.graph!, { repoRoot: repo });
     expect(order).toEqual(['plan', 'impl', 'gate', 'ship']);
     expect(done.text).toContain(order.join(' → '));
+  });
+});
+
+describe('start_node work-mode guidance', () => {
+  it('keeps an approval gate in the user-facing conversation', async () => {
+    const repo = workflowRepo(GATED);
+    const client = await connect(repo);
+    await call(client, 'open_run');
+    await call(client, 'start_node', { node: 'impl' });
+    await call(client, 'complete_node', { node: 'impl', output: { changedFiles: [], diff: '' } });
+
+    const started = await call(client, 'start_node', { node: 'gate' });
+
+    expect(started.refused).toBe(false);
+    expect(started.text).toContain('approval gate');
+    expect(started.text).toContain('ask the user directly');
+    expect(started.text).not.toContain('fresh subagent');
+  });
+
+  it('keeps deterministic tests in the current session', async () => {
+    const repo = workflowRepo(DETERMINISTIC);
+    const client = await connect(repo);
+    await call(client, 'open_run');
+    await call(client, 'start_node', { node: 'impl' });
+    await call(client, 'complete_node', { node: 'impl', output: { changedFiles: [], diff: '' } });
+
+    const started = await call(client, 'start_node', { node: 'test' });
+
+    expect(started.refused).toBe(false);
+    expect(started.text).toContain('deterministic step');
+    expect(started.text).toContain('current session');
+    expect(started.text).not.toContain('fresh subagent');
+  });
+
+  it('does not tell a Frugal run to delegate', async () => {
+    const repo = plannedRepo();
+    const client = await connect(repo);
+    await call(client, 'open_run', { preset: 'frugal' });
+    await call(client, 'start_node', { node: 'discuss' });
+    await call(client, 'complete_node', {
+      node: 'discuss',
+      output: { conclusion: 'build it', constraints: [] },
+    });
+    await call(client, 'start_node', { node: 'spec' });
+    await call(client, 'complete_node', {
+      node: 'spec',
+      output: {
+        specPath: '.flow-code/specs/change.md',
+        title: 'Build it',
+        requirements: [],
+        acceptanceCriteria: [{ id: 'AC1', text: 'It works' }],
+      },
+    });
+    await call(client, 'start_node', { node: 'spec-gate' });
+    await call(client, 'decide_gate', {
+      node: 'spec-gate',
+      decision: 'approved',
+    });
+
+    const started = await call(client, 'start_node', { node: 'implement' });
+
+    expect(started.refused).toBe(false);
+    expect(started.text).toContain('Delegation is disabled');
+    expect(started.text).toContain('current session');
+    expect(started.text).not.toContain('fresh subagent');
   });
 });

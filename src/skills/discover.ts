@@ -2,6 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import type { CompanionHost } from '../guest/host.js';
 
 /**
  * Where a skill was found. `project` is the repo's own `.claude/skills/`,
@@ -29,16 +30,27 @@ export interface DiscoveredSkill {
 export interface SkillRoots {
   /** The repo's own `.claude/skills`. */
   project: string;
+  /** Other project skill roots supported by the selected host. */
+  projectAlternates?: string[];
   /** `~/.claude/skills`. */
   user: string;
+  /** Other user skill roots supported by the selected host. */
+  userAlternates?: string[];
   /** `~/.claude/plugins/marketplaces`. */
   plugins: string;
 }
 
-export function defaultSkillRoots(repoRoot: string, home: string = homedir()): SkillRoots {
+export function defaultSkillRoots(
+  repoRoot: string,
+  home: string = homedir(),
+  host: CompanionHost = 'claude',
+): SkillRoots {
+  const rootName = host === 'codex' ? '.codex' : '.claude';
   return {
-    project: join(repoRoot, '.claude', 'skills'),
-    user: join(home, '.claude', 'skills'),
+    project: join(repoRoot, rootName, 'skills'),
+    ...(host === 'codex' ? { projectAlternates: [join(repoRoot, '.agents', 'skills')] } : {}),
+    user: join(home, rootName, 'skills'),
+    ...(host === 'codex' ? { userAlternates: [join(home, '.agents', 'skills')] } : {}),
     plugins: join(home, '.claude', 'plugins', 'marketplaces'),
   };
 }
@@ -150,7 +162,13 @@ function pluginSkills(pluginsRoot: string): DiscoveredSkill[] {
 export function discoverSkills(roots: SkillRoots): DiscoveredSkill[] {
   const byId = new Map<string, DiscoveredSkill>();
   // Reverse precedence order: later writes win, so project lands last.
+  for (const root of roots.userAlternates ?? []) {
+    for (const skill of skillsInRoot(root, 'user')) byId.set(skill.id, skill);
+  }
   for (const skill of skillsInRoot(roots.user, 'user')) byId.set(skill.id, skill);
+  for (const root of roots.projectAlternates ?? []) {
+    for (const skill of skillsInRoot(root, 'project')) byId.set(skill.id, skill);
+  }
   for (const skill of skillsInRoot(roots.project, 'project')) byId.set(skill.id, skill);
   for (const skill of pluginSkills(roots.plugins)) byId.set(skill.id, skill);
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -187,7 +205,15 @@ export function resolveSkillEntry(
   const skill = all.find((s) => s.id === entry);
   return skill
     ? { skill, searched: [] }
-    : { searched: [roots.project, roots.user, `${roots.plugins} (as \`plugin:${entry}\`)`] };
+    : {
+        searched: [
+          roots.project,
+          ...(roots.projectAlternates ?? []),
+          roots.user,
+          ...(roots.userAlternates ?? []),
+          `${roots.plugins} (as \`plugin:${entry}\`)`,
+        ],
+      };
 }
 
 /** Repo-relative when the skill lives inside the repo, absolute otherwise. */

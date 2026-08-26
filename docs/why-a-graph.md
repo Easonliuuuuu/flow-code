@@ -54,8 +54,8 @@ a starting `workflow.yaml` and nothing more.
 
 | Preset | Graph |
 | --- | --- |
-| `openspec` | `explore → propose → gate → apply → test → validate → gate → archive`, wired to the OpenSpec skills |
-| `spec-kit` | `specify → plan → gate → implement → test → validate → gate → git-ops`, after GitHub Spec Kit |
+| `openspec` | `explore → propose → gate → apply → test → validate → archive → gate → git-ops`, wired to the OpenSpec skills |
+| `spec-kit` | `specify → plan → gate → tasks → implement → test → validate → gate → git-ops`, after GitHub Spec Kit |
 | `frugal` | The default graph with the expensive parts removed — see [What a run costs](cost.md) |
 | `planned` | `plan → gate → git-ops` — the middle is negotiated with you at run time |
 

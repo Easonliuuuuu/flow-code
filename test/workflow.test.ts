@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CAPABILITIES } from '../src/capabilities.js';
 import { listNodeTypes, nodeTypeRegistry } from '../src/registry/index.js';
@@ -13,6 +16,7 @@ import {
   settingsSchema,
   SETTINGS_FIELDS,
 } from '../src/workflow/schema.js';
+import { defaultSkillRoots } from '../src/skills/discover.js';
 
 const VALID = `
 nodes:
@@ -854,7 +858,14 @@ nodes:
     const { listPresets } = await import('../src/presets.js');
     expect(() => loadWorkflowFromString(DEFAULT_WORKFLOW_YAML)).not.toThrow();
     for (const preset of listPresets()) {
-      expect(() => loadWorkflowFromString(preset.yaml), preset.name).not.toThrow();
+      const base = mkdtempSync(join(tmpdir(), `flow-code-${preset.name}-`));
+      const roots = defaultSkillRoots(base, join(base, 'home'));
+      for (const name of preset.requiredSkills) {
+        const dir = join(roots.project, name);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: test\n---\n`);
+      }
+      expect(() => loadWorkflowFromString(preset.yaml, { repoRoot: base, skillRoots: roots }), preset.name).not.toThrow();
     }
   });
 });
