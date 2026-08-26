@@ -31,6 +31,18 @@ Choose the workflow source before calling `describe_workflow` or `open_run`:
 Pass the selected preset to both `describe_workflow` and `open_run`; do not open the
 project's default workflow first and switch afterwards.
 
+If no preset was named and the project has no `.flow-code/workflow.yaml` yet,
+`describe_workflow` reports that instead of a graph. Do not tell the user to go
+run a command themselves — ask what they want:
+
+- A one-off graph for just this run: use one of the four presets above as a
+  per-run override (never written to disk).
+- A persistent workflow for this project: run `flow-code init` yourself via
+  Bash — bare for the default graph, or `--preset <name>` for a named one —
+  then retry `describe_workflow`. On a repo with no workflow file yet this
+  writes cleanly with no prompts, so there is nothing to confirm with the user
+  first beyond which graph they want.
+
 ## Do this
 
 1. **`describe_workflow`** — read the steps this project actually has, what each one
@@ -49,9 +61,26 @@ project's default workflow first and switch afterwards.
      and show the returned proposed graph (its nodes and edges) to the user before asking
      whether to accept or revise it. Call **`accept_plan`** only after the user explicitly
      accepts it. Do not use `complete_node` for Plan.
-4. If the graph has an approval gate, **ask the user** and record their answer with
-   **`decide_gate`**. Never decide one yourself.
+4. If the graph has an approval gate, **show the user what they're deciding on** —
+   the diff and/or the document a direct dependency produced (a Spec node's title,
+   requirements, and acceptance criteria, say) — before you ask anything. That content
+   arrives in the gate's own brief from `start_node`, as upstream output; it does not
+   reach the user unless you put it in your reply. If the gate sits directly above a
+   `git-ops` step, also draft the commit message from that diff now and show it
+   alongside it — one approval covers both the change and how it will be described.
+   Then **ask the user** and record their answer with **`decide_gate`**. Never decide
+   one yourself.
+   - Once approved, when you start the `git-ops` step, hand its subagent the exact
+     message the user approved as an explicit instruction ("commit with exactly this
+     message") rather than letting it draft its own — the approval was for that text,
+     not for whatever the subagent might write instead.
 5. **`close_run`** when the graph is finished, or when you are stopping early.
+6. If a `git-ops` step in this run committed anything, **ask whether they want a pull
+   request** — this is outside the graph entirely, so do it after `close_run`. If yes,
+   draft a PR title and body from the commit/diff, show them in full, and only after
+   the user approves (editing as needed) push if not already pushed and run
+   `gh pr create --title … --body …` via Bash. Never push or open a PR the user didn't
+   just ask for, and never open one without showing its content first.
 
 ## Why each step gets its own subagent
 
@@ -78,9 +107,18 @@ Read it and fix the order — do not report something else instead.
 back to implement, say), nothing routes you back along it. Report the failure, then
 report the earlier step started again yourself.
 
-**An approval gate is a question for the user.** Stop and ask them directly, then record
-their answer with `decide_gate`. `complete_node` refuses approval gates outright, so
-there is no path where you can answer one on their behalf.
+**An approval gate is a question for the user, about something they haven't seen yet.**
+Having the content in your own context because it arrived in a brief is not the same as
+the user having seen it. Paste or summarize the actual diff/document in your reply first,
+then stop and ask them directly, then record their answer with `decide_gate`.
+`complete_node` refuses approval gates outright, so there is no path where you can answer
+one on their behalf.
+
+**A commit message is content too, not a detail `git-ops` sorts out on its own.** Draft
+it before the gate that precedes `git-ops`, show it with the diff, and pass the approved
+text into the `git-ops` subagent's instructions verbatim. A PR is the same shape of
+decision, just after the graph is done: draft it, show it, wait for explicit agreement,
+then run `gh pr create`.
 
 ## What is enforced, and what is not
 
