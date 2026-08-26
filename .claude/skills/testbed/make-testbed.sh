@@ -151,7 +151,7 @@ EOF
   exit 0
 fi
 
-mkdir -p .flow-code src test
+mkdir -p src test
 
 cat > package.json <<'EOF'
 {
@@ -181,46 +181,17 @@ test('greets by name', () => {
 });
 EOF
 
-cat > .flow-code/workflow.yaml <<'EOF'
-settings:
-  model: sonnet
-
-nodes:
-  - id: implement
-    type: implement
-    config:
-      instructions: Make greet handle an empty name, and cover it with a test.
-
-  - id: unit
-    type: test
-    config:
-      commands: ["npm test"]
-
-  - id: review
-    type: review
-
-  - id: gate
-    type: approval-gate
-
-  - id: ship
-    type: git-ops
-
-edges:
-  - { from: implement, to: unit }
-  - { from: unit, to: review }
-  - { from: review, to: gate }
-  - { from: gate, to: ship }
-  - { from: unit, to: implement, loopback: true }
-EOF
-
 cat > README.md <<EOF
 # Companion test project
 
-An ordinary project with a flow-code workflow and no per-project integration
-files. Mode: $MODE.
+An ordinary project with no flow-code configuration yet and no per-project
+integration files. Mode: $MODE.
 
-The companion session must create the run through the plugin. Start \`watch\`
-first so the graph is already waiting when that run appears.
+This project has no \`.flow-code/workflow.yaml\`. In the companion session,
+either name one of the built-in presets (openspec, spec-kit, frugal, planned)
+or run \`flow-code init\` first to scaffold this project's own workflow, then
+say what you actually want built. Start \`watch\` first so the graph is
+already waiting when a run appears.
 EOF
 
 # Runtime state belongs to this disposable repo but not to its worktree. This
@@ -235,12 +206,6 @@ cat >> .git/info/exclude <<'EOF'
 .flow-code/enforcement.json
 .flow-code/credentials.json
 EOF
-
-if [ "$MODE" = "companion-local" ]; then
-  PATH="$LOCAL_BIN:$PATH" flow-code validate >/dev/null
-else
-  flow-code validate >/dev/null
-fi
 
 git add -A
 git commit -qm "chore: scaffold $MODE test project"
@@ -261,8 +226,12 @@ if [ "$MODE" = "companion-local" ]; then
   echo "  export PATH=\"$LOCAL_BIN:\$PATH\""
   echo "  claude --plugin-dir $REPO_ROOT/plugin"
   echo
-  echo "  # then, in that session:"
-  echo "  /flow-code make greet handle an empty name"
+  echo "  # then: /flow-code <describe what you want>"
+  echo "  # there is no .flow-code/workflow.yaml yet, so the agent should ask"
+  echo "  # what workflow you want: a named preset (openspec, spec-kit,"
+  echo "  # frugal, planned) for just this run, or 'flow-code init' for a"
+  echo "  # persistent one — and scaffold the latter itself via Bash, not"
+  echo "  # hand the command back to you."
   echo
   echo "Both the CLI/MCP server and Claude plugin come from this checkout."
 else
@@ -283,10 +252,15 @@ else
   echo "  /plugin marketplace add Easonliuuuuu/flow-code"
   echo "  /plugin install flow-code"
   echo "  # exit Claude, restart it from the same shell, then:"
-  echo "  /flow-code make greet handle an empty name"
+  echo "  /flow-code <describe what you want>"
+  echo "  # there is no .flow-code/workflow.yaml yet, so the agent should ask"
+  echo "  # what workflow you want: a named preset (openspec, spec-kit,"
+  echo "  # frugal, planned) for just this run, or 'flow-code init' for a"
+  echo "  # persistent one — and scaffold the latter itself via Bash, not"
+  echo "  # hand the command back to you."
   echo
   echo "No command or plugin in this mode points at $REPO_ROOT."
 fi
 echo
 echo "This mode runs a real agent session against a real provider — it costs"
-echo "actual API usage, and the ship node commits inside the testbed."
+echo "actual API usage, and its git-ops step commits inside the testbed."

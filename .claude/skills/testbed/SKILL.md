@@ -21,10 +21,10 @@ provided. Do not ask follow-up questions.
   directory. It exposes the current checkout's CLI through a shim beside the
   testbed. The user runs `flow-code init`, then `flow-code run`, exercising the
   local engine and the complete first-run flow.
-- **`companion-local`** — an ordinary sample repository with a five-node
-  workflow. Both components under test are local: the CLI/MCP server comes from
-  this checkout's `dist/`, and Claude loads this checkout's plugin with
-  `--plugin-dir`. Nothing is installed into the project.
+- **`companion-local`** — an ordinary sample repository, no `.flow-code/`
+  configuration yet. Both components under test are local: the CLI/MCP server
+  comes from this checkout's `dist/`, and Claude loads this checkout's plugin
+  with `--plugin-dir`. Nothing is installed into the project.
 - **`companion-release`** — the same ordinary sample repository, driven only
   by the published `flow-code` executable and the public Claude marketplace
   plugin. Its launch commands and runtime never reference the current checkout.
@@ -32,10 +32,11 @@ provided. Do not ask follow-up questions.
   stops and prints the global install prerequisite; it must never substitute a
   local shim.
 
-The two companion repos contain `.flow-code/workflow.yaml`, because that is
-project configuration rather than plugin installation. They contain no
-`.mcp.json`, `.claude/`, `AGENTS.md`, in-repo executable shim, or visible
-testbed marker. The regeneration marker lives under `.git`.
+Neither companion repo contains `.flow-code/workflow.yaml`. A real user's
+first companion session starts from exactly this state — no project workflow,
+no pre-picked task — so the testbed must not scaffold one for them. They also
+contain no `.mcp.json`, `.claude/`, `AGENTS.md`, in-repo executable shim, or
+visible testbed marker. The regeneration marker lives under `.git`.
 
 All three modes can call a real provider and cost actual API usage. Never run
 `flow-code run` or start the companion Claude session for the user.
@@ -79,10 +80,17 @@ Mention that `run` calls a real provider and costs actual API usage.
 
 - `claude --plugin-dir …/plugin` exposes the `/flow-code` command and the MCP
   tools without marketplace installation.
+- With no `.flow-code/workflow.yaml` yet, the agent surfaces that before
+  opening a run and discusses it with the user: either a named preset
+  (`openspec`, `spec-kit`, `frugal`, `planned`) as a one-off for this run, or
+  `flow-code init` (bare or `--preset <name>`) run by the agent itself via
+  Bash to scaffold the project's own workflow. It must not silently invent a
+  graph, and it must not just tell the user to go run the command themselves.
 - The graph fills while the agent works, and the tier reads `hooks`, not
   `reported`.
-- An edit attempted during `review` is denied, and git writes stay blocked
-  until the user decides the gate.
+- Once the run reaches an `approval-gate` node, git writes stay blocked until
+  the user decides it; if the chosen workflow has a `review` node (the
+  CLI-scaffolded default does), an edit attempted during it is denied.
 
 Mention that both the plugin and CLI come from the current checkout. The
 external shim must be exported on `PATH` in the Claude shell because the plugin
@@ -94,24 +102,26 @@ launches a bare `flow-code` command.
   test, and neither launch command contains a checkout path.
 - The public marketplace plugin loads without warnings and its MCP server is
   healthy (`claude plugin list`, `claude mcp list`).
-- The graph fills live at the `hooks` tier, including review denial and the
-  human approval gate.
+- Same as `companion-local`: no workflow exists yet, so the agent must
+  establish one through conversation — a named preset for this run, or
+  scaffolding the project's own workflow itself via `flow-code init` — before
+  opening a run.
+- The graph fills live at the `hooks` tier, including the human approval gate
+  and, if the chosen workflow has one, review denial.
 
 Mention that Claude plugin installations are external state scoped by Claude,
 not files in the repo. Reusing a destination may reuse an earlier local plugin
 installation; use a new destination when the goal is a literal first install.
 
-## Companion fixture
+## Companion workflow selection
 
-Both companion modes use the same five-node graph so differences point to the
-installation source rather than the scenario:
-
-```text
-implement → unit → review → gate → ship
-    ↑_________|
-```
-
-`implement` edits, `unit` executes `npm test`, `review` is read-only, `gate`
-requires the user, and `ship` writes Git. The `unit → implement` loop-back must
-be walked by the companion session itself; flow-code did not start that process
-and cannot route it automatically.
+Companion modes ship no workflow at all — that mirrors a real first session on
+a real project. The flow-code plugin skill (`plugin/skills/flow-code/SKILL.md`)
+governs what happens next: an explicit preset name the user gives wins and is
+used for that run only, without ever being written to disk; otherwise, once
+the agent discovers there is no `.flow-code/workflow.yaml`, it discusses the
+choice with the user and — for a persistent project workflow — runs
+`flow-code init` itself via Bash. It must not just tell the user to go run
+that command in another terminal. Do not pre-decide any of this for the
+person running the testbed, and do not pre-write a task — let them tell the
+agent what they actually want built.
