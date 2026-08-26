@@ -3,11 +3,11 @@
 # Generate one of three disposable repos for hands-on flow-code testing:
 #
 #   engine             local CLI; the user drives `flow-code init` and `run`
-#   companion-local    local CLI + local Claude plugin via --plugin-dir
-#   companion-release  published CLI + public Claude plugin marketplace
+#   companion-local    local CLI + Claude plugin or Codex project integration
+#   companion-release  published CLI + Claude plugin or Codex project integration
 #
 # Usage: make-testbed.sh --mode engine|companion-local|companion-release
-#                        [--dest PATH] [--no-build]
+#                        [--host claude|codex] [--dest PATH] [--no-build]
 
 set -euo pipefail
 
@@ -15,12 +15,15 @@ ROOT_MARKER=.flow-code-testbed
 GIT_MARKER=.git/flow-code-testbed
 
 MODE=
+HOST=claude
+HOST_SET=0
 DEST=
 BUILD=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --mode) MODE="$2"; shift 2 ;;
+    --host) HOST="$2"; HOST_SET=1; shift 2 ;;
     --dest) DEST="$2"; shift 2 ;;
     --no-build) BUILD=0; shift ;;
     -h|--help) sed -n '3,11p' "$0"; exit 0 ;;
@@ -34,8 +37,22 @@ case "$MODE" in
   *) echo "unknown mode: $MODE — expected engine, companion-local, or companion-release" >&2; exit 2 ;;
 esac
 
+case "$HOST" in
+  claude|codex) ;;
+  *) echo "unknown host: $HOST — expected claude or codex" >&2; exit 2 ;;
+esac
+
+if [ "$MODE" = "engine" ] && [ "$HOST_SET" -eq 1 ]; then
+  echo "--host only applies to companion-local and companion-release" >&2
+  exit 2
+fi
+
 if [ -z "$DEST" ]; then
-  DEST="${HOME}/flow-code-testbed-${MODE}"
+  if [ "$MODE" = "engine" ] || [ "$HOST" = "claude" ]; then
+    DEST="${HOME}/flow-code-testbed-${MODE}"
+  else
+    DEST="${HOME}/flow-code-testbed-companion-codex-${MODE#companion-}"
+  fi
 fi
 
 if [ "$MODE" = "companion-release" ] && [ "$BUILD" -eq 0 ]; then
@@ -43,7 +60,7 @@ if [ "$MODE" = "companion-release" ] && [ "$BUILD" -eq 0 ]; then
   exit 2
 fi
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOCAL_BIN="${DEST}.flow-code-bin"
 
 # Refuse every deletion unless the target carries a marker written by this
@@ -85,6 +102,17 @@ if [ "$MODE" = "companion-release" ]; then
       exit 1
       ;;
   esac
+  if [ "$HOST" = "codex" ]; then
+    RELEASE_HELP="$(flow-code help)"
+    case "$RELEASE_HELP" in
+      *'--host claude|codex|all'*) ;;
+      *)
+        echo "companion-release --host codex requires a published flow-code release with Codex companion support." >&2
+        echo "The flow-code executable on PATH does not advertise --host claude|codex|all." >&2
+        exit 1
+        ;;
+    esac
+  fi
 fi
 
 if [ -e "$DEST" ]; then
@@ -181,11 +209,12 @@ test('greets by name', () => {
 });
 EOF
 
+if [ "$HOST" = "claude" ]; then
 cat > README.md <<EOF
 # Companion test project
 
 An ordinary project with no flow-code configuration yet and no per-project
-integration files. Mode: $MODE.
+integration files. Mode: $MODE; host: Claude Code.
 
 This project has no \`.flow-code/workflow.yaml\`. In the companion session,
 either name one of the built-in presets (openspec, spec-kit, frugal, planned)
@@ -193,6 +222,18 @@ or run \`flow-code init\` first to scaffold this project's own workflow, then
 say what you actually want built. Start \`watch\` first so the graph is
 already waiting when a run appears.
 EOF
+else
+cat > README.md <<EOF
+# Companion test project
+
+An ordinary project prepared for flow-code's Codex companion mode. Mode:
+$MODE; host: Codex.
+
+The default workflow and Codex project integration are committed as part of
+the fixture. Start \`watch\` first so the graph is already waiting when a run
+appears, then launch a new Codex session and describe what you want built.
+EOF
+fi
 
 # Runtime state belongs to this disposable repo but not to its worktree. This
 # mirrors flow-code's own exclusion list without invoking either implementation
@@ -207,11 +248,62 @@ cat >> .git/info/exclude <<'EOF'
 .flow-code/credentials.json
 EOF
 
+if [ "$HOST" = "codex" ]; then
+  if [ "$MODE" = "companion-local" ]; then
+    SETUP_BIN="$LOCAL_BIN/flow-code"
+    PATH="$LOCAL_BIN:$PATH" "$SETUP_BIN" init </dev/null >/dev/null
+    PATH="$LOCAL_BIN:$PATH" "$SETUP_BIN" connect --host codex >/dev/null
+  else
+    flow-code init </dev/null >/dev/null
+    flow-code connect --host codex >/dev/null
+  fi
+fi
+
 git add -A
-git commit -qm "chore: scaffold $MODE test project"
+git commit -qm "chore: scaffold $HOST $MODE test project"
 
 echo
-if [ "$MODE" = "companion-local" ]; then
+if [ "$HOST" = "codex" ]; then
+  if [ "$MODE" = "companion-local" ]; then
+    SOURCE_LABEL="local checkout"
+    PATH_LINE="  export PATH=\"$LOCAL_BIN:\$PATH\""
+  else
+    RELEASE_VERSION="$(flow-code --version)"
+    SOURCE_LABEL="published release $RELEASE_VERSION"
+    PATH_LINE=
+  fi
+  echo "testbed ready: $DEST  (mode: $MODE, host: codex, source: $SOURCE_LABEL)"
+  echo
+  echo "Verify the generated project integration:"
+  echo
+  echo "  cd $DEST"
+  if [ -n "$PATH_LINE" ]; then echo "$PATH_LINE"; fi
+  echo "  flow-code connect --host codex --check"
+  echo
+  echo "Watch it in one terminal:"
+  echo
+  echo "  cd $DEST"
+  if [ -n "$PATH_LINE" ]; then echo "$PATH_LINE"; fi
+  echo "  flow-code watch"
+  echo
+  echo "Drive it from a second terminal:"
+  echo
+  echo "  cd $DEST"
+  if [ -n "$PATH_LINE" ]; then echo "$PATH_LINE"; fi
+  echo "  codex"
+  echo
+  echo "  # review and trust the project hook if prompted, then inspect:"
+  echo "  # /hooks"
+  echo "  # /mcp"
+  echo "  # describe what you want built; the default workflow is installed"
+  if [ "$MODE" = "companion-local" ]; then
+    echo
+    echo "The CLI/MCP server, hook, and generated integration come from this checkout."
+  else
+    echo
+    echo "No command or generated integration in this mode points at $REPO_ROOT."
+  fi
+elif [ "$MODE" = "companion-local" ]; then
   echo "testbed ready: $DEST  (mode: companion-local, source: local checkout)"
   echo
   echo "Watch it in one terminal:"
