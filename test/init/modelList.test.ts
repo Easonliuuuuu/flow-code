@@ -53,6 +53,48 @@ describe('fetchModelIds', () => {
     expect(models).toEqual(['a-model', 'z-model']);
   });
 
+  it('filters image/video/speech/embedding models out of the OrcaRouter list', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: [
+            { id: 'kling/kling-v3' },
+            { id: 'google/imagen-4.0-generate-001' },
+            { id: 'google/gemini-2.5-flash-preview-tts' },
+            { id: 'google/gemini-embedding-001' },
+            { id: 'openai/gpt-4o-mini' },
+          ],
+        }),
+      ),
+    );
+    const { models, error } = await fetchModelIds('orcarouter', 'or-orca-test');
+    expect(error).toBeUndefined();
+    expect(models).toEqual(['openai/gpt-4o-mini']);
+  });
+
+  it('leaves OpenAI filtering unchanged by the OrcaRouter filter addition', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        jsonResponse({
+          data: [
+            { id: 'gpt-4o-mini' },
+            { id: 'whisper-1' },
+            { id: 'tts-1' },
+            { id: 'dall-e-3' },
+            { id: 'text-embedding-3-small' },
+            { id: 'omni-moderation-latest' },
+            { id: 'gpt-4o' },
+          ],
+        }),
+      ),
+    );
+    const { models, error } = await fetchModelIds('openai', 'sk-test');
+    expect(error).toBeUndefined();
+    expect(models).toEqual(['gpt-4o', 'gpt-4o-mini']);
+  });
+
   it('returns an error result on a non-2xx response', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ error: 'nope' }, 401)));
     const { models, error } = await fetchModelIds('openai', 'bad-key');

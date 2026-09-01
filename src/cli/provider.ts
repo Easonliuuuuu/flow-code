@@ -6,6 +6,7 @@ import {
   CodexSessionRunner,
   OpenAiSessionRunner,
   OpenRouterSessionRunner,
+  OrcaRouterSessionRunner,
   SdkSessionRunner,
 } from '../executors/index.js';
 import { nodeWantsAgentStep } from '../registry/index.js';
@@ -50,7 +51,7 @@ export async function resolveProvider(
   if (workflow.nodes.some(nodeWantsAgentStep)) {
     fail(
       'no provider configured — run `flow-code init` to choose one, or set ' +
-        'ANTHROPIC_API_KEY / CODEX_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY.',
+        'ANTHROPIC_API_KEY / CODEX_API_KEY / OPENAI_API_KEY / OPENROUTER_API_KEY / ORCAROUTER_API_KEY.',
     );
   }
   return undefined;
@@ -66,5 +67,7 @@ export function buildRunner(provider: ProviderId): SessionRunner {
       return new OpenAiSessionRunner();
     case 'openrouter':
       return new OpenRouterSessionRunner();
+    case 'orcarouter':
+      return new OrcaRouterSessionRunner();
   }
 }

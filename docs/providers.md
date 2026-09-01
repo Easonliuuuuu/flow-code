@@ -14,6 +14,7 @@ API key, there is nothing to paste.
 | Codex | `OPENAI_API_KEY` or `CODEX_API_KEY` | `codex` CLI login |
 | OpenAI | `OPENAI_API_KEY` | — |
 | OpenRouter | `OPENROUTER_API_KEY` | — |
+| OrcaRouter | `ORCAROUTER_API_KEY` | — |
 
 To skip the wizard entirely — headless, CI — set any standard API key before
 running `init`.
@@ -22,8 +23,11 @@ running `init`.
 
 Claude and Codex fall back to their own CLI login when no key is set, drawing on
 **that subscription's usage rather than metered API billing**. For most people
-this is the answer: the marginal cost of a run is zero. OpenAI and OpenRouter
-always bill against the key provided.
+this is the answer: the marginal cost of a run is zero. OpenAI, OpenRouter, and
+OrcaRouter always bill against the key provided. OrcaRouter charges the
+upstream model's published per-token price with no added markup, so the same
+model tends to cost less through it than through OpenRouter's spread-based
+pricing.
 
 See [What a run costs](cost.md) for the measured token figures and what they
 price out to.

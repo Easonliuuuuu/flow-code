@@ -35,6 +35,16 @@ describe('credentials persistence', () => {
     });
   });
 
+  it('round-trips provider, key, and model for orcarouter', () => {
+    const repo = tempRepo();
+    saveCredentials(repo, { provider: 'orcarouter', apiKey: 'or-orca-abc', model: 'openai/gpt-4o-mini' });
+    expect(loadCredentials(repo)).toEqual({
+      provider: 'orcarouter',
+      apiKey: 'or-orca-abc',
+      model: 'openai/gpt-4o-mini',
+    });
+  });
+
   it('writes the file with owner-only permissions', () => {
     const repo = tempRepo();
     saveCredentials(repo, { provider: 'openrouter', apiKey: 'or-abc', model: 'openai/gpt-4o-mini' });
