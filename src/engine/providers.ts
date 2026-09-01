@@ -1,5 +1,5 @@
 /** Providers flow-code can run every agent-driven node against. */
-export type ProviderId = 'claude' | 'codex' | 'openai' | 'openrouter';
+export type ProviderId = 'claude' | 'codex' | 'openai' | 'openrouter' | 'orcarouter';
 
 export interface ProviderInfo {
   id: ProviderId;
@@ -18,6 +18,7 @@ export const PROVIDERS: ProviderInfo[] = [
   { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'openai', label: 'OpenAI', apiKeyEnvVar: 'OPENAI_API_KEY' },
   { id: 'openrouter', label: 'OpenRouter', apiKeyEnvVar: 'OPENROUTER_API_KEY' },
+  { id: 'orcarouter', label: 'OrcaRouter', apiKeyEnvVar: 'ORCAROUTER_API_KEY' },
 ];
 
 export function providerInfo(id: ProviderId): ProviderInfo {

@@ -25,4 +25,5 @@ export { SdkSessionRunner } from './sdkRunner.js';
 export { CodexSessionRunner } from './codexRunner.js';
 export { OpenAiSessionRunner } from './openaiRunner.js';
 export { OpenRouterSessionRunner } from './openrouterRunner.js';
+export { OrcaRouterSessionRunner } from './orcarouterRunner.js';
 export { OpenAiCompatSessionRunner } from './openaiCompatRunner.js';

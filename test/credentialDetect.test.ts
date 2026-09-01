@@ -21,6 +21,7 @@ beforeEach(() => {
   vi.stubEnv('OPENAI_API_KEY', undefined);
   vi.stubEnv('CODEX_API_KEY', undefined);
   vi.stubEnv('OPENROUTER_API_KEY', undefined);
+  vi.stubEnv('ORCAROUTER_API_KEY', undefined);
   vi.stubEnv('CODEX_HOME', undefined);
   vi.stubEnv('HOME', emptyHome());
 });
@@ -32,7 +33,7 @@ afterEach(() => {
 
 describe('detectCredential', () => {
   it('reports nothing found when the environment and home are empty', () => {
-    for (const provider of ['claude', 'codex', 'openai', 'openrouter'] as const) {
+    for (const provider of ['claude', 'codex', 'openai', 'openrouter', 'orcarouter'] as const) {
       expect(detectCredential(provider)).toEqual({ provider });
       expect(hasCredential(provider)).toBe(false);
     }
@@ -51,6 +52,15 @@ describe('detectCredential', () => {
     vi.stubEnv('OPENROUTER_API_KEY', 'sk-or-supersecret');
     expect(detectCredential('openrouter').source).toBe('OPENROUTER_API_KEY');
     expect(detectCredential('openrouter').source).not.toContain('supersecret');
+  });
+
+  it('names ORCAROUTER_API_KEY as the source and carries the key', () => {
+    vi.stubEnv('ORCAROUTER_API_KEY', 'or-orca-secret');
+    expect(detectCredential('orcarouter')).toEqual({
+      provider: 'orcarouter',
+      source: 'ORCAROUTER_API_KEY',
+      apiKey: 'or-orca-secret',
+    });
   });
 
   it('prefers ANTHROPIC_API_KEY over CLAUDE_CODE_OAUTH_TOKEN for claude', () => {
@@ -102,6 +112,7 @@ describe('detectCredential', () => {
     expect(hasCredential('openrouter')).toBe(true);
     expect(hasCredential('openai')).toBe(false);
     expect(hasCredential('claude')).toBe(false);
+    expect(hasCredential('orcarouter')).toBe(false);
   });
 });
 
@@ -109,7 +120,13 @@ describe('detectCredentials', () => {
   it('returns every provider in menu order, annotated', () => {
     vi.stubEnv('OPENAI_API_KEY', 'sk-openai');
     const all = detectCredentials();
-    expect(all.map((d) => d.provider)).toEqual(['claude', 'codex', 'openai', 'openrouter']);
+    expect(all.map((d) => d.provider)).toEqual([
+      'claude',
+      'codex',
+      'openai',
+      'openrouter',
+      'orcarouter',
+    ]);
     expect(all.filter((d) => d.source !== undefined).map((d) => d.provider))
       // codex too: OPENAI_API_KEY is second in the Codex SDK's own order.
       .toEqual(['codex', 'openai']);
