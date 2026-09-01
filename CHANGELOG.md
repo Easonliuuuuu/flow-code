@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.7.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.6.0...flow-code-v0.7.0) (2026-09-01)
+
+
+### Features
+
+* **guest:** integrate Codex companion mode ([559a1cf](https://github.com/Easonliuuuuu/flow-code/commit/559a1cf90f697a914728b39a417731dc29d4bc74))
+* **providers:** add OrcaRouter as a session provider ([60cbeed](https://github.com/Easonliuuuuu/flow-code/commit/60cbeedfe5f8a164e6099add34d02cf799874544))
+* **testbed:** add Codex companion mode ([0d7de1c](https://github.com/Easonliuuuuu/flow-code/commit/0d7de1c3f60c61b6018c9918e1e43066d1036f65))
+
+
+### Bug Fixes
+
+* **guest:** enforce routing and preset contracts in companion mode ([08834db](https://github.com/Easonliuuuuu/flow-code/commit/08834dbcca59cf6922b835df01c2fedcc22922fa))
+* **plugin:** companion mode installs the Claude Code footer status line ([7f733b4](https://github.com/Easonliuuuuu/flow-code/commit/7f733b4735c01270b4bb1625356e11837d5cef99))
+* **plugin:** companion mode scaffolds its own workflow and surfaces gated content ([8f97834](https://github.com/Easonliuuuuu/flow-code/commit/8f978349677c7e557c41a9bae2e9b7de797623b6))
+* **status:** register the OrcaRouter archive in coverage.yaml ([e23b0bd](https://github.com/Easonliuuuuu/flow-code/commit/e23b0bd45db0eb551eec6669265407540a94a445))
+
 ## [0.6.0](https://github.com/Easonliuuuuu/flow-code/compare/flow-code-v0.5.1...flow-code-v0.6.0) (2026-08-25)
 
 
