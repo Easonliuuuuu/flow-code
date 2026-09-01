@@ -29,10 +29,10 @@
 ## 5. Live verification
 
 - [x] 5.1 Confirm `GET https://api.orcarouter.ai/v1/models` still returns `openai/gpt-4o-mini`; if the catalog has moved, revisit the default rather than shipping a dead id
-- [ ] 5.2 With a real `ORCAROUTER_API_KEY`, run `flow-code init`, select OrcaRouter, and confirm the wizard detects the env var, lists a filtered catalog, and writes `.flow-code/credentials.json` mode `0600`
-- [ ] 5.3 Execute a workflow with at least one Implement and one Validate node end to end; confirm tool calls execute, the activity log populates, and token counts accumulate — the harness is shared, so this is verifying the config, not the enforcement
-- [ ] 5.4 Confirm a capability denial (a node without `edit` attempting a write) is blocked and logged identically to the OpenRouter path
-- [ ] 5.5 Confirm per-node `config.model` override selects an OrcaRouter model id and the node detail view names it
+- [x] 5.2 With a real `ORCAROUTER_API_KEY`, run `flow-code init`, select OrcaRouter, and confirm the wizard detects the env var, lists a filtered catalog, and writes `.flow-code/credentials.json` mode `0600`
+- [x] 5.3 Execute a workflow with at least one Implement and one Validate node end to end; confirm tool calls execute, the activity log populates, and token counts accumulate — the harness is shared, so this is verifying the config, not the enforcement
+- [x] 5.4 Confirm a capability denial (a node without `edit` attempting a write) is blocked and logged identically to the OpenRouter path
+- [x] 5.5 Confirm per-node `config.model` override selects an OrcaRouter model id and the node detail view names it
 
 ## 6. Documentation and close-out
 
