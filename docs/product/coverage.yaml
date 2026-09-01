@@ -272,6 +272,10 @@ archived:
   # nothing live is running. The first work attached to BR-01, and closes
   # GAP-10.
   2026-08-23-add-first-run-demo: BR-01
+  # A fifth SessionRunner (OrcaRouter), same shape as
+  # 2026-08-02-add-nvidia-session-runner above: a config-only OpenAI-compatible
+  # provider, no capability spec changes.
+  2026-09-01-add-orcarouter-provider: BR-08
 
 # Known, accepted drift. Each entry needs a reason and something tracking it —
 # a BR or a line in inbox.md. An entry with neither is just a silenced alarm.
