@@ -10,7 +10,7 @@ flatter you.
 
 ## M0 — The core run works
 
-`██████████ 397/400` tasks across 11 change(s)
+`██████████ 423/426` tasks across 12 change(s)
 
 ### BR-08 — A run does what the graph says it does
 
@@ -27,6 +27,7 @@ flatter you.
 | `2026-08-17-correct-edge-routing-requirement` | archived | ██████████ 12/12 |
 | `2026-08-17-route-rejected-gate-to-revision` | archived | ██████████ 39/39 |
 | `2026-08-22-add-spec-approval-gate` | archived | ██████████ 30/30 |
+| `2026-09-01-add-orcarouter-provider` | archived | ██████████ 26/26 |
 
 ### BR-09 — A run is legible without reading a transcript
 
@@ -127,4 +128,4 @@ Known debt, already decided about. Green on purpose — but still debt.
 
 ## Shipped
 
-17 archived change(s), 554 tasks. 19 modules under `src/`, 18 capability specs.
+18 archived change(s), 580 tasks. 19 modules under `src/`, 18 capability specs.
