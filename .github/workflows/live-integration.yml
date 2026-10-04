@@ -11,9 +11,11 @@ name: Live Integration
 # Named for what it is (a live-API suite) rather than which provider it
 # exercises. Each provider job is independently gated so adding a smoke test
 # never causes another provider's credentials to be used accidentally.
+# The nightly schedule is disabled; run on demand via workflow_dispatch.
+# To re-enable, restore:
+#   schedule:
+#     - cron: '0 9 * * *' # nightly, 09:00 UTC
 on:
-  schedule:
-    - cron: '0 9 * * *' # nightly, 09:00 UTC
   workflow_dispatch: {}
 
 jobs:
